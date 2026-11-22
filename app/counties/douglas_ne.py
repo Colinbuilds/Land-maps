@@ -48,6 +48,13 @@ COUNTY = {
         "index_url": f"{_DCGIS}/Hosted/Douglas_County_NE_LiDAR_Tiles_view/FeatureServer/4",
         "las_field": "las_tile",
         "las_base_url": "https://dcgis-lidar.s3.amazonaws.com/2022/Point_Cloud/Classified/",
+        # The servers shift NAD83(2011)->WGS84 when serving lat/lon; measure it
+        # against one known feature so everything lines up with the LiDAR.
+        "calibration": {
+            "url": f"{_DCGIS}/Hosted/2022_Building_Footprints/FeatureServer/0",
+            "where": "objectid=1",
+            "fallback_ft": (2.34, -2.55),
+        },
         "crs_wkt": ('PROJCS["Transverse_Mercator",GEOGCS["GCS_NAD_1983_2011",DATUM["D_NAD83_NATIONAL_SPATIAL_REFERENCE_SYSTEM_2011",SPHEROID["GRS_1980",6378137,298.257222101]],PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]],PROJECTION["Transverse_Mercator"],PARAMETER["scale_factor",1.0000482],PARAMETER["central_meridian",-96.05],PARAMETER["latitude_of_origin",41.1833333299992],PARAMETER["false_easting",131233.5958005249],PARAMETER["false_northing",82020.99737532808],UNIT["Foot (International)",0.3048]]'),
     },
     # Typical public sidewalk width in this jurisdiction (feet).

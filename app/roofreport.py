@@ -6,7 +6,7 @@ import io
 import math
 import time
 
-from shapely.geometry import mapping
+from shapely.geometry import mapping, shape
 from shapely.ops import transform as shp_transform, unary_union
 
 from .imagery import Mosaic
@@ -47,12 +47,19 @@ def list_structures(pin: str) -> dict:
     parts.sort(key=lambda p: -p.area)
     out = []
     for i, p in enumerate(parts):
+        g = _to_wgs(m, p)
+        disp = g
+        try:  # draw it where the roof appears in the photo (building lean)
+            disp = lean_corrected(m, g)
+        except Exception:
+            pass
         out.append({
             "id": i,
             "name": "Main structure" if i == 0 else f"Structure {i + 1}",
             "plan_sqft": round(p.area),
             "geometry_las": p,
-            "geojson": mapping(_to_wgs(m, p)),
+            "geojson": mapping(disp),
+            "true_geojson": mapping(g),
         })
     a = f["attributes"]
     pf = m.pf
@@ -96,6 +103,135 @@ def _snap(segs, outline, pitch, tol=4.0):
         if s_["len"] >= 1:
             out.append(s_)
     return out
+
+
+def _contrast_offset(rgb, outline_wgs, mos, lim):
+    """Best pixel shift for one outline: maximise the colour difference
+    between just inside and just outside the outline, all the way round."""
+    import numpy as np
+    from PIL import Image as _I, ImageDraw as _D
+    from scipy import ndimage as ndi
+    h, w = rgb.shape[:2]
+    im = _I.new("L", (w, h), 0)
+    d = _D.Draw(im)
+    for p in getattr(outline_wgs, "geoms", [outline_wgs]):
+        d.polygon([mos.to_px(*c[:2]) for c in p.exterior.coords], fill=1)
+    mask = np.asarray(im) > 0
+    if mask.sum() < 200:
+        return None
+    sd = ndi.distance_transform_edt(mask) - ndi.distance_transform_edt(~mask)
+    edge = np.abs(sd) <= 1.0
+    ys, xs = np.nonzero(edge)
+    if len(xs) < 20:
+        return None
+    ny, nx = np.gradient(ndi.gaussian_filter(sd, 1.5))
+    L = np.hypot(nx, ny) + 1e-6
+    nx, ny = nx[ys, xs] / L[ys, xs], ny[ys, xs] / L[ys, xs]      # points inward
+    k = 3
+    ix_in, iy_in = np.round(xs + nx * k).astype(int), np.round(ys + ny * k).astype(int)
+    ix_out, iy_out = np.round(xs - nx * k).astype(int), np.round(ys - ny * k).astype(int)
+
+    def score(dx, dy):
+        a_x, a_y, b_x, b_y = ix_in + dx, iy_in + dy, ix_out + dx, iy_out + dy
+        ok = (a_x >= 0) & (a_x < w) & (a_y >= 0) & (a_y < h) & (b_x >= 0) & (b_x < w) & (b_y >= 0) & (b_y < h)
+        if ok.mean() < 0.9:
+            return 0.0
+        diff = np.abs(rgb[a_y[ok], a_x[ok]] - rgb[b_y[ok], b_x[ok]]).sum(-1)
+        return float(np.median(diff))
+    base = score(0, 0)
+    best, bd = base, (0, 0)
+    for dy in range(-lim, lim + 1, 2):
+        for dx in range(-lim, lim + 1, 2):
+            sc = score(dx, dy)
+            if sc > best:
+                best, bd = sc, (dx, dy)
+    cx, cy = bd
+    for dy in range(cy - 2, cy + 3):
+        for dx in range(cx - 2, cx + 3):
+            sc = score(dx, dy)
+            if sc > best:
+                best, bd = sc, (dx, dy)
+    return bd, best, base
+
+
+_LEAN_CELL = 0.003  # deg; one photo frame covers several of these
+_lean_mem: dict = {}
+
+
+def _lean_vector(m, center_wgs):
+    """Photo lean for this neighbourhood: ground feet of shift (east, north)
+    per foot of building height, measured on nearby houses. Cached."""
+    import json as _json
+    import numpy as np
+    from .gis import CACHE_DIR
+    c = center_wgs.centroid
+    key = (round(c.x / _LEAN_CELL), round(c.y / _LEAN_CELL))
+    if key in _lean_mem:
+        return _lean_mem[key]
+    path = CACHE_DIR / "lean" / f"{key[0]}_{key[1]}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        v = _json.loads(path.read_text())
+        _lean_mem[key] = v
+        return v
+    neigh = _neighbors_with_heights(m, center_wgs, n=10)
+    v = None
+    if neigh:
+        u = unary_union([n[0] for n in neigh])
+        mos = Mosaic(m.c["imagery"]["tile_url"], u.buffer(0.00008).bounds, 19)
+        rgb = np.asarray(mos.image, dtype=np.float32)
+        lim = int(14 / mos.ft_per_px)
+        per_ft = []
+        for g, hgt in neigh:
+            if not hgt or hgt < 6:
+                continue
+            r = _contrast_offset(rgb, g, mos, lim)
+            if r and r[1] > r[2] * 1.1:
+                # pixels -> ground feet (east, north)
+                per_ft.append((r[0][0] * mos.ft_per_px / hgt, -r[0][1] * mos.ft_per_px / hgt))
+        if len(per_ft) >= 3:
+            v = [float(x) for x in np.median(np.array(per_ft), axis=0)]
+    _lean_mem[key] = v
+    path.write_text(_json.dumps(v))
+    return v
+
+
+def _neighbors_with_heights(m, center_wgs, radius_deg=0.0009, n=15):
+    """Nearby footprints with their eave heights (county planimetric attrs)."""
+    from .gis import query_features
+    c = center_wgs.centroid
+    env = (c.x - radius_deg, c.y - radius_deg * 0.75, c.x + radius_deg, c.y + radius_deg * 0.75)
+    feats = query_features(m.c["buildings"]["url"], envelope=env, out_fields="objectid,eaveheight,buildingheight")
+    out = []
+    for f in feats:
+        g = f["geometry"]
+        if g is None or g.area <= 0:
+            continue
+        h = f["attributes"].get("eaveheight") or f["attributes"].get("buildingheight")
+        out.append((g, h))
+    out.sort(key=lambda t: -t[0].area)
+    return out[:n]
+
+
+def _eave_height(neigh, g):
+    hs = [h for ng, h in neigh if h and ng.intersects(g) and ng.intersection(g).area > 0.3 * ng.area]
+    return max(hs) if hs else None
+
+
+def lean_corrected(m, g_wgs):
+    """``g_wgs`` moved to where the roof shows in the photo (drawing only)."""
+    import math as _m
+    from shapely.affinity import translate
+    v = _lean_vector(m, g_wgs)
+    if not v:
+        return g_wgs
+    neigh = _neighbors_with_heights(m, g_wgs, radius_deg=0.0002, n=6)
+    h = _eave_height(neigh, g_wgs)
+    if not h:
+        return g_wgs
+    dx_ft, dy_ft = v[0] * h, v[1] * h
+    lat = g_wgs.centroid.y
+    return translate(g_wgs, dx_ft * 0.3048 / (111320 * _m.cos(_m.radians(lat))), dy_ft * 0.3048 / 110574)
 
 
 def suggested_waste(totals: dict, area: float) -> int:
@@ -192,7 +328,14 @@ def _aerial(m, chosen) -> str:
         mos = Mosaic(m.c["imagery"]["tile_url"], env, 21)
         x0, y0 = mos.to_px(env[0], env[3])
         x1, y1 = mos.to_px(env[2], env[1])
-        im = mos.image.crop((int(x0), int(y0), int(x1), int(y1)))
+        im = mos.image.copy()
+        from PIL import ImageDraw
+        d = ImageDraw.Draw(im)
+        for s in chosen:
+            g = shape(s["geojson"])
+            for p in getattr(g, "geoms", [g]):
+                d.line([mos.to_px(*c[:2]) for c in p.exterior.coords], fill=(0, 229, 255), width=3)
+        im = im.crop((int(x0), int(y0), int(x1), int(y1)))
         im.thumbnail((1100, 1100))
         buf = io.BytesIO()
         im.save(buf, "JPEG", quality=82)
