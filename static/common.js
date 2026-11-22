@@ -15,10 +15,22 @@ async function api(path, opts = {}) {
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch (e) {}
+    if (Array.isArray(msg)) msg = msg.map(friendlyError).join(" ");
     throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }
   const ct = r.headers.get("content-type") || "";
   return ct.includes("json") ? r.json() : r;
+}
+
+// Turn a server validation error into a sentence a person can act on.
+function friendlyError(e) {
+  const field = { name: "Company name", email: "Email", password: "Password", credits: "Credits",
+    phone: "Phone", zip: "ZIP code" }[(e.loc || []).slice(-1)[0]] || (e.loc || []).slice(-1)[0] || "A field";
+  if (e.type === "string_too_short") return `${field} must be at least ${e.ctx?.min_length} characters.`;
+  if (e.type === "string_too_long") return `${field} is too long.`;
+  if (e.type === "missing") return `${field} is required.`;
+  if (/int|number/.test(e.type || "")) return `${field} must be a whole number.`;
+  return `${field}: ${e.msg}`;
 }
 
 const MEASURE_COLORS = {

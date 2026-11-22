@@ -213,6 +213,12 @@
     } catch (e) { $("companies").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; }
   }
   $("cCreate").addEventListener("click", async () => {
+    const miss = [["cName", "company name"], ["cEmail", "login email"], ["cPass", "password"]]
+      .filter(([id]) => !$(id).value.trim()).map(([, l]) => l);
+    if (miss.length) { $("cMsg").innerHTML = `<span class="err">Please fill in the ${miss.join(", ")}.</span>`; return; }
+    if ($("cPass").value.length < 6) { $("cMsg").innerHTML = '<span class="err">The password must be at least 6 characters.</span>'; return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test($("cEmail").value.trim())) { $("cMsg").innerHTML = '<span class="err">That email doesn\'t look right.</span>'; return; }
+    $("cMsg").innerHTML = '<span class="spinner"></span>Creating…';
     try {
       await api("/api/admin/companies", { method: "POST", json: { name: $("cName").value, email: $("cEmail").value,
         password: $("cPass").value, phone: $("cPhone").value, credits: +$("cCredits").value || 0 } });

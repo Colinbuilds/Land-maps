@@ -6,7 +6,7 @@
 <title>Estimator Business Dashboard</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
-<link rel="stylesheet" href="/static/styles.css">
+<link rel="stylesheet" href="/static/styles.css?v=4">
 </head>
 <body>
 <header class="top">
@@ -117,7 +117,7 @@
         <p class="small muted" style="margin-top:-6px">They log in at <a href="/roof" target="_blank">/roof</a> with this email and password. Each report uses 1 credit.</p>
         <input type="text" id="cName" placeholder="Company name">
         <div class="row"><input type="email" id="cEmail" placeholder="Login email"><input type="tel" id="cPhone" placeholder="Phone (shown on reports)"></div>
-        <div class="row"><input type="text" id="cPass" placeholder="Password (6+ characters)"><input type="number" id="cCredits" placeholder="Starting credits" min="0"></div>
+        <div class="row"><input type="text" id="cPass" placeholder="Password (at least 6 characters)" minlength="6"><input type="number" id="cCredits" placeholder="Starting credits" min="0"></div>
         <button id="cCreate">Create company</button>
         <div id="cMsg" class="small"></div>
       </div>
@@ -149,7 +149,7 @@
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
-<script src="/static/common.js"></script>
-<script src="/static/business.js"></script>
+<script src="/static/common.js?v=4"></script>
+<script src="/static/business.js?v=4"></script>
 </body>
 </html>
