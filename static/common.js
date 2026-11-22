@@ -1,0 +1,132 @@
+// Shared helpers: map with county imagery, clickable parcels, address autocomplete.
+const fmt = (n) => (n == null || n === "" ? "–" : Math.round(+n).toLocaleString());
+const money = (n) => "$" + Math.round(+n).toLocaleString();
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {});
+  const tok = localStorage.getItem("adminToken");
+  if (tok) headers["X-Admin-Token"] = tok;
+  if (opts.json !== undefined) {
+    headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(opts.json);
+  }
+  const r = await fetch(path, Object.assign({}, opts, { headers }));
+  if (!r.ok) {
+    let msg = r.statusText;
+    try { msg = (await r.json()).detail || msg; } catch (e) {}
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  const ct = r.headers.get("content-type") || "";
+  return ct.includes("json") ? r.json() : r;
+}
+
+const MEASURE_COLORS = {
+  lawn_sqft: "var(--lawn)", driveway_sqft: "var(--drive)", sidewalk_sqft: "var(--walk)",
+  other_hardscape_sqft: "var(--other)", building_sqft: "var(--bldg)", lot_sqft: "#cbd5e1", frontage_ft: "#94a3b8",
+};
+
+function makeMap(el, cfg) {
+  const map = L.map(el, { zoomControl: true, maxZoom: 22 }).setView(cfg.county.center, 12);
+  L.tileLayer(cfg.imagery.tile_url, {
+    maxNativeZoom: Math.min(cfg.imagery.max_native_zoom || 21, 21), maxZoom: 22,
+    attribution: `${esc(cfg.county.name)} ${cfg.imagery.year} imagery (DOGIS)`,
+  }).addTo(map);
+  return map;
+}
+
+// Loads parcel outlines for the current view; calls onPick(feature) on click.
+function parcelLayer(map, onPick) {
+  const style = { color: "#fff", weight: 1.2, fillOpacity: 0.02, opacity: 0.85 };
+  const layer = L.geoJSON(null, {
+    style: () => style,
+    onEachFeature: (f, l) => {
+      l.on("mouseover", () => l.setStyle({ weight: 3, color: "#facc15" }));
+      l.on("mouseout", () => { if (l !== state.selected && l !== state.suggested) l.setStyle(style); });
+      l.on("click", () => onPick(f, l));
+      if (f.properties.address) l.bindTooltip(esc(f.properties.address), { sticky: true });
+    },
+  }).addTo(map);
+  const state = { selected: null, suggested: null, byPin: {} };
+  let seq = 0;
+  async function load() {
+    if (map.getZoom() < 17) { layer.clearLayers(); state.byPin = {}; return; }
+    const b = map.getBounds();
+    const my = ++seq;
+    try {
+      const fc = await api(`/api/parcels?bbox=${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`);
+      if (my !== seq) return;
+      const keepSel = state.selected && state.selected.feature.properties.pin;
+      const keepSug = state.suggested && state.suggested.feature.properties.pin;
+      layer.clearLayers(); state.byPin = {};
+      layer.addData(fc);
+      layer.eachLayer((l) => { state.byPin[l.feature.properties.pin] = l; });
+      if (keepSug && state.byPin[keepSug]) highlightSuggested(keepSug);
+      if (keepSel && state.byPin[keepSel]) select(keepSel);
+    } catch (e) { /* zoomed out or server busy */ }
+  }
+  function highlightSuggested(pin) {
+    const l = state.byPin[pin];
+    if (!l) return;
+    state.suggested = l;
+    l.setStyle({ color: "#facc15", weight: 3, dashArray: "6 5", fillOpacity: 0.08 });
+  }
+  function select(pin) {
+    if (state.selected) state.selected.setStyle(style);
+    const l = state.byPin[pin];
+    state.selected = l || null;
+    if (l) { l.setStyle({ color: "#ffffff", weight: 3.5, dashArray: null, fillOpacity: 0 }); l.bringToFront(); }
+  }
+  map.on("moveend", load);
+  return { layer, load, highlightSuggested, select, state };
+}
+
+function wireAutocomplete(input, box, onChoose) {
+  let t, items = [], active = -1;
+  const close = () => { box.classList.add("hidden"); active = -1; };
+  const render = () => {
+    box.innerHTML = items.map((s, i) => `<div data-i="${i}" class="${i === active ? "active" : ""}">${esc(s.text)}</div>`).join("");
+    box.classList.toggle("hidden", !items.length);
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(t);
+    const q = input.value.trim();
+    if (q.length < 3) { items = []; render(); return; }
+    t = setTimeout(async () => {
+      try { items = await api(`/api/suggest?q=${encodeURIComponent(q)}`); } catch (e) { items = []; }
+      active = -1; render();
+    }, 200);
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { active = Math.min(items.length - 1, active + 1); render(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { active = Math.max(0, active - 1); render(); e.preventDefault(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      const s = items[active >= 0 ? active : 0];
+      close();
+      onChoose(s || { text: input.value });
+    } else if (e.key === "Escape") close();
+  });
+  box.addEventListener("mousedown", (e) => {
+    const d = e.target.closest("[data-i]");
+    if (!d) return;
+    const s = items[+d.dataset.i];
+    input.value = s.text; close(); onChoose(s);
+  });
+  input.addEventListener("blur", () => setTimeout(close, 150));
+}
+
+// Shows the measurement overlay PNG returned by /api/measure.
+function showOverlay(map, holder, r) {
+  if (holder.overlay) map.removeLayer(holder.overlay);
+  holder.overlay = null;
+  if (r && r.overlay) {
+    holder.overlay = L.imageOverlay(r.overlay.png, r.overlay.bounds, { opacity: 0.9, interactive: false }).addTo(map);
+  }
+}
+
+function measurementCards(r, keys, labels) {
+  return keys.map((k) => `
+    <div class="m"><div class="k"><i class="sw" style="background:${MEASURE_COLORS[k] || "#999"}"></i>${esc(labels[k] || k)}</div>
+    <div class="v">${fmt(r[k])} <span class="small muted">${k.endsWith("_ft") ? "ft" : "sq ft"}</span></div></div>`).join("");
+}

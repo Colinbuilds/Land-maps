@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estimator Business Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span><span>Business dashboard</span></div>
+  <div class="contact"><a href="/" target="_blank">Open customer page ↗</a></div>
+</header>
+<main>
+  <div class="tabs" id="tabs">
+    <button data-tab="bulk" class="active">Bulk measure by ZIP</button>
+    <button data-tab="measure">Measure a property</button>
+    <button data-tab="leads">Leads</button>
+    <button data-tab="pricing">Pricing &amp; settings</button>
+  </div>
+
+  <!-- BULK -->
+  <section id="tab-bulk">
+    <div class="grid2">
+      <div class="card stack">
+        <h2>Measure every property in a ZIP code</h2>
+        <div class="row">
+          <label>ZIP code<input type="text" id="bZip" placeholder="68135" maxlength="5" inputmode="numeric"></label>
+          <label>Max parcels (optional)<input type="number" id="bLimit" placeholder="all" min="1"></label>
+        </div>
+        <div>
+          <div class="small muted">Property types</div>
+          <div class="checks" id="bClasses">
+            <label><input type="checkbox" value="R" checked> Residential</label>
+            <label><input type="checkbox" value="C"> Commercial</label>
+            <label><input type="checkbox" value="I"> Industrial</label>
+            <label><input type="checkbox" value="A"> Agricultural</label>
+            <label><input type="checkbox" value="E"> Exempt (churches, schools…)</label>
+          </div>
+        </div>
+        <div>
+          <div class="small muted">Measurements (sq ft)</div>
+          <div class="checks" id="bMeasures"></div>
+        </div>
+        <label class="small"><input type="checkbox" id="bOwner"> Include owner name &amp; mailing address (public record, for mailers)</label>
+        <div class="row">
+          <button class="secondary" id="bPreview">Count parcels</button>
+          <button id="bStart">Start measuring</button>
+        </div>
+        <div id="bMsg" class="small"></div>
+      </div>
+      <div class="card">
+        <h2>Jobs</h2>
+        <div id="jobs" class="stack"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <h2 style="margin:0" id="rowsTitle">Results</h2>
+        <a class="btn hidden" id="csvLink" href="#">Download CSV</a>
+      </div>
+      <div id="totals" class="meas" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:12px"></div>
+      <div class="tablewrap"><table id="rows"></table></div>
+    </div>
+  </section>
+
+  <!-- MEASURE -->
+  <section id="tab-measure" class="hidden">
+    <div class="search" style="margin-bottom:12px">
+      <input id="mAddr" type="text" autocomplete="off" placeholder="Look up an address, or click any lot on the map">
+      <div class="suggest hidden" id="mSuggest"></div>
+    </div>
+    <div class="layout">
+      <div>
+        <div id="map"></div>
+        <p class="small muted">Draw tool (top-left of the map): outline any area, such as a patio, a back lawn only, or a parking lot, and get its exact square footage.</p>
+      </div>
+      <div class="stack">
+        <div class="card" id="mResult"><p class="muted">Pick a property to see its measurements.</p></div>
+        <div class="card"><h2>Drawn areas</h2><div id="drawn" class="small muted">None yet.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LEADS -->
+  <section id="tab-leads" class="hidden">
+    <div class="card"><div class="tablewrap"><table id="leads"></table></div></div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="tab-pricing" class="hidden">
+    <div class="grid2">
+      <div class="card stack">
+        <h2>Business</h2>
+        <label>Company name<input type="text" id="sName"></label>
+        <div class="row">
+          <label>Phone<input type="tel" id="sPhone"></label>
+          <label>Email<input type="email" id="sEmail"></label>
+        </div>
+        <div class="row">
+          <label>Brand colour<input type="text" id="sAccent" placeholder="#16a34a"></label>
+          <label>Price range shown (± %)<input type="number" id="sSpread" min="0" max="60"></label>
+        </div>
+        <label>Admin token (only if the server sets ESTIMATOR_ADMIN_TOKEN)<input type="text" id="sToken" placeholder="stored in this browser only"></label>
+      </div>
+      <div class="card stack" id="svcEditor"></div>
+    </div>
+    <div style="margin-top:14px" class="row"><button id="sSave" style="flex:0 0 auto">Save settings</button><span id="sMsg" class="small"></span></div>
+  </section>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<script src="/static/common.js"></script>
+<script src="/static/business.js"></script>
+</body>
+</html>

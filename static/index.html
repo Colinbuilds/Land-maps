@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instant Property Estimate</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span><span id="bizName">Instant Estimate</span></div>
+  <div class="contact" id="bizContact"></div>
+</header>
+<main>
+  <h1>Get a ballpark price in 30 seconds</h1>
+  <p class="lead">Type your address, click your property on the map, and we'll measure your lawn, driveway and sidewalk from county aerial maps.</p>
+
+  <div class="search">
+    <input id="addr" type="text" autocomplete="off" placeholder="Start typing your address, e.g. 17419 Dayton Cir">
+    <div class="suggest hidden" id="suggest"></div>
+  </div>
+
+  <div class="layout">
+    <div>
+      <div class="hint hidden" id="hint">Click <b>your</b> property outline on the map to confirm it.</div>
+      <div id="map"></div>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--lawn)"></i>Lawn</span>
+        <span><i class="sw" style="background:var(--drive)"></i>Driveway</span>
+        <span><i class="sw" style="background:var(--walk)"></i>Sidewalk</span>
+        <span><i class="sw" style="background:var(--other)"></i>Patios &amp; walks</span>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="card" id="panelEmpty">
+        <h2>How it works</h2>
+        <ol class="muted" style="padding-left:18px;margin:0">
+          <li>Search your address.</li>
+          <li>Click your lot on the map.</li>
+          <li>See measurements and a price range for each service.</li>
+          <li>Request an exact quote. No obligation.</li>
+        </ol>
+      </div>
+
+      <div class="card hidden" id="panelResult">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">
+          <h2 id="resAddr" style="margin:0"></h2>
+          <span class="tag" id="resPin"></span>
+        </div>
+        <p class="small muted" id="resNote" style="margin:4px 0 10px"></p>
+        <div class="meas" id="meas"></div>
+        <h2>Ballpark prices</h2>
+        <div id="prices"></div>
+        <p class="small muted">Ranges are estimates from aerial measurements. Your final price is confirmed after a quick review.</p>
+      </div>
+
+      <div class="card hidden" id="panelRender">
+        <h2>See your new driveway</h2>
+        <p class="small muted" style="margin-top:-6px">Upload a photo of your driveway (or use the aerial view) and pick a finish.</p>
+        <div class="stack">
+          <select id="finish"></select>
+          <input type="file" id="photo" accept="image/*">
+          <button id="btnRender">Create AI rendering</button>
+          <div id="renderStatus" class="small"></div>
+          <div class="render-out" id="renderOut"></div>
+        </div>
+      </div>
+
+      <div class="card hidden" id="panelLead">
+        <h2>Get your exact quote</h2>
+        <form id="leadForm" class="stack">
+          <input type="text" name="name" placeholder="Your name" required>
+          <div class="row">
+            <input type="tel" name="phone" placeholder="Phone">
+            <input type="email" name="email" placeholder="Email">
+          </div>
+          <div class="checks" id="leadServices"></div>
+          <textarea name="notes" placeholder="Anything we should know? (gate code, dog, slope, etc.)"></textarea>
+          <button type="submit">Send my request</button>
+          <div id="leadStatus" class="small"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/common.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
