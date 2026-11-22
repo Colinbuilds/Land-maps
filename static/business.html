@@ -19,6 +19,7 @@
     <button data-tab="measure">Measure a property</button>
     <button data-tab="leads">Leads</button>
     <button data-tab="pricing">Pricing &amp; settings</button>
+    <button data-tab="roofing">Roof report companies</button>
   </div>
 
   <!-- BULK -->
@@ -106,6 +107,23 @@
   <!-- LEADS -->
   <section id="tab-leads" class="hidden">
     <div class="card"><div class="tablewrap"><table id="leads"></table></div></div>
+  </section>
+
+  <!-- ROOFING -->
+  <section id="tab-roofing" class="hidden">
+    <div class="grid2">
+      <div class="card stack">
+        <h2>Add a roofing company</h2>
+        <p class="small muted" style="margin-top:-6px">They log in at <a href="/roof" target="_blank">/roof</a> with this email and password. Each report uses 1 credit.</p>
+        <input type="text" id="cName" placeholder="Company name">
+        <div class="row"><input type="email" id="cEmail" placeholder="Login email"><input type="tel" id="cPhone" placeholder="Phone (shown on reports)"></div>
+        <div class="row"><input type="text" id="cPass" placeholder="Password (6+ characters)"><input type="number" id="cCredits" placeholder="Starting credits" min="0"></div>
+        <button id="cCreate">Create company</button>
+        <div id="cMsg" class="small"></div>
+      </div>
+      <div class="card"><h2>Recent roof reports</h2><div class="tablewrap"><table id="rReports"></table></div></div>
+    </div>
+    <div class="card" style="margin-top:16px"><h2>Companies</h2><div class="tablewrap"><table id="companies"></table></div></div>
   </section>
 
   <!-- PRICING -->

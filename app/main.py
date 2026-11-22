@@ -14,12 +14,13 @@ from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form, Depends
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from shapely.geometry import mapping, Point
 
-from . import bulk, corrections, render
+from . import accounts, bulk, corrections, render, roofreport
+from .roofpdf import render_pdf
 from .gis import get_json, query_features
 from .imagery import Mosaic
 from .measure import default_measurer, MEASUREMENTS
@@ -300,3 +301,169 @@ def leads():
         return []
     rows = [json.loads(l) for l in LEADS.read_text().splitlines() if l.strip()]
     return list(reversed(rows))
+
+
+# ===================================================================== roofing
+ROOF_COOKIE = "roof_session"
+
+
+def roof_company(request: Request) -> dict:
+    cid = accounts.read_session(request.cookies.get(ROOF_COOKIE))
+    c = accounts.get_company(cid) if cid else None
+    if not c:
+        raise HTTPException(401, "please log in")
+    return c
+
+
+@app.get("/roof")
+def page_roof():
+    return FileResponse(STATIC / "roof.html")
+
+
+@app.get("/r/{rid}")
+def page_roof_report(rid: str):
+    return FileResponse(STATIC / "roof-report.html")
+
+
+class RoofLogin(BaseModel):
+    email: str = Field(max_length=200)
+    password: str = Field(max_length=200)
+
+
+@app.post("/api/roof/login")
+def roof_login(body: RoofLogin, request: Request):
+    c = accounts.login(body.email, body.password)
+    if not c:
+        raise HTTPException(401, "wrong email or password")
+    r = JSONResponse(c)
+    r.set_cookie(ROOF_COOKIE, accounts.make_session(c["id"]), max_age=30 * 86400, httponly=True,
+                 samesite="lax", secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
+    return r
+
+
+@app.post("/api/roof/logout")
+def roof_logout():
+    r = JSONResponse({"ok": True})
+    r.delete_cookie(ROOF_COOKIE)
+    return r
+
+
+@app.get("/api/roof/me")
+def roof_me(c: dict = Depends(roof_company)):
+    return c
+
+
+@app.get("/api/roof/structures/{pin}")
+def roof_structures(pin: str, c: dict = Depends(roof_company)):
+    try:
+        info = roofreport.list_structures(pin)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    return {"pin": info["pin"], "address": info["address"],
+            "structures": [{k: v for k, v in s.items() if k != "geometry_las"} for s in info["structures"]]}
+
+
+class RoofOrder(BaseModel):
+    pin: str = Field(max_length=20)
+    structure_ids: list[int] | None = None
+
+
+@app.post("/api/roof/report")
+def roof_order(body: RoofOrder, c: dict = Depends(roof_company)):
+    if not accounts.has_credit(c["id"]):
+        raise HTTPException(402, "You're out of report credits.")
+    try:
+        rep = roofreport.build_report(body.pin, body.structure_ids)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    try:
+        rid = accounts.spend_and_save(c["id"], rep)
+    except PermissionError:
+        raise HTTPException(402, "You're out of report credits.")
+    return {"id": rid, "credits": accounts.get_company(c["id"])["credits"]}
+
+
+@app.get("/api/roof/reports")
+def roof_reports(c: dict = Depends(roof_company)):
+    return accounts.list_reports(c["id"])
+
+
+def _report_access(rid: str, request: Request) -> tuple[dict, dict]:
+    rep = accounts.get_report(rid.upper())
+    if not rep:
+        raise HTTPException(404, "report not found")
+    tok = request.query_params.get("t")
+    cid = accounts.read_session(request.cookies.get(ROOF_COOKIE))
+    admin_ok = ADMIN_TOKEN and (request.headers.get("x-admin-token") == ADMIN_TOKEN or request.query_params.get("token") == ADMIN_TOKEN)
+    if not (cid == rep["company_id"] or (tok and tok == rep["share_token"]) or admin_ok):
+        raise HTTPException(403, "you don't have access to this report")
+    return rep, accounts.get_company(rep["company_id"]) or {}
+
+
+@app.get("/api/roof/report/{rid}")
+def roof_report_json(rid: str, request: Request):
+    rep, comp = _report_access(rid, request)
+    return {"id": rep["id"], "created": rep["created"], "share_token": rep["share_token"], "data": rep["data"],
+            "company": {k: comp.get(k) for k in ("name", "phone", "email", "brand_color")}}
+
+
+@app.get("/r/{rid}/pdf")
+def roof_report_pdf(rid: str, request: Request):
+    rep, comp = _report_access(rid, request)
+    pdf = render_pdf(rep, comp)
+    safe = "".join(ch if ch.isalnum() else "_" for ch in rep["data"].get("address", "roof"))
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="Roof_Report_{safe}_{rep["id"]}.pdf"'})
+
+
+# ------------------------------------------------------------- owner (admin)
+class NewCompany(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=200)
+    password: str = Field(min_length=6, max_length=200)
+    credits: int = Field(default=0, ge=0, le=100000)
+    phone: str = Field(default="", max_length=40)
+
+
+@app.get("/api/admin/companies", dependencies=[Depends(admin)])
+def admin_companies():
+    return accounts.list_companies()
+
+
+@app.post("/api/admin/companies", dependencies=[Depends(admin)])
+def admin_create_company(body: NewCompany):
+    try:
+        return accounts.create_company(body.name, body.email, body.password, body.credits, body.phone)
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            raise HTTPException(400, "a company with that email already exists")
+        raise
+
+
+class CreditChange(BaseModel):
+    delta: int = Field(ge=-100000, le=100000)
+    reason: str = Field(default="manual adjustment", max_length=200)
+
+
+@app.post("/api/admin/companies/{cid}/credits", dependencies=[Depends(admin)])
+def admin_credits(cid: int, body: CreditChange):
+    if not accounts.get_company(cid):
+        raise HTTPException(404)
+    return {"credits": accounts.add_credits(cid, body.delta, body.reason)}
+
+
+class CompanyEdit(BaseModel):
+    name: str | None = None
+    phone: str | None = None
+    brand_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    password: str | None = Field(default=None, min_length=6)
+
+
+@app.patch("/api/admin/companies/{cid}", dependencies=[Depends(admin)])
+def admin_edit_company(cid: int, body: CompanyEdit):
+    return accounts.update_company(cid, **body.model_dump())
+
+
+@app.get("/api/admin/roof-reports", dependencies=[Depends(admin)])
+def admin_roof_reports():
+    return accounts.list_reports(None, 500)
