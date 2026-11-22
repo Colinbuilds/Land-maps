@@ -84,6 +84,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Then add your domain under **Settings → Custom Domains**. One option is `estimate.yourcompany.com` for customers, with `/business` on the same domain for your staff.
 
+**Railway.**
+1. Go to **New Project → Deploy from GitHub repo → Land-maps**. Railway builds the `Dockerfile`, and `railway.toml` sets the `/healthz` check and restart policy.
+2. Right-click the service → **Attach Volume**, with mount path **`/var/data`**. Without it, leads and settings are wiped on every deploy.
+3. Under **Variables**, add `ESTIMATOR_ADMIN_TOKEN` (any long random string) and, optionally, `OPENAI_API_KEY`.
+4. Under **Settings → Networking**, click **Generate Domain** for a public URL, or add your own domain there.
+
+Railway sets `PORT` itself. Keep one replica, because data is stored in files on the volume.
+
 **Anywhere else with Docker** (Railway, Fly.io, a VPS):
 
 ```bash

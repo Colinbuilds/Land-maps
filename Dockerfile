@@ -12,8 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY static ./static
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN useradd --create-home appuser && mkdir -p /var/data && chown -R appuser /var/data
-USER appuser
+# Runs as root only long enough to fix volume ownership, then as appuser.
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
