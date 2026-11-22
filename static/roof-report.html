@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Roof Measurement Report</title>
-<link rel="stylesheet" href="/static/styles.css?v=5">
+<link rel="stylesheet" href="/static/styles.css?v=7">
 <style>
   :root { --accent: #1d4ed8; }
   header.top { background: var(--accent); color: #fff; border: 0; }
@@ -29,7 +29,7 @@
   <div class="contact" id="coContact"></div>
 </header>
 <main class="stack" id="main"><p class="muted"><span class="spinner"></span>Loading report…</p></main>
-<script src="/static/common.js?v=5"></script>
+<script src="/static/common.js?v=7"></script>
 <script>
 const COLORS = { ridge: "#dc2626", hip: "#ea580c", valley: "#2563eb", rake: "#16a34a", eave: "#a16207", step_flashing: "#9333ea", flashing: "#0891b2" };
 const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flashing"];
@@ -55,7 +55,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
     </div>
     <div>
       <h1 style="margin-bottom:2px">Roof Measurement Report</h1>
-      <div class="muted">${esc(d.address)}, ${esc((d.city || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()))} NE ${esc(d.zip || "")} · Parcel ${esc(d.pin)} · Report ${esc(r.id)} · ${new Date(r.created * 1000).toLocaleDateString(undefined, { dateStyle: "long" })}</div>
+      <div class="muted">${esc(d.address)}, ${esc((d.city || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()))} NE ${esc(d.zip || "")} · Parcel ${esc(String(d.pin).split(':').pop())}${d.county_name ? ` · ${esc(d.county_name)}` : ''} · Report ${esc(r.id)} · ${new Date(r.created * 1000).toLocaleDateString(undefined, { dateStyle: "long" })}</div>
     </div>
     <div class="cover">
       <div class="card">${d.aerial_jpg ? `<img alt="Aerial photo of the property" src="data:image/jpeg;base64,${d.aerial_jpg}">` : ""}</div>
@@ -96,7 +96,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
         <div class="tablewrap"><table><thead><tr><th>Structure</th><th class="num">Roof sq ft</th><th class="num">Facets</th><th class="num">Ridges</th><th class="num">Hips</th><th class="num">Valleys</th><th class="num">Rakes</th><th class="num">Eaves</th></tr></thead><tbody>
         ${d.structures.map((s) => `<tr><td>${esc(s.name)}</td><td class="num">${s.roof_sqft.toLocaleString()}</td><td class="num">${s.facets || "–"}</td>${["ridge", "hip", "valley", "rake", "eave"].map((k) => `<td class="num">${Math.round(s.lines[k])}</td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
-        <p class="small muted">Pitch measured per roof plane from LiDAR, rounded to the nearest 1/12. Roof outlines: Douglas County 2022 building footprints. Roof planes and lines: Douglas County 2022 LiDAR. Photo: 2025 county imagery. Changes after April 2022 are not reflected. Verify on site before ordering material.</p>
+        <p class="small muted">Pitch measured per roof plane from LiDAR, rounded to the nearest 1/12. Roof outlines: ${esc(d.sources?.outlines || "county building footprints")}. Roof planes and lines: ${esc(d.sources?.lidar || "LiDAR")}. Photo: ${esc(d.sources?.imagery || "aerial imagery")}. Changes after the ${esc(d.sources?.lidar_year || "LiDAR")} scan are not reflected. Verify on site before ordering material.</p>
       </div>
     </div>`;
   document.getElementById("copy").addEventListener("click", async () => {

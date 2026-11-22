@@ -10,7 +10,8 @@ from shapely.geometry import mapping, shape
 from shapely.ops import transform as shp_transform, unary_union
 
 from .imagery import Mosaic
-from .measure import default_measurer
+from .counties import make_pid, split_pid
+from .measure import measurer_for
 from .roof import analyze_roof, pitch_factors
 from .roofplanes import LINE_TYPES, analyze_roof_points
 
@@ -63,8 +64,9 @@ def list_structures(pin: str) -> dict:
         return hit[1]
     import numpy as np
     from .photoedge import PhotoSampler, trace_outline
-    m = default_measurer()
-    f = m.get_parcel(pin)
+    cid, bare = split_pid(pin)
+    m = measurer_for(cid)
+    f = m.get_parcel(bare)
     if not f:
         raise LookupError("parcel not found")
     P = f["geometry"]
@@ -105,11 +107,11 @@ def list_structures(pin: str) -> dict:
             "trace": stats,
             "geojson": mapping(_shift_las_to_photo_wgs(m, traced, lean)),
         })
-    a = f["attributes"]
-    pf = m.pf
-    info = {"pin": a.get(pf["pin"]), "address": (a.get(pf["address"]) or "").strip(),
-            "city": a.get(pf["city"]), "zip": a.get(pf["zip"]), "parcel": f, "structures": out,
-            "stories": a.get("BLDG_STORY"), "year_built": a.get(pf["year_built"])}
+    a = m.parcel_attrs(f["attributes"])
+    info = {"pin": make_pid(cid, a["pin"]), "address": a.get("address") or "",
+            "city": a.get("city"), "zip": a.get("zip"), "parcel": f, "structures": out, "county": cid,
+            "county_name": m.c["name"],
+            "stories": f["attributes"].get("BLDG_STORY"), "year_built": a.get("year_built")}
     _struct_cache[pin] = (_t.time(), info)
     if len(_struct_cache) > 300:
         _struct_cache.pop(next(iter(_struct_cache)))
@@ -254,18 +256,30 @@ def _lean_vector(m, center_wgs):
 
 
 def _neighbors_with_heights(m, center_wgs, radius_deg=0.0009, n=15):
-    """Nearby footprints with their eave heights (county planimetric attrs)."""
+    """Nearby building outlines with their eave/roof heights in feet, from
+    the county's (or national) building layer."""
     from .gis import query_features
+    b = m.c["buildings"]
+    hf = b.get("height_field")
+    oid = b.get("oid", "objectid")
+    to_ft = 3.28084 if b.get("height_units") == "m" else 1.0
     c = center_wgs.centroid
     env = (c.x - radius_deg, c.y - radius_deg * 0.75, c.x + radius_deg, c.y + radius_deg * 0.75)
-    feats = query_features(m.c["buildings"]["url"], envelope=env, out_fields="objectid,eaveheight,buildingheight")
+    feats = query_features(b["url"], envelope=env, out_fields=",".join(x for x in (oid, hf) if x))
     out = []
     for f in feats:
         g = f["geometry"]
         if g is None or g.area <= 0:
             continue
-        h = f["attributes"].get("eaveheight") or f["attributes"].get("buildingheight")
-        out.append((g, h))
+        h = f["attributes"].get(hf) if hf else None
+        try:
+            h = float(h) * to_ft if h else None
+        except (TypeError, ValueError):
+            h = None
+        # national layers give roof height; eaves sit lower on pitched roofs
+        if h and b.get("height_units") == "m":
+            h *= 0.8
+        out.append((g, h if h and h > 0 else 18.0))
     out.sort(key=lambda t: -t[0].area)
     return out[:n]
 
@@ -306,7 +320,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
                  edited: dict | None = None) -> dict:
     """``edited`` maps structure id -> GeoJSON outline the roofer adjusted on
     the photo; those outlines are measured exactly as drawn."""
-    m = default_measurer()
+    m = measurer_for(split_pid(pin)[0])
     info = list_structures(pin)
     structs = info["structures"]
     if not structs:
@@ -413,6 +427,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
     pred = max(pitch_areas, key=pitch_areas.get) if pitch_areas else pitch
     return {
         "pin": info["pin"], "address": info["address"], "city": info["city"], "zip": info["zip"],
+        "county": info.get("county"), "county_name": info.get("county_name"),
         "stories": info["stories"], "year_built": info["year_built"],
         "pitch": pred, "pitch_label": f"{pred:g}/12" if pred else "Flat", "pitch_table": pitch_table,
         "pitch_measured": "lidar" in methods,
@@ -422,8 +437,9 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
         "waste": waste, "suggested_waste": sw,
         "structures": out_structs,
         "method": "lidar" if methods == {"lidar"} else ("partial" if methods & {"lidar", "lidar_grid"} else "outline_only"),
-        "sources": {"lidar": "Douglas County 2022 QL1 LiDAR", "outlines": "Douglas County 2022 building footprints",
-                    "imagery": "Douglas County 2025 orthoimagery"},
+        "sources": {"lidar": (m.c.get("lidar") or {}).get("source"), "outlines": m.c["buildings"].get("source"),
+                    "imagery": m.c["imagery"].get("source"),
+                    "lidar_year": (m.c.get("lidar") or {}).get("year")},
         "aerial_jpg": _aerial(m, chosen),
         "line_labels": LINE_LABELS,
     }

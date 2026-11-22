@@ -70,7 +70,7 @@
     }
     $("orderCard").innerHTML = `
       <h2 style="margin:0">${esc(current.address)}</h2>
-      <div class="small muted">Parcel ${esc(current.pin)}</div>
+      <div class="small muted">Parcel ${esc(String(current.pin).split(":").pop())}</div>
       <div class="structs">${current.structures.map((s, i) => `
         <label><input type="checkbox" value="${s.id}" ${i === 0 || s.plan_sqft >= 250 ? "checked" : ""}>
           <span><b>${esc(s.name)}</b> <span class="muted small" id="sq${s.id}">${fmt(s.plan_sqft)} sq ft footprint</span></span></label>`).join("")}</div>

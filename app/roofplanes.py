@@ -341,7 +341,14 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
     med = np.median(pts[idx, 2], axis=1)
     pts = pts[np.abs(pts[:, 2] - med) < 2.5]
 
-    labels, nlab = segment_planes(pts)
+    # adapt to point density: Douglas 2022 QL1 has a point every ~0.7 ft,
+    # USGS 2016-18 data can be one every 3 ft
+    spacing = math.sqrt(max(outline.area, 1.0) / max(len(pts), 1))
+    sparse = spacing > 1.2
+    labels, nlab = segment_planes(pts, ang_deg=16.0 if sparse else 12.0,
+                                  dist_tol=0.6 if sparse else 0.4,
+                                  radius=max(1.8, 2.4 * spacing),
+                                  min_pts=8 if sparse else 12)
     if nlab == 0:
         return {**res, "method": "insufficient_points"}
     labels, nlab = _merge_planes(pts, labels, nlab)

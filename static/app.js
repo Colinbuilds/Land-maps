@@ -61,7 +61,7 @@
   function renderResult() {
     const r = current;
     $("resAddr").textContent = r.address || "Your property";
-    $("resPin").textContent = `Parcel ${r.pin}`;
+    $("resPin").textContent = `Parcel ${r.pin}`;  // bare parcel number (county shown separately)
     const notes = [];
     if (r.sources.driveway_method === "estimated") notes.push("Driveway is partly hidden in the aerial photo, so its size is estimated.");
     if (!r.sources.sidewalk_detected) notes.push("No public sidewalk detected along your frontage.");

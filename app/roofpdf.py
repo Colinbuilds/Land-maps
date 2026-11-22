@@ -76,8 +76,9 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     _title(c, "Roof Measurement Report", H - 92)
     c.setFont("Helvetica", 11)
     c.setFillColor(colors.HexColor("#334155"))
-    c.drawString(M, H - 110, f"{d['address']}, {(d.get('city') or '').title()} NE {d.get('zip') or ''}".strip())
-    c.drawString(M, H - 124, f"Parcel {d['pin']} · Report {rep['id']} · {time.strftime('%B %d, %Y', time.localtime(rep['created']))}")
+    c.drawString(M, H - 110, f"{d['address']}, {(d.get('city') or '').title()} NE {d.get('zip') or ''}".strip()
+                 + (f"  ({d['county_name']})" if d.get("county_name") else ""))
+    c.drawString(M, H - 124, f"Parcel {str(d['pin']).split(':')[-1]} · Report {rep['id']} · {time.strftime('%B %d, %Y', time.localtime(rep['created']))}")
     img_top = H - 140
     if d.get("aerial_jpg"):
         img = ImageReader(io.BytesIO(base64.b64decode(d["aerial_jpg"])))
@@ -191,12 +192,13 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     y -= 22
     _title(c, "Notes", y)
     y -= 18
+    src = d.get("sources") or {}
     notes = [
         "Pitch is measured per roof plane from LiDAR and rounded to the nearest 1/12. Areas and sloped",
         "lengths (rakes, hips, valleys, step flashing) use each plane's own pitch; ridges and eaves are level.",
-        "Roof outlines: Douglas County 2022 building footprints. Roof planes and lines: Douglas County",
-        "2022 QL1 LiDAR. Photo: Douglas County 2025 orthoimagery.",
-        "Additions or re-roofs after April 2022 are not reflected. Verify on site before ordering.",
+        f"Roof outlines: {src.get('outlines') or 'county building footprints'}.",
+        f"Roof planes and lines: {src.get('lidar') or 'LiDAR'}. Photo: {src.get('imagery') or 'aerial imagery'}.",
+        f"Changes made after the {src.get('lidar_year') or 'LiDAR'} scan are not reflected. Verify on site before ordering.",
     ]
     if d.get("method") != "lidar":
         notes.append("Part of this roof had no usable LiDAR; its edges are counted as eaves from the outline.")

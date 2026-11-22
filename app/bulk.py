@@ -9,8 +9,9 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from .gis import query_features, count_features
-from .measure import default_measurer, MEASUREMENTS
+from . import counties
+from .gis import _esri_to_geojson_geom, get_json, query_features
+from .measure import MEASUREMENTS, measurer_for
 from .pricing import DATA_DIR
 
 JOBS_DIR = DATA_DIR / "jobs"
@@ -23,21 +24,63 @@ _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
 
 
-def _where(zip_code: str, classes: list[str]) -> str:
-    m = default_measurer()
-    f = m.pf
+_ZCTA = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/PUMA_TAD_TAZ_UGA_ZCTA/MapServer/1"
+
+
+def zip_polygon(zip_code: str):
+    """The Census ZIP Code Tabulation Area for a 5-digit ZIP (WGS84)."""
+    from shapely.geometry import shape
     z = "".join(ch for ch in zip_code if ch.isdigit())[:5]
-    w = f"{f['zip']} LIKE '{z}%'"
-    cls = [c for c in classes if c.isalpha() and len(c) == 1]
-    if cls:
-        w += " AND " + f"{f['class']} IN (" + ",".join(f"'{c}'" for c in cls) + ")"
-    return w
+    d = get_json(_ZCTA + "/query", {"where": f"ZCTA5='{z}'", "outFields": "ZCTA5", "outSR": 4326,
+                                    "geometryPrecision": 6, "f": "json"}, ttl=365 * 86400)
+    feats = d.get("features") or []
+    if not feats:
+        raise LookupError(f"ZIP {z} not found")
+    return shape(_esri_to_geojson_geom(feats[0]["geometry"]))
+
+
+def _class_where(m, classes: list[str]) -> str:
+    table = m.c["parcels"].get("classes", {})
+    parts = [f"({table[c]})" for c in classes if c in table]
+    return " OR ".join(parts) if parts else "1=1"
+
+
+def _zip_parcels(zip_code: str, classes: list[str], limit: int | None = None):
+    """[(county_id, feature)] for parcels whose centre lies in the ZIP, across
+    every county the ZIP touches."""
+    zp = zip_polygon(zip_code)
+    out = []
+    for cid in counties.counties_in(zp.bounds):
+        m = measurer_for(cid)
+        geom = {"geometry": json.dumps({"rings": [list(map(list, r.coords)) for p in getattr(zp.simplify(0.0003), "geoms", [zp.simplify(0.0003)])
+                                                  for r in [p.exterior]], "spatialReference": {"wkid": 4326}}),
+                "geometryType": "esriGeometryPolygon", "inSR": 4326, "spatialRel": "esriSpatialRelIntersects"}
+        feats = query_features(m.c["parcels"]["url"], where=_class_where(m, classes), geometry=geom,
+                               limit=(limit - len(out)) if limit else None)
+        for f in feats:
+            if f["geometry"] is not None and zp.contains(f["geometry"].representative_point()):
+                out.append((cid, f))
+        if limit and len(out) >= limit:
+            break
+    return out[:limit] if limit else out
 
 
 def preview(zip_code: str, classes: list[str]) -> dict:
-    m = default_measurer()
-    w = _where(zip_code, classes)
-    return {"where": w, "count": count_features(m.c["parcels"]["url"], w)}
+    zp = zip_polygon(zip_code)
+    from .gis import get_json as _gj
+    total, by = 0, {}
+    for cid in counties.counties_in(zp.bounds):
+        m = measurer_for(cid)
+        geom = {"geometry": json.dumps({"rings": [list(map(list, p.exterior.coords)) for p in getattr(zp.simplify(0.0003), "geoms", [zp.simplify(0.0003)])],
+                                        "spatialReference": {"wkid": 4326}}),
+                "geometryType": "esriGeometryPolygon", "inSR": 4326, "spatialRel": "esriSpatialRelIntersects"}
+        d = _gj(m.c["parcels"]["url"] + "/query", {"where": _class_where(m, classes), "returnCountOnly": "true",
+                                                   "f": "json", **geom}, method="POST")
+        n = int(d.get("count", 0))
+        if n:
+            by[m.c["name"]] = n
+            total += n
+    return {"count": total, "by_county": by}
 
 
 def start_job(zip_code: str, classes: list[str], measures: list[str], limit: int | None = None,
@@ -87,22 +130,19 @@ def _save(job):
 
 
 def _run(job: dict, workers: int):
-    m = default_measurer()
     try:
         job["status"] = "loading parcels"
-        feats = query_features(m.c["parcels"]["url"], where=_where(job["zip"], job["classes"]),
-                               limit=job["limit"] or None)
+        items = _zip_parcels(job["zip"], job["classes"], job["limit"] or None)
         # Process in spatial order so neighbouring lots share cached downloads.
-        def cell(f):
-            c = f["geometry"].centroid
+        def cell(item):
+            c = item[1]["geometry"].centroid
             return (round(c.y / 0.004), round(c.x / 0.004), c.x)
-        feats = [f for f in feats if f["geometry"] is not None]
-        feats.sort(key=cell)
-        job["total"] = len(feats)
+        items.sort(key=cell)
+        job["total"] = len(items)
         job["status"] = "measuring"
         _save(job)
 
-        cols = ["pin", "address", "city", "zip", "class"] + job["measures"] + ["driveway_method", "sidewalk_detected"]
+        cols = ["pin", "county", "address", "city", "zip", "class"] + job["measures"] + ["driveway_method", "sidewalk_detected"]
         if job["include_owner"]:
             cols += ["owner", "mail_address", "mail_city", "mail_state", "mail_zip"]
         cols += ["lat", "lon"]
@@ -110,27 +150,32 @@ def _run(job: dict, workers: int):
             w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
             w.writeheader()
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                futs = {ex.submit(m.measure, f): f for f in feats}
+                futs = {ex.submit(measurer_for(cid).measure, f): (cid, f) for cid, f in items}
                 for fut in as_completed(futs):
-                    f = futs[fut]
-                    a = f["attributes"]
+                    cid, f = futs[fut]
+                    m = measurer_for(cid)
+                    a = m.parcel_attrs(f["attributes"])
                     try:
                         r = fut.result()
                         row = dict(r)
+                        row["pin"] = r.get("pid") or r["pin"]
+                        row["county"] = m.c["name"]
                         row["driveway_method"] = r["sources"]["driveway_method"]
                         row["sidewalk_detected"] = r["sources"]["sidewalk_detected"]
                         for k in job["measures"]:
                             job["totals"][k] += r.get(k) or 0
                     except Exception as e:
                         job["errors"] += 1
-                        row = {"pin": a.get(m.pf["pin"]), "address": a.get(m.pf["address"]),
-                               "driveway_method": f"error: {e}"[:200]}
+                        row = {"pin": counties.make_pid(cid, a.get("pin")), "county": m.c["name"],
+                               "address": a.get("address"), "driveway_method": f"error: {e}"[:200]}
                     c = f["geometry"].representative_point()
                     row["lat"], row["lon"] = round(c.y, 6), round(c.x, 6)
                     if job["include_owner"]:
-                        row.update({"owner": a.get("OWNER_NAME"), "mail_address": a.get("ADDRESS1"),
-                                    "mail_city": a.get("OWNER_CITY"), "mail_state": a.get("OWNER_STAT"),
-                                    "mail_zip": a.get("OWNER_ZIP")})
+                        raw = f["attributes"]
+                        mf = {**{"mail_address": "ADDRESS1", "mail_city": "OWNER_CITY", "mail_state": "OWNER_STAT",
+                                 "mail_zip": "OWNER_ZIP"}, **{k: v for k, v in m.c["parcels"]["fields"].items()
+                                                              if k.startswith("mail_")}}
+                        row.update({"owner": a.get("owner"), **{k: raw.get(v) for k, v in mf.items()}})
                     w.writerow(row)
                     job["done"] += 1
                     if job["done"] % 25 == 0:
