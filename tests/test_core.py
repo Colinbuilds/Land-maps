@@ -57,3 +57,41 @@ def test_estimate_skips_missing_areas_and_applies_finish():
     assert "concrete_sidewalk" not in e
     e2 = estimate(m, DEFAULT_SETTINGS, finish="stamped")
     assert e2["concrete_driveway"]["low"] > e["concrete_driveway"]["low"]
+
+
+def _lidar_grid(n=120):
+    return (np.zeros((n, n), np.float32), np.full((n, n), -1.0, np.float32), np.full((n, n), 5, np.int16))
+
+
+def test_lidar_trampoline_ring_is_filled_and_fence_dropped():
+    from app.measure import _lidar_masks
+    obj, veg, gnd = _lidar_grid()
+    yy, xx = np.mgrid[0:120, 0:120]
+    rr = np.hypot(yy - 40, xx - 40)
+    obj[(rr > 14) & (rr < 17)] = 3.0       # trampoline frame, no returns from the mat
+    obj[100:101, 5:115] = 5.0              # 1-px-wide fence line
+    struct, bed, canopy = _lidar_masks(obj, veg, gnd, ft_px=0.5, sqft_px=0.25)
+    assert struct[40, 40]                  # mat counted as structure
+    assert not struct[100, 60]             # fence doesn't eat the lawn
+
+
+def test_lidar_shrubs_become_beds_and_evergreens_excluded():
+    from app.measure import _lidar_masks
+    obj, veg, gnd = _lidar_grid()
+    veg[20:30, 20:30] = 3.0                # shrub
+    veg[20:30, 36:46] = 3.0                # neighbour shrub 3 ft away -> one bed
+    veg[70:100, 70:100] = 25.0             # spruce, no ground returns beneath
+    gnd[70:100, 70:100] = 0
+    struct, bed, canopy = _lidar_masks(obj, veg, gnd, ft_px=0.5, sqft_px=0.25)
+    assert bed[25, 33]                     # gap between shrubs is bed, not lawn
+    assert canopy[85, 85]
+    assert not bed[60, 60] and not canopy[60, 60]
+
+
+def test_pool_detector():
+    from app.measure import _pools
+    img = np.zeros((40, 40, 3), np.float32)
+    img[:] = np.array([131, 118, 84]) / 255
+    img[10:30, 10:30] = np.array([60, 140, 190]) / 255
+    m = _pools(img)
+    assert m[20, 20] and not m[2, 2]

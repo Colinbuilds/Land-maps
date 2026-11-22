@@ -76,6 +76,13 @@ class Mosaic:
     def shape(self):
         return self.rgb.shape[:2]
 
+    def px_to_lonlat(self, x: float, y: float) -> tuple[float, float]:
+        n = 2 ** self.z * 256
+        X, Y = x + self.tx0 * 256, y + self.ty0 * 256
+        lon = X / n * 360.0 - 180.0
+        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * Y / n))))
+        return lon, lat
+
     def to_px(self, lon: float, lat: float) -> tuple[float, float]:
         X, Y = _lonlat_to_global_px(lon, lat, self.z)
         return X - self.tx0 * 256, Y - self.ty0 * 256

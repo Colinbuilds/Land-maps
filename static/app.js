@@ -66,7 +66,10 @@
     if (r.sources.driveway_method === "estimated") notes.push("Driveway is partly hidden in the aerial photo, so its size is estimated.");
     if (!r.sources.sidewalk_detected) notes.push("No public sidewalk detected along your frontage.");
     $("resNote").textContent = notes.join(" ");
-    $("meas").innerHTML = measurementCards(r, ["lawn_sqft", "driveway_sqft", "sidewalk_sqft", "lot_sqft"], cfg.measurements);
+    const grass = { ...r, grass_total: (r.lawn_sqft || 0) + (r.parkway_sqft || 0) };
+    $("meas").innerHTML = measurementCards(grass, ["grass_total", "driveway_sqft", "sidewalk_sqft", "lot_sqft"],
+      { ...cfg.measurements, grass_total: "Grass you'd have mowed (yard + street strip)" }) +
+      `<p class="small muted" style="grid-column:1/-1;margin:0">Grass only. Your house, driveway, patios, decks, sheds, play sets and landscape beds are left out.</p>`;
     $("prices").innerHTML = Object.entries(r.estimate).map(([k, e]) => `
       <div class="svc">
         <div><div class="name">${esc(e.label)}</div>

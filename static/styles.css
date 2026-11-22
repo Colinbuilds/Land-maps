@@ -10,6 +10,8 @@
   --walk: #ec4899;
   --other: #eab308;
   --bldg: #64748b;
+  --struct: #ef4444;
+  --beds: #a855f7;
   --radius: 14px;
 }
 * { box-sizing: border-box; }

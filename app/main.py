@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from shapely.geometry import mapping, Point
 
-from . import bulk, render
+from . import bulk, corrections, render
 from .gis import get_json, query_features
 from .imagery import Mosaic
 from .measure import default_measurer, MEASUREMENTS
@@ -267,6 +267,26 @@ def job_csv(job_id: str):
         raise HTTPException(404)
     j = bulk.get_job(job_id) or {}
     return FileResponse(p, media_type="text/csv", filename=f"measurements_{j.get('zip', job_id)}_{job_id}.csv")
+
+
+@app.get("/api/admin/corrections/{pin}", dependencies=[Depends(admin)])
+def get_corrections(pin: str):
+    return corrections.get(pin) or {"exclude": [], "include": []}
+
+
+class Corrections(BaseModel):
+    exclude: list[dict] = []
+    include: list[dict] = []
+
+
+@app.put("/api/admin/corrections/{pin}", dependencies=[Depends(admin)])
+def put_corrections(pin: str, body: Corrections):
+    for g in body.exclude + body.include:
+        if g.get("type") != "Polygon" or not g.get("coordinates"):
+            raise HTTPException(400, "corrections must be GeoJSON polygons")
+    out = corrections.put(pin, body.exclude, body.include)
+    _measure_cached.cache_clear()
+    return out
 
 
 @app.get("/api/admin/leads", dependencies=[Depends(admin)])

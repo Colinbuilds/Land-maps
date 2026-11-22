@@ -41,6 +41,15 @@ COUNTY = {
         "zoom": 20,
         "max_zoom": 22,
     },
+    # 2022 QL1 classified LiDAR point cloud (public S3), used to find decks,
+    # sheds, play sets, trampolines and shrub beds so they're kept out of the lawn.
+    "lidar": {
+        "year": 2022,
+        "index_url": f"{_DCGIS}/Hosted/Douglas_County_NE_LiDAR_Tiles_view/FeatureServer/4",
+        "las_field": "las_tile",
+        "las_base_url": "https://dcgis-lidar.s3.amazonaws.com/2022/Point_Cloud/Classified/",
+        "crs_wkt": ('PROJCS["Transverse_Mercator",GEOGCS["GCS_NAD_1983_2011",DATUM["D_NAD83_NATIONAL_SPATIAL_REFERENCE_SYSTEM_2011",SPHEROID["GRS_1980",6378137,298.257222101]],PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]],PROJECTION["Transverse_Mercator"],PARAMETER["scale_factor",1.0000482],PARAMETER["central_meridian",-96.05],PARAMETER["latitude_of_origin",41.1833333299992],PARAMETER["false_easting",131233.5958005249],PARAMETER["false_northing",82020.99737532808],UNIT["Foot (International)",0.3048]]'),
+    },
     # Typical public sidewalk width in this jurisdiction (feet).
     "sidewalk_width_ft": 4.0,
     # Used only when a driveway is hidden by shadow/trees in the imagery.

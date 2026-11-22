@@ -77,8 +77,41 @@
     const map = makeMap("map", cfg);
     const holder = {};
     const parcels = parcelLayer(map, (f) => pick(f.properties.pin));
+    let curPin = null;
+    const fix = { exclude: [], include: [], group: new L.FeatureGroup().addTo(map) };
+    const fixStyle = { exclude: { color: "#ef4444", weight: 2, fillOpacity: 0.25 }, include: { color: "#22c55e", weight: 2, fillOpacity: 0.25 } };
+    function drawFix() {
+      fix.group.clearLayers();
+      ["exclude", "include"].forEach((k) => fix[k].forEach((g) => L.geoJSON(g, { style: fixStyle[k] }).addTo(fix.group)));
+      const area = (g) => L.GeometryUtil.geodesicArea(g.coordinates[0].map(([x, y]) => L.latLng(y, x))) * 10.7639;
+      $("fixList").innerHTML = [...fix.exclude.map((g) => `− ${fmt(area(g))} sq ft removed`), ...fix.include.map((g) => `+ ${fmt(area(g))} sq ft added`)].join("<br>") || "No corrections.";
+    }
+    let fixMode = null;
+    const startFix = (mode) => {
+      fixMode = mode;
+      new L.Draw.Polygon(map, { shapeOptions: fixStyle[mode], allowIntersection: false }).enable();
+    };
+    $("fixExclude").addEventListener("click", () => startFix("exclude"));
+    $("fixInclude").addEventListener("click", () => startFix("include"));
+    $("fixClear").addEventListener("click", () => { fix.exclude = []; fix.include = []; drawFix(); });
+    $("fixSave").addEventListener("click", async () => {
+      if (!curPin) return;
+      try {
+        await api(`/api/admin/corrections/${curPin}`, { method: "PUT", json: { exclude: fix.exclude, include: fix.include } });
+        $("fixMsg").innerHTML = '<span class="ok">Saved.</span>';
+        pick(curPin);
+      } catch (e) { $("fixMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    });
+
     async function pick(pin) {
       parcels.select(pin);
+      curPin = pin;
+      $("fixCard").classList.remove("hidden");
+      try {
+        const c = await api(`/api/admin/corrections/${pin}`);
+        fix.exclude = c.exclude || []; fix.include = c.include || [];
+      } catch (e) { fix.exclude = []; fix.include = []; }
+      drawFix();
       $("mResult").innerHTML = '<span class="spinner"></span>Measuring…';
       try {
         const r = await api(`/api/measure/${encodeURIComponent(pin)}`);
@@ -86,7 +119,9 @@
         $("mResult").innerHTML = `
           <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><h2 style="margin:0">${esc(r.address)}</h2><span class="tag">${esc(r.pin)}</span></div>
           <p class="small muted">${esc(r.city || "")} ${esc(r.zip || "")} · class ${esc(r.class)} · ${esc(r.assessor.building || "")} ${r.assessor.year_built ? "built " + esc(r.assessor.year_built) : ""} · ${fmt(r.assessor.living_sqft)} sq ft living
-          ${r.sources.driveway_method !== "imagery" ? ` · <span class="tag warn">driveway ${esc(r.sources.driveway_method)}</span>` : ""}</p>
+          ${r.sources.driveway_method !== "imagery" ? ` · <span class="tag warn">driveway ${esc(r.sources.driveway_method)}</span>` : ""}
+          ${r.sources.corrected ? ' · <span class="tag">hand-corrected</span>' : ""}
+          ${r.sources.lidar_year ? "" : ' · <span class="tag warn">no LiDAR here</span>'}</p>
           <div class="meas">${measurementCards(r, NUM_KEYS, LABELS)}</div>
           <h2>Customer would see</h2>
           ${Object.values(r.estimate).map((e) => `<div class="svc"><div class="name">${esc(e.label)}</div><div class="price">${money(e.low)}–${money(e.high)}<small>${esc(e.unit)}</small></div></div>`).join("")}`;
@@ -126,7 +161,15 @@
       });
       $("drawn").innerHTML = items.length ? items.join("<br>") : "None yet.";
     };
-    map.on(L.Draw.Event.CREATED, (e) => { drawn.addLayer(e.layer); listDrawn(); });
+    map.on(L.Draw.Event.CREATED, (e) => {
+      if (fixMode) {
+        fix[fixMode].push(e.layer.toGeoJSON().geometry);
+        fixMode = null;
+        drawFix();
+        return;
+      }
+      drawn.addLayer(e.layer); listDrawn();
+    });
     map.on(L.Draw.Event.EDITED, listDrawn);
     map.on(L.Draw.Event.DELETED, listDrawn);
     return { map };

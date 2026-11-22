@@ -13,19 +13,44 @@ Douglas County, NE (DOGIS) is built in. Other counties are added as config (see 
 
 ## How each number is measured (Douglas County)
 
+### The yard: grass only
+
+`lawn_sqft` is the grass inside the lot and nothing else. It is the lot minus every one of these:
+
+| Removed | How it's found |
+|---|---|
+| House, garage, sheds, detached garages | 2022 county building footprints. These include small outbuildings; about 35,000 of the county's footprints are under 300 sq ft. |
+| Driveway, walks, patios, pool decks, rock beds | 2025 imagery: concrete and asphalt are neutral grey, while lawn is tan or green |
+| **Decks, play sets, trampolines, gazebos, above-ground pools, sheds not in the footprints** | **2022 QL1 LiDAR point cloud.** Anything over 0.8 ft tall that isn't a tree is cut out. Ring-shaped objects like trampolines and pool walls are filled in. Thin things like fences and posts are ignored, so lawn mowed along a fence isn't lost. |
+| **Landscape beds & shrubs** | LiDAR shrubs (0.8–8 ft vegetation) merged into bed outlines, plus a mulch edge. Beds with no shrubs that hug the house are found from LiDAR return intensity, because mulch and rock come back darker than turf. |
+| Dense evergreens | Tall trees with no ground returns underneath (spruce and pine, which have no grass under them). Grass under deciduous trees still counts. |
+| In-ground pools | Blue or teal water in the imagery |
+
+`parkway_sqft` is the city-owned grass strip between the lot line or sidewalk and the curb, which owners mow. It is reported separately. Mowing and fertilizer prices use **lawn + parkway**.
+
+**Hand corrections:** on the business dashboard, open *Measure a property* → *Fix this yard*. Outline anything the scan got wrong, such as a patio built after 2022 or a vegetable garden, or add back grass that was cut out. The correction is saved per parcel and used in customer quotes and bulk CSVs. Only areas inside the lot outline count.
+
+LiDAR tiles (~180 MB each, about 1,500 × 1,500 ft, roughly 150 homes) are downloaded on first use. Each is reduced to ~5 MB of 1-ft height rasters, cached, and the raw file deleted. The first lookup in a new area takes 15–30 s longer.
+
+### Other measurements
+
 | Measurement | Source | Notes |
 |---|---|---|
 | Lot sq ft | County parcel layer (`Accela_Dynamic/7`) | Exact legal lot polygon |
 | Building / roof | 2022 planimetric building footprints | Vector polygons |
-| Street frontage | Lot lines facing public right-of-way within 60 ft of a street | Uses 2022 LiDAR edge-of-pavement |
-| **Driveway** | 2025 leaf-off orthoimagery, classified per pixel and clipped to the lot | Includes the apron out to the curb. If the house's shadow or a parked car hides part of the slab, the detected slab is carried on to the garage. If nothing is visible, it falls back to 16 ft × the garage-to-curb distance and is flagged `estimated`. |
-| **Public sidewalk** | Imagery, sampled every 2 ft along the frontage between the lot line and the curb | Detected length × 4 ft width (set in county config). Reports 0 where there's no walk. |
-| Patios / other paving | Imagery: paved areas on the lot that aren't the driveway | Pool decks, patios, side walks |
-| **Lawn / turf** | Lot − buildings − all paved surfaces | |
+| Street frontage | Lot lines facing public right-of-way within 60 ft of a street | Uses 2022 LiDAR edge-of-pavement. Thin gaps between neighbouring lot lines are ignored. |
+| Driveway | 2025 imagery, clipped to the lot | Detected so it's kept out of the yard, and measured on its own for snow and concrete pricing. Includes the apron out to the curb. If a shadow or parked car hides part of it, the visible slab is carried on to the garage. If nothing is visible, it falls back to 16 ft × the garage-to-curb distance, flagged `estimated`. |
+| Public sidewalk | Imagery, sampled every 2 ft along the frontage | Detected length × 4 ft (county config) |
+| Patios / other paving | Imagery | Paved areas on the lot that aren't the driveway |
+| Structures | LiDAR + pool detector | Decks, sheds, play sets, etc. |
+| Beds | LiDAR | Shrub beds, foundation beds, evergreens |
 
-**Why imagery?** DOGIS publishes street pavement, but driveways and sidewalks aren't in any public layer for most of the county. Their 2013 impervious layer covers only eastern Omaha. The imagery is March 2025, leaf-off, at about 0.37 ft per pixel.
+**Why imagery and LiDAR?** DOGIS publishes street pavement, but no public layer maps driveways, sidewalks, decks or beds for most of the county. Their 2013 impervious layer covers only eastern Omaha. The imagery is March 2025, leaf-off, at about 0.37 ft per pixel. The LiDAR is April 2022, at about 2.6 points per sq ft.
 
-**Accuracy:** good for ballpark pricing. Lot and building numbers are exact. Driveway and sidewalk numbers are usually within about 10–20%. Deep shadows, tree cover, gravel drives and dark asphalt are the weak spots. Every result says how its driveway was measured (`imagery`, `estimated` or `none_found`), so the business can check those by hand with the draw tool.
+**Known limits:**
+- Anything built or removed between April 2022 and March 2025 can be wrong in the LiDAR-based layers. Use *Fix this yard* for those.
+- Flat mulch beds away from the house, with no shrubs, read as grass. Dormant grass and mulch are the same colour in March imagery.
+- Pool covers that aren't blue or green aren't detected.
 
 ## Run it
 

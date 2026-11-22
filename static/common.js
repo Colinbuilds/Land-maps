@@ -23,7 +23,8 @@ async function api(path, opts = {}) {
 
 const MEASURE_COLORS = {
   lawn_sqft: "var(--lawn)", driveway_sqft: "var(--drive)", sidewalk_sqft: "var(--walk)",
-  other_hardscape_sqft: "var(--other)", building_sqft: "var(--bldg)", lot_sqft: "#cbd5e1", frontage_ft: "#94a3b8",
+  other_hardscape_sqft: "var(--other)", structures_sqft: "var(--struct)", beds_sqft: "var(--beds)",
+  parkway_sqft: "var(--lawn)", grass_total: "var(--lawn)", building_sqft: "var(--bldg)", lot_sqft: "#cbd5e1", frontage_ft: "#94a3b8",
 };
 
 function makeMap(el, cfg) {

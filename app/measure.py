@@ -20,20 +20,25 @@ from collections import OrderedDict
 import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
-from shapely.geometry import box, LineString, MultiLineString, Point
+from shapely.geometry import box, LineString, MultiLineString, Point, Polygon, shape
 from shapely.ops import unary_union
 
 from .counties import get_county
 from .gis import Projector, ChunkedPolygonLayer, query_features
 from .imagery import Mosaic
+from .lidar import LidarSource
+from . import corrections
 
 MEASUREMENTS = {
     "lot_sqft": "Lot (total parcel)",
     "building_sqft": "Building footprint / roof",
-    "lawn_sqft": "Lawn / turf",
+    "lawn_sqft": "Lawn / grass only",
+    "parkway_sqft": "Parkway grass (between sidewalk and curb)",
     "driveway_sqft": "Driveway (incl. apron to street)",
     "sidewalk_sqft": "Public sidewalk along frontage",
     "other_hardscape_sqft": "Patios, walks & other paving",
+    "structures_sqft": "Decks, sheds, play sets & other structures",
+    "beds_sqft": "Landscape beds & shrubs",
     "frontage_ft": "Street frontage (linear ft)",
 }
 
@@ -96,6 +101,7 @@ class Measurer:
         self.parcels = _BlockCache(self.c["parcels"]["url"], f"OBJECTID,{pf['pin']}")
         self.buildings = _BlockCache(self.c["buildings"]["url"], "objectid")
         self.pavement = ChunkedPolygonLayer(self.c["pavement"]["url"], self.proj)
+        self.lidar = LidarSource(self.c["lidar"]) if self.c.get("lidar") else None
 
     # ------------------------------------------------------------------ data
     def parcel_attrs(self, a: dict) -> dict:
@@ -106,6 +112,26 @@ class Measurer:
         pin = "".join(ch for ch in pin if ch.isalnum())
         feats = query_features(self.c["parcels"]["url"], where=f"{self.pf['pin']}='{pin}'")
         return feats[0] if feats else None
+
+    def _lidar_layers(self, mos, env, ft_px, bldg_m=None):
+        """LiDAR obj/veg/ground rasters resampled onto the imagery pixel grid."""
+        try:
+            h, w = mos.shape
+            # pixel -> LAS CRS is affine to well under an inch over a few hundred feet
+            src = np.array([[0, 0], [w, 0], [0, h]], float)
+            dst = np.array([self.lidar.to_las.transform(*mos.px_to_lonlat(x, y)) for x, y in src])
+            ex = (dst[1] - dst[0]) / w
+            ey = (dst[2] - dst[0]) / h
+            yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
+            xs = dst[0][0] + xx * ex[0] + yy * ey[0]
+            ys = dst[0][1] + xx * ex[1] + yy * ey[1]
+            smp = self.lidar.sample(env, xs, ys)
+        except Exception:
+            return None
+        if smp is None:
+            return None
+        return _lidar_masks(smp["obj"], smp["veg"], smp["gnd"], ft_px, ft_px * ft_px,
+                            inten=smp.get("inten"), bldg=bldg_m)
 
     # --------------------------------------------------------------- measure
     def measure(self, parcel_feature: dict, want_overlay: bool = False) -> dict:
@@ -186,6 +212,8 @@ class Measurer:
                 nx, ny = -dy / L, dx / L
                 if P.contains(Point(p.x + nx * 2, p.y + ny * 2)):
                     nx, ny = -nx, -ny  # point outward, into the ROW
+                if not row.contains(Point(p.x + nx * 4, p.y + ny * 4)):
+                    continue  # a sliver between neighbouring lot lines, not a street
                 dist_pave = V.distance(p) if V is not None else 0.0
                 reach = min(max(dist_pave, 0.0), 30.0)
                 # walk from 8 ft inside the lot out to the curb
@@ -197,6 +225,8 @@ class Measurer:
                     rs, re = offs[run[0]], offs[run[1]]
                 stations.append((p, (nx, ny), dist_pave, rs, re))
 
+        if frontage:
+            frontage_ft = len(stations) * step
         sw_w = float(self.c.get("sidewalk_width_ft", 4.0))
         sw_stations = [s for s in stations if s[3] is not None and (s[4] - s[3]) >= 2.5]
         sidewalk_ft = len(sw_stations) * step if stations else 0.0
@@ -271,11 +301,56 @@ class Measurer:
         other_m = lot_hard & ~drive_m
         other_sqft = float(other_m.sum()) * sqft_px
 
-        lawn_m = parcel_m & ~bldg_m & ~(hard & parcel_m)
+        # --------------------------------------------------------------- lawn
+        # Grass only: the lot minus buildings, every paved surface, raised
+        # structures (decks, sheds, play sets, trampolines), landscape beds,
+        # dense evergreens and pools.
+        yard = parcel_m & ~bldg_m
+        lid = self._lidar_layers(mos, env, ft_px, bldg_m) if self.lidar else None
+        struct_m = bed_m = canopy_m = np.zeros(hard.shape, bool)
+        if lid is not None:
+            struct_m, bed_m, canopy_m = lid
+            struct_m &= yard
+            canopy_m &= yard & ~struct_m
+            bed_m &= yard & ~hard & ~struct_m & ~canopy_m
+        pool_m = _pools(mos.rgb) & yard & ~struct_m
+        lawn_m = yard & ~hard & ~struct_m & ~bed_m & ~canopy_m & ~pool_m
         lawn_m = ndi.binary_opening(lawn_m, iterations=1)
-        lawn_sqft = float(lawn_m.sum()) * sqft_px
+        lawn_m = _drop_small(lawn_m, 4.0 / sqft_px)
+        est_cut = 0.0
         if driveway_method == "estimated":
-            lawn_sqft = max(0.0, lawn_sqft - est_in_lot)
+            est_cut = est_in_lot
+        # hand corrections saved by the business for this property
+        corr = corrections.get(pin)
+        if corr:
+            for g in corr.get("exclude", []):
+                lawn_m &= ~mos.rasterize(shape(g))
+            for g in corr.get("include", []):
+                lawn_m |= mos.rasterize(shape(g)) & parcel_m
+        lawn_sqft = max(0.0, float(lawn_m.sum()) * sqft_px - est_cut)
+
+        # Parkway: the city-owned grass strip along the street that owners mow.
+        parkway_m = np.zeros(hard.shape, bool)
+        if stations and V is not None:
+            # strip straight out from this lot's frontage to the curb
+            quads = []
+            for p, (nx, ny), dist_pave, _, _ in stations:
+                d = min(dist_pave, 30.0)
+                if d <= 1:
+                    continue
+                tx, ty = -ny * step * 0.6, nx * step * 0.6
+                quads.append(Polygon([(p.x - tx, p.y - ty), (p.x + tx, p.y + ty),
+                                      (p.x + tx + nx * d, p.y + ty + ny * d), (p.x - tx + nx * d, p.y - ty + ny * d)]))
+            if quads:
+                zone = unary_union(quads).intersection(row)
+                parkway_m = to_mask(zone) & ~parcel_m & ~pave_m & ~hard & ~drive_m
+                if lid is not None:
+                    parkway_m &= ~lid[0] & ~lid[1] & ~lid[2]
+                parkway_m = ndi.binary_opening(parkway_m, iterations=2)
+                parkway_m = _drop_small(parkway_m, 10.0 / sqft_px)
+        parkway_sqft = float(parkway_m.sum()) * sqft_px
+        structures_sqft = float((struct_m | pool_m).sum()) * sqft_px
+        beds_sqft = float((bed_m | canopy_m).sum()) * sqft_px
 
         result = {
             "pin": pin,
@@ -286,9 +361,12 @@ class Measurer:
             "lot_sqft": round(P.area),
             "building_sqft": round(building_sqft),
             "lawn_sqft": round(lawn_sqft),
+            "parkway_sqft": round(parkway_sqft),
             "driveway_sqft": round(driveway_sqft),
             "sidewalk_sqft": round(sidewalk_sqft),
             "other_hardscape_sqft": round(other_sqft),
+            "structures_sqft": round(structures_sqft),
+            "beds_sqft": round(beds_sqft),
             "frontage_ft": round(frontage_ft),
             "assessor": {
                 "lot_sqft": attrs.get("lot_sqft"),
@@ -301,15 +379,64 @@ class Measurer:
                 "imagery_missing_tiles": mos.missing,
                 "sidewalk_detected": bool(sw_stations),
                 "driveway_method": driveway_method,
+                "lidar_year": self.c["lidar"]["year"] if lid is not None else None,
+                "corrected": bool(corr),
             },
         }
         if want_overlay:
-            result["overlay"] = _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, hard, pave_m, frontage, sw_stations, self, step, sw_w)
+            result["overlay"] = _overlay_png(mos, parcel_m, lawn_m | parkway_m, drive_m, other_m, struct_m | pool_m, bed_m | canopy_m,
+                                             frontage, sw_stations, self, step, sw_w)
             result["parcel_geojson"] = _geojson(P_wgs)
         return result
 
 
 # --------------------------------------------------------------------- helpers
+def _lidar_masks(obj, veg, gnd, ft_px, sqft_px, inten=None, bldg=None):
+    """Turn sampled LiDAR heights into structure / bed / evergreen masks."""
+    r = lambda ft: max(1, int(round(ft / ft_px)))
+    # Raised non-tree objects. The opening drops anything under ~2.5 ft wide
+    # (fences, posts, mailboxes) so mowable lawn along a fence isn't lost.
+    struct = obj > 0.8
+    # Close small gaps first so ring-shaped things (trampoline frames,
+    # above-ground pool walls, gazebo rails) become solid outlines.
+    struct = ndi.binary_closing(struct, iterations=r(1.0))
+    filled = ndi.binary_fill_holes(struct)
+    holes, n = ndi.label(filled & ~struct)
+    if n:
+        sizes = ndi.sum(np.ones_like(holes), holes, range(1, n + 1))
+        small = np.zeros(n + 1, bool)
+        small[1:] = sizes * sqft_px < 600  # trampolines / pools, not a fenced yard
+        struct |= small[holes]
+    struct = ndi.binary_opening(struct, iterations=r(1.5))
+    struct = _drop_small(struct, 10.0 / sqft_px)  # fence posts, yard ornaments
+    struct = ndi.binary_dilation(struct, iterations=r(0.5))
+    # Shrubs 0.8-8 ft tall; merge neighbours into bed outlines and add the
+    # mulch edge that extends past the foliage.
+    shrub = (veg > 0.8) & (veg < 8.0)
+    shrub = ndi.binary_opening(shrub, iterations=r(0.6))
+    shrub = _drop_small(shrub, 6.0 / sqft_px)
+    bed = ndi.binary_closing(shrub, iterations=r(2.0))
+    bed = ndi.binary_dilation(bed, iterations=r(1.0))
+    # Foundation beds (mulch / rock with no shrubs): ground returns right next
+    # to the house that are darker than turf. Grass returns ~190-210, mulch,
+    # rock and soil come back well below that.
+    if inten is not None and bldg is not None and bldg.any():
+        ok = gnd > 0
+        k = r(2.5)
+        sm = ndi.uniform_filter(np.where(ok, inten, 0).astype(np.float32), size=k) / \
+            np.maximum(ndi.uniform_filter(ok.astype(np.float32), size=k), 1e-3)
+        near_house = ndi.binary_dilation(bldg, iterations=r(8.0)) & ~bldg
+        dark = (sm < 160) & near_house & (veg < 6.0) & (ndi.uniform_filter(ok.astype(np.float32), size=k) > 0.3)
+        dark = ndi.binary_opening(dark, iterations=r(0.75))
+        bed |= _drop_small(dark, 15.0 / sqft_px)
+    # Dense evergreens: tall vegetation with no ground returns underneath.
+    no_ground = ndi.maximum_filter(gnd, size=r(3.0)) == 0
+    canopy = (veg > 6.0) & no_ground
+    canopy = ndi.binary_opening(canopy, iterations=r(1.0))
+    return struct, bed, canopy
+
+
+
 def classify_hard(rgb: np.ndarray) -> np.ndarray:
     """Pixel classifier for paved / concrete surfaces on leaf-off imagery.
 
@@ -326,6 +453,16 @@ def classify_hard(rgb: np.ndarray) -> np.ndarray:
     hard = ndi.binary_closing(hard, iterations=3)
     hard = ndi.binary_fill_holes(hard)  # parked cars
     return hard
+
+
+def _pools(rgb: np.ndarray) -> np.ndarray:
+    """Pool water and most pool covers read blue/teal; grass and soil never do."""
+    sm = ndi.uniform_filter(rgb, size=(5, 5, 1))
+    r, g, b = sm[..., 0], sm[..., 1], sm[..., 2]
+    mx = sm.max(-1)
+    sat = (mx - sm.min(-1)) / (mx + 1e-6)
+    m = (b > r * 1.08) & (b >= g * 0.97) & (sat > 0.15) & (mx > 0.15)
+    return ndi.binary_opening(m, iterations=2)
 
 
 def _sunlit_lawn(rgb: np.ndarray) -> np.ndarray:
@@ -424,11 +561,13 @@ def _geojson(g):
     return mapping(g)
 
 
-def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, hard, pave_m, frontage, sw_stations, meas, step, sw_w):
+def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, frontage, sw_stations, meas, step, sw_w):
     h, w = parcel_m.shape
     rgba = np.zeros((h, w, 4), np.uint8)
     rgba[lawn_m] = (34, 197, 94, 110)
     rgba[other_m] = (234, 179, 8, 150)
+    rgba[struct_m] = (239, 68, 68, 160)
+    rgba[bed_m] = (168, 85, 247, 150)
     rgba[drive_m] = (59, 130, 246, 170)
     # sidewalk band (drawn along detected stations)
     if sw_stations:
