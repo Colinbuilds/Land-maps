@@ -42,6 +42,11 @@ def admin(request: Request):
         raise HTTPException(401, "admin token required")
 
 
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
 # ------------------------------------------------------------------- pages
 @app.get("/")
 def page_customer():

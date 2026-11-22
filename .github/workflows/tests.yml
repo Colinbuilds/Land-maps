@@ -1,0 +1,29 @@
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t land-maps .
+      - name: container starts and serves pages
+        run: |
+          docker run -d -p 8000:8000 -e ESTIMATOR_ADMIN_TOKEN=ci --name app land-maps
+          for i in $(seq 1 30); do curl -fs localhost:8000/healthz && break; sleep 1; done
+          curl -fs localhost:8000/ > /dev/null
+          curl -fs localhost:8000/business > /dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8000/api/admin/settings)" = 401
+          curl -fs -H 'X-Admin-Token: ci' localhost:8000/api/admin/settings > /dev/null

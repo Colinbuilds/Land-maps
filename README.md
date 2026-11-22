@@ -55,7 +55,6 @@ LiDAR tiles (~180 MB each, about 1,500 × 1,500 ft, roughly 150 homes) are downl
 ## Run it
 
 ```bash
-cd estimator
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 # customer:  http://localhost:8000/
@@ -70,9 +69,31 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `OPENAI_API_KEY` | Turns on AI driveway renderings. |
 | `OPENAI_IMAGE_MODEL` | Image model to use (default `gpt-image-1`). |
 | `RENDER_PROVIDER` | `openai` (default). Add other providers in `app/render.py`. |
-| `ESTIMATOR_CACHE` | Directory for the GIS and imagery tile cache (default `estimator/.cache`). |
+| `ESTIMATOR_CACHE` | Directory for the GIS and imagery tile cache (default `.cache`). |
 
-Leads, settings and bulk-job CSVs are written to `estimator/data/`.
+| `ESTIMATOR_DATA` | Where leads, settings, corrections and bulk-job CSVs are saved (default `data/`). |
+
+## Deploy
+
+**Render, one click.** In the Render dashboard, choose **New → Blueprint** and pick this repository. `render.yaml` sets up:
+- a Docker web service on the **Standard** plan (2 GB RAM, about $25/mo). LiDAR tile processing peaks around 0.5 GB per tile, so the 512 MB plans are too small.
+- a **20 GB persistent disk** at `/var/data`. It holds leads, pricing, yard corrections, bulk CSVs and the county map and LiDAR cache. A ZIP-code bulk run caches about 5 MB per LiDAR tile.
+- a generated `ESTIMATOR_ADMIN_TOKEN`. Copy it from the service's *Environment* tab and paste it into the dashboard's Pricing tab to unlock `/business`.
+- an optional `OPENAI_API_KEY` for AI renderings.
+- a `/healthz` health check and auto-deploy on every push to `main`.
+
+Then add your domain under **Settings → Custom Domains**. One option is `estimate.yourcompany.com` for customers, with `/business` on the same domain for your staff.
+
+**Anywhere else with Docker** (Railway, Fly.io, a VPS):
+
+```bash
+docker build -t land-maps .
+docker run -p 8000:8000 -v land-maps-data:/var/data -e ESTIMATOR_ADMIN_TOKEN=change-me land-maps
+```
+
+Keep `/var/data` on a persistent volume, or leads and settings are lost on every redeploy. Run a single instance: the data is stored in files on that disk.
+
+**CI:** `.github/workflows/tests.yml` runs the tests, builds the image, and checks that the container boots, serves both pages and enforces the admin token. It runs on every PR and every push to `main`.
 
 ### AI renderings
 
@@ -113,5 +134,5 @@ Then register it in `app/counties/__init__.py`. Sarpy and Lancaster counties pub
 ## Tests
 
 ```bash
-cd estimator && python -m pytest -q
+python -m pytest -q
 ```
