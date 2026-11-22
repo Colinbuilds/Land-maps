@@ -100,7 +100,8 @@ class LidarSource:
             if las_name in _mem:
                 return _mem[las_name]
             path = _LIDAR_DIR / (las_name.rsplit(".", 1)[0] + ".npz")
-            if not path.exists():
+            bld = _LIDAR_DIR / (las_name.rsplit(".", 1)[0] + "_bld.npz")
+            if not path.exists() or not bld.exists():
                 with _build_sem:
                     if not _build(self.cfg["las_base_url"] + las_name, path):
                         return None
@@ -110,6 +111,32 @@ class LidarSource:
                 _mem.pop(next(iter(_mem)))
             _mem[las_name] = t
             return t
+
+    def building_points(self, env_wgs, bounds_las) -> np.ndarray:
+        """Raw building-class LiDAR points (x, y, z in LAS feet) inside a
+        LAS-CRS bounding box. Used to fit roof planes precisely."""
+        minx, miny, maxx, maxy = bounds_las
+        out = []
+        for n in self.tiles_for(env_wgs):
+            if self.tile(n) is None:
+                continue
+            key = n + "#bld"
+            if key not in _mem:
+                p = _LIDAR_DIR / (n.rsplit(".", 1)[0] + "_bld.npz")
+                if not p.exists():
+                    continue
+                z = np.load(p)
+                _mem[key] = {"xyz": z["xyz"], "x0": float(z["x0"]), "y0": float(z["y0"])}
+                if len(_mem) >= _MEM_MAX * 2:
+                    _mem.pop(next(iter(_mem)))
+            t = _mem[key]
+            xyz = t["xyz"]
+            x = xyz[:, 0].astype(np.float64) + t["x0"]
+            y = xyz[:, 1].astype(np.float64) + t["y0"]
+            m = (x >= minx) & (x <= maxx) & (y >= miny) & (y <= maxy)
+            if m.any():
+                out.append(np.column_stack([x[m], y[m], xyz[m, 2].astype(np.float64)]))
+        return np.vstack(out) if out else np.zeros((0, 3))
 
     def sample(self, env_wgs, xs_las: np.ndarray, ys_las: np.ndarray) -> dict | None:
         """Sample obj/veg/gnd at LAS-CRS coordinates (arrays of any shape)."""
@@ -185,6 +212,7 @@ def _build(url: str, out_path) -> bool:
         # pass 2: heights above ground
         obj = np.full(n, -1.0)
         veg = np.full(n, -1.0)
+        bpts = []
         with laspy.open(tmp) as f:
             for pts in f.chunk_iterator(2_000_000):
                 c = np.asarray(pts.classification)
@@ -194,6 +222,10 @@ def _build(url: str, out_path) -> bool:
                 np.maximum.at(obj, li[m], h[m])
                 m = np.isin(c, VEG_CLASSES)
                 np.maximum.at(veg, li[m], h[m])
+                b = c == 6  # building: keep raw points for roof planes
+                if b.any():
+                    bpts.append(np.column_stack([np.asarray(pts.x)[b] - x0, np.asarray(pts.y)[b] - mins[1],
+                                                 np.asarray(pts.z)[b]]).astype(np.float32))
         np.savez_compressed(
             out_path,
             obj=obj.reshape(H, W).astype(np.float16),
@@ -203,6 +235,9 @@ def _build(url: str, out_path) -> bool:
             inten=np.clip(np.where(gcnt > 0, isum / np.maximum(gcnt, 1) / 256.0, 0), 0, 255).reshape(H, W).astype(np.uint8),
             x0=x0, y1=y1, cell=cell,
         )
+        bld_path = str(out_path).replace(".npz", "_bld.npz")
+        np.savez_compressed(bld_path, xyz=np.vstack(bpts) if bpts else np.zeros((0, 3), np.float32),
+                            x0=x0, y0=float(mins[1]))
         return True
     finally:
         try:

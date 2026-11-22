@@ -13,9 +13,9 @@ from reportlab.pdfgen import canvas
 
 LINE_COLORS = {
     "ridge": "#dc2626", "hip": "#ea580c", "valley": "#2563eb", "rake": "#16a34a",
-    "eave": "#a16207", "step_flashing": "#9333ea",
+    "eave": "#a16207", "step_flashing": "#9333ea", "flashing": "#0891b2",
 }
-ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing"]
+ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flashing"]
 W, H = letter
 M = 40
 
@@ -98,7 +98,7 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     _kv_table(c, [
         ("Total roof area", f"{d['roof_sqft']:,} sq ft"),
         ("Squares (no waste)", f"{d['squares']:.2f}"),
-        ("Pitch (all facets)", d["pitch_label"]),
+        ("Predominant pitch", d["pitch_label"]),
         ("Roof facets", d["facets"] or "—"),
         ("Structures", len(d["structures"])),
         ("Suggested waste", f"{d['suggested_waste']}%"),
@@ -107,6 +107,7 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     _kv_table(c, [
         ("Ridges", _ft(L["ridge"])), ("Hips", _ft(L["hip"])), ("Valleys", _ft(L["valley"])),
         ("Rakes", _ft(L["rake"])), ("Eaves", _ft(L["eave"])), ("Step flashing", _ft(L["step_flashing"])),
+        ("Flashing", _ft(L.get("flashing", 0))),
         ("Drip edge (eaves + rakes)", _ft(d["derived"]["drip_edge"])),
         ("Ridge cap (ridges + hips)", _ft(d["derived"]["ridge_cap"])),
     ], W / 2 + 10, y, col_w=(170, 70))
@@ -117,7 +118,7 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     _title(c, "Length Diagram", H - 92)
     c.setFont("Helvetica", 9)
     c.setFillColor(colors.HexColor("#475569"))
-    c.drawString(M, H - 108, f"True lengths in feet at {d['pitch_label']} pitch. North is up.")
+    c.drawString(M, H - 108, "True lengths in feet, using each roof plane's own pitch. North is up.")
     box = (M, 110, W - 2 * M, H - 240)
     _draw_diagram(c, d, box)
     lx, ly = M, 84
@@ -127,9 +128,9 @@ def render_pdf(rep: dict, company: dict) -> bytes:
         c.line(lx, ly + 3, lx + 18, ly + 3)
         c.setFillColor(colors.HexColor("#0f172a"))
         c.setFont("Helvetica", 9)
-        lab = f"{d['line_labels'][k]} {L[k]:,.0f}'"
+        lab = f"{d['line_labels'][k]} {L.get(k, 0):,.0f}'"
         c.drawString(lx + 22, ly, lab)
-        lx += 30 + c.stringWidth(lab, "Helvetica", 9) + 14
+        lx += 30 + c.stringWidth(lab, "Helvetica", 9) + 8
     c.showPage()
 
     # ---------------------------------------------------------------- page 3
@@ -159,7 +160,20 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     c.setFont("Helvetica", 8.5)
     c.setFillColor(colors.HexColor("#475569"))
     c.drawString(M, y - 4, "Squares are rounded up to the nearest 1/3 square (one bundle).")
-    y -= 40
+    y -= 36
+    _title(c, "Areas per Pitch", y)
+    y -= 22
+    c.setFont("Helvetica-Bold", 10)
+    for x, t in zip(cols, ["Pitch", "Area (sq ft)", "% of roof"]):
+        c.drawString(x, y, t)
+    y -= 16
+    c.setFont("Helvetica", 10)
+    for row in d.get("pitch_table", []):
+        c.drawString(cols[0], y, row["pitch"])
+        c.drawString(cols[1], y, f"{row['area']:,}")
+        c.drawString(cols[2], y, f"{row['pct']}%")
+        y -= 15
+    y -= 22
     _title(c, "Structures", y)
     y -= 26
     c.setFont("Helvetica-Bold", 9.5)
@@ -178,8 +192,8 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     _title(c, "Notes", y)
     y -= 18
     notes = [
-        f"All facets are calculated at {d['pitch_label']} pitch. Areas and sloped lengths (rakes, hips, valleys)",
-        "scale with pitch; ridges and eaves are level and do not.",
+        "Pitch is measured per roof plane from LiDAR and rounded to the nearest 1/12. Areas and sloped",
+        "lengths (rakes, hips, valleys, step flashing) use each plane's own pitch; ridges and eaves are level.",
         "Roof outlines: Douglas County 2022 building footprints. Roof planes and lines: Douglas County",
         "2022 QL1 LiDAR. Photo: Douglas County 2025 orthoimagery.",
         "Additions or re-roofs after April 2022 are not reflected. Verify on site before ordering.",
