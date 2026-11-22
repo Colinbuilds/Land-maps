@@ -105,6 +105,16 @@ def list_structures(pin: str) -> dict:
                                           trees.at if trees is not None and trees.mask.any() else None)
         except Exception:
             pass
+        try:
+            from .roofclean import fit_hidden_edges, orthogonalize
+            traced = orthogonalize(traced)
+            if trees is not None and trees.mask.any():
+                # walls under trees: from where the scan's roof points stop
+                bp = m.lidar.building_points(env, traced.buffer(8).bounds)
+                traced, n_hidden = fit_hidden_edges(traced, bp, trees.at)
+                stats["lidar_edges"] = n_hidden
+        except Exception:
+            pass
         out.append({
             "id": i,
             "name": "Main structure" if i == 0 else f"Structure {i + 1}",
@@ -395,8 +405,9 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
             segs = [{"type": x["type"], "a": [round(x["a"][0], 2), round(x["a"][1], 2)],
                      "b": [round(x["b"][0], 2), round(x["b"][1], 2)], "len": round(x["len"], 1)}
                     for x in res["segments"]]
+            used = res.get("outline") or s["geometry_las"]  # after any low-sliver trim
             outline = [[[round(x, 2), round(y, 2)] for x, y in p.exterior.coords]
-                       for p in getattr(s["geometry_las"], "geoms", [s["geometry_las"]])]
+                       for p in getattr(used, "geoms", [used])]
             for k, v in res["pitch_areas"].items():
                 pitch_areas[k] = pitch_areas.get(k, 0) + v
             out_structs.append({
