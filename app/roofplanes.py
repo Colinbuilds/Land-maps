@@ -37,33 +37,82 @@ def _fit_plane(p):
     return coef  # a, b, c
 
 
+def _refine_by_residual(pts, labels, coefs, nlab, iters=2, radius=2.5):
+    """Move each point to whichever nearby plane it actually lies on
+    (smallest height residual), then refit. Puts plane borders where the
+    planes really meet instead of where the normals happened to flip."""
+    tree = cKDTree(pts[:, :2])
+    nb = tree.query_ball_point(pts[:, :2], radius)
+    for _ in range(iters):
+        A = np.array([coefs[k] for k in range(nlab)])  # (nlab, 3)
+        new = labels.copy()
+        for i, idx in enumerate(nb):
+            cand = np.unique(labels[idx])
+            if len(cand) < 2:
+                continue
+            zp = A[cand, 0] * pts[i, 0] + A[cand, 1] * pts[i, 1] + A[cand, 2]
+            r = np.abs(zp - pts[i, 2])
+            best = cand[int(np.argmin(r))]
+            if r.min() < 0.6 and best != labels[i]:
+                new[i] = best
+        if (new == labels).all():
+            break
+        labels = new
+        for k in range(nlab):
+            P = pts[labels == k]
+            if len(P) >= 8:
+                coefs[k] = _robust_plane(P)
+    return labels, coefs
+
+
+def _slope_stderr(P, a, b):
+    """Standard error of a plane's slope (rise per run) from its points."""
+    if len(P) < 6:
+        return 9.0
+    r = P[:, 2] - (a * P[:, 0] + b * P[:, 1])
+    r = r - np.median(r)
+    sd = 1.4826 * np.median(np.abs(r))  # robust residual spread
+    s = math.hypot(a, b)
+    d = np.array([-a, -b]) / s if s > 1e-6 else np.array([1.0, 0.0])
+    t = P[:, :2] @ d
+    spread = np.sqrt(np.sum((t - t.mean()) ** 2))
+    return sd / max(spread, 1e-6)
+
+
 def _harmonize_pitches(pts, labels, coefs, nlab):
     """Pitch per plane (x/12), corrected the way a measurer would:
-    * narrow or sparse planes (a strip mostly hidden under an overhang) can't
-      be measured reliably, so they take the building's main pitch;
-    * the two sides of one gable/ridge are built the same, so opposite-facing
+    * a plane keeps its own measured pitch when the measurement is tight
+      (standard error under ~0.35/12), whatever its size;
+    * planes too sparse or narrow to measure (a strip mostly hidden under an
+      overhang) take the building's main pitch;
+    * the two sides of one gable are built the same, so opposite-facing
       neighbours with close readings share their average."""
     p12 = {k: 12 * math.hypot(*coefs[k][:2]) for k in range(nlab)}
-    down = {}
-    width = {}
+    down, n, se, depth = {}, {}, {}, {}
     for k in range(nlab):
         a, b, _ = coefs[k]
-        s = math.hypot(a, b)
-        down[k] = np.array([-a, -b]) / s if s > 1e-6 else np.zeros(2)
-        P = pts[labels == k, :2]
-        width[k] = float(np.ptp(P @ down[k])) if s > 1e-6 and len(P) > 2 else 0.0
-    n = {k: int((labels == k).sum()) for k in range(nlab)}
-    big = [k for k in range(nlab) if n[k] >= 150 and width[k] >= 6 and p12[k] >= 1.5]
-    if big:
-        w = np.array([n[k] for k in big], float)
-        main = float(np.round(np.average([p12[k] for k in big], weights=w)))
+        s_ = math.hypot(a, b)
+        down[k] = np.array([-a, -b]) / s_ if s_ > 1e-6 else np.zeros(2)
+        P = pts[labels == k]
+        n[k] = len(P)
+        # use only points close to the plane for the error estimate
+        if len(P):
+            res = np.abs(P[:, 2] - (a * P[:, 0] + b * P[:, 1] + coefs[k][2]))
+            P = P[res < max(0.3, np.percentile(res, 80))]
+        se[k] = 12 * _slope_stderr(P, a, b)
+        depth[k] = float(np.ptp(P[:, :2] @ down[k])) if len(P) > 2 and down[k].any() else 0.0
+    # trust a plane's own pitch only if it's tight AND deep enough down the
+    # slope (a 3-ft strip under an overhang reads steep from its gutter edge)
+    trusted = [k for k in range(nlab) if p12[k] >= 1.5 and se[k] <= 0.35 and n[k] >= 25 and depth[k] >= 5.0]
+    if trusted:
+        w = np.array([n[k] for k in trusted], float)
+        main = float(np.round(np.average([p12[k] for k in trusted], weights=w)))
         for k in range(nlab):
-            if k not in big and p12[k] >= 1.5:
+            if k not in trusted and p12[k] >= 1.5:
                 p12[k] = main
-    # opposite-facing planes that touch: same gable, same pitch
     tree = {k: cKDTree(pts[labels == k, :2]) for k in range(nlab) if n[k]}
-    for i in big:
-        for j in big:
+    for i in trusted:
+        for j in trusted:
             if j <= i or down[i] @ down[j] > -0.9 or abs(p12[i] - p12[j]) > 1.5:
                 continue
             d, _ = tree[i].query(pts[labels == j, :2], k=1)
@@ -276,7 +325,7 @@ def _ransac(pts, tol=0.6, gap=2.0, min_len=1.5, max_lines=8):
     return out
 
 
-def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = True) -> dict:
+def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = True, _pass: int = 0) -> dict:
     """``pts``: building LiDAR points (LAS feet) near the roof."""
     res = {"method": "lidar_planes", "segments": [], "planes": []}
     plan_area = outline.area
@@ -328,6 +377,7 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
     coefs = {remap[k]: coefs[k] for k in keep}
     nlab = len(keep)
 
+    labels, coefs = _refine_by_residual(pts, labels, coefs, nlab)
     raw = _harmonize_pitches(pts, labels, coefs, nlab)
     planes = []
     for k in range(nlab):
@@ -372,6 +422,26 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
             ring = ndi.binary_dilation(m, iterations=1) & ~m & (L >= 0)
             if ring.any():
                 L[m] = np.bincount(L[ring]).argmax()
+    drop = []
+    L = _absorb_edge_slivers(L, xs, ys, outline, coefs, nlab, pts=pts, labels=labels, drop=drop)
+    if drop and _pass == 0:
+        # small pieces well below the roof (stoops, canopies, AC units, wall
+        # tops) aren't part of the roof system: cut them out and re-measure
+        from shapely.geometry import box as _box
+        from shapely.ops import unary_union as _uu
+        cells = []
+        for k in drop:
+            rr, cc = np.nonzero(L == k)
+            cells += [_box(xs[c] - GRID / 2, ys[r] - GRID / 2, xs[c] + GRID / 2, ys[r] + GRID / 2) for r, c in zip(rr, cc)]
+        cut = _uu(cells).buffer(0.3)
+        trimmed = outline.difference(cut).buffer(-0.2).buffer(0.2)
+        if trimmed.geom_type == "MultiPolygon":
+            trimmed = max(trimmed.geoms, key=lambda g: g.area)
+        if trimmed.geom_type == "Polygon" and trimmed.area > 0.7 * outline.area:
+            res2 = analyze_roof_points(trimmed.simplify(0.3), pts, round_pitch, _pass=1)
+            if res2.get("method") == "lidar_planes":
+                res2["trimmed_sqft"] = round(outline.area - trimmed.area)
+                return res2
     cell_area = plan_area / max(1, inside.sum())
 
     for p in planes:
@@ -508,6 +578,59 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
         "label_grid": L, "grid_x": xs, "grid_y": ys,
     })
     return res
+
+
+def _absorb_edge_slivers(L, xs, ys, outline, coefs, nlab, band=4.0, max_area=120.0, pts=None, labels=None,
+                         drop=None, drop_area=60.0, drop_dz=4.0):
+    """Thin planes hugging the roof edge at the same height as their
+    neighbour are overhang / wall-top hits, not separate roofs: merge them.
+    A real lower roof (several feet below its neighbour) is kept."""
+    X, Y = np.meshgrid(xs, ys)
+    dist = shapely.distance(outline.exterior, shapely.points(X.ravel(), Y.ravel())).reshape(X.shape)
+    for _ in range(3):
+        changed = False
+        sizes = np.bincount(L[L >= 0], minlength=nlab) * GRID * GRID
+        for k in range(nlab):
+            m = L == k
+            if not m.any() or sizes[k] > max_area:
+                continue
+            if np.mean(dist[m] < band) < 0.9:
+                continue  # reaches well inside: a real facet
+            ring = ndi.binary_dilation(m, iterations=1) & ~m & (L >= 0)
+            if not ring.any():
+                continue
+            nb = int(np.bincount(L[ring]).argmax())
+            # height step across the shared border, from the actual points
+            # (a 2-ft strip can't be extrapolated as a plane reliably)
+            if pts is not None and (labels == k).any() and (labels == nb).any():
+                Pk, Pn = pts[labels == k], pts[labels == nb]
+                d, j = cKDTree(Pn[:, :2]).query(Pk[:, :2], distance_upper_bound=3.0)
+                ok = np.isfinite(d)
+                dz = float(np.median(np.abs(Pk[ok, 2] - Pn[j[ok], 2]))) if ok.any() else 9.0
+            else:
+                rr, cc = np.nonzero(ring & (L == nb))
+                a1, b1, c1 = coefs[k]
+                a2, b2, c2 = coefs[nb]
+                xx, yy = xs[cc], ys[rr]
+                dz = np.median(np.abs((a1 * xx + b1 * yy + c1) - (a2 * xx + b2 * yy + c2)))
+            if dz < 3.0:  # overhang / wall-top hits read up to ~3 ft off
+                L[m] = nb
+                changed = True
+            elif drop is not None and sizes[k] < drop_area and dz > drop_dz and k not in drop:
+                # Only cut it if it sits against the upper roof's gable end
+                # (a rake side): bays, stoops, wall tops. A low strip along the
+                # upper roof's eave is a real lower roof (porch/skirt): keep.
+                rr, cc = np.nonzero(ring & (L == nb))
+                if len(rr) >= 3:
+                    P2 = np.column_stack([xs[cc], ys[rr]])
+                    _, _, vt = np.linalg.svd(P2 - P2.mean(0), full_matrices=False)
+                    a2, b2, _ = coefs[nb]
+                    s2 = math.hypot(a2, b2)
+                    if s2 > 1e-6 and abs(vt[0] @ (np.array([-a2, -b2]) / s2)) > 0.7:
+                        drop.append(k)
+        if not changed:
+            break
+    return L
 
 
 def _extend_interior_ends(segs, outline, by_id, reach=3.0):
