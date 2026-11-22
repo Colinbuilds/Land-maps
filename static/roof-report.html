@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Roof Measurement Report</title>
-<link rel="stylesheet" href="/static/styles.css?v=8">
+<link rel="stylesheet" href="/static/styles.css?v=9">
 <style>
   :root { --accent: #1d4ed8; }
   header.top { background: var(--accent); color: #fff; border: 0; }
@@ -29,7 +29,7 @@
   <div class="contact" id="coContact"></div>
 </header>
 <main class="stack" id="main"><p class="muted"><span class="spinner"></span>Loading report…</p></main>
-<script src="/static/common.js?v=8"></script>
+<script src="/static/common.js?v=9"></script>
 <script>
 const COLORS = { ridge: "#dc2626", hip: "#ea580c", valley: "#2563eb", rake: "#16a34a", eave: "#a16207", step_flashing: "#9333ea", flashing: "#0891b2" };
 const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flashing"];
@@ -67,6 +67,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
           <tr><td>Predominant pitch</td><td>${esc(d.pitch_label)}</td></tr>
           <tr><td>Roof facets</td><td>${d.facets || "–"}</td></tr>
           <tr><td>Structures</td><td>${d.structures.length}</td></tr>
+          <tr><td>Under tree canopy</td><td>${(d.tree_overhang_sqft || 0).toLocaleString()} sq ft</td></tr>
           ${ORDER.map((k) => `<tr><td><span class="sw2" style="background:${COLORS[k]}"></span>${esc(d.line_labels[k])}</td><td>${ft(L[k] || 0)}</td></tr>`).join("")}
           <tr><td>Drip edge (eaves + rakes)</td><td>${ft(d.derived.drip_edge)}</td></tr>
           <tr><td>Ridge cap (ridges + hips)</td><td>${ft(d.derived.ridge_cap)}</td></tr>
@@ -77,7 +78,8 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
       <h2>Length diagram</h2>
       <p class="small muted" style="margin-top:-8px">True lengths in feet, using each roof plane's own pitch. North is up.</p>
       ${diagram(d)}
-      <div class="legend">${ORDER.map((k) => `<span><i class="sw2" style="background:${COLORS[k]}"></i>${esc(d.line_labels[k])} ${Math.round(L[k] || 0)}'</span>`).join("")}</div>
+      <div class="legend">${ORDER.map((k) => `<span><i class="sw2" style="background:${COLORS[k]}"></i>${esc(d.line_labels[k])} ${Math.round(L[k] || 0)}'</span>`).join("")}${d.tree_overhang_sqft ? `<span><i class="sw2" style="background:repeating-linear-gradient(45deg,#15803d 0 2px,#dcfce7 2px 4px);height:10px"></i>Under trees ${d.tree_overhang_sqft.toLocaleString()} sq ft</span>` : ""}</div>
+      ${d.tree_note ? `<p class="small" style="color:#15803d">${esc(d.tree_note)}</p>` : ""}
     </div>
     <div class="grid2">
       <div class="card">
@@ -116,8 +118,12 @@ function diagram(d) {
     s += `<polygon points="${ring.map(([x, y]) => `${X(x)},${Y(y)}`).join(" ")}" fill="#f8fafc" stroke="#cbd5e1" stroke-width="0.4"/>`;
   }));
   const sc = Math.max(w, h) / 600;
+  s += `<defs><pattern id="treeHatch" patternUnits="userSpaceOnUse" width="${(4 * sc).toFixed(2)}" height="${(4 * sc).toFixed(2)}" patternTransform="rotate(45)"><rect width="100%" height="100%" fill="#dcfce7" fill-opacity="0.5"/><line x1="0" y1="0" x2="0" y2="${(4 * sc).toFixed(2)}" stroke="#15803d" stroke-width="${(1.2 * sc).toFixed(2)}" stroke-opacity="0.6"/></pattern></defs>`;
+  d.structures.forEach((st) => (st.tree_cover || []).forEach((ring) => {
+    s += `<polygon points="${ring.map(([x, y]) => `${X(x)},${Y(y)}`).join(" ")}" fill="url(#treeHatch)" stroke="#15803d" stroke-width="${(0.6 * sc).toFixed(2)}"/>`;
+  }));
   d.structures.forEach((st) => st.segments.forEach((g) => {
-    s += `<line x1="${X(g.a[0])}" y1="${Y(g.a[1])}" x2="${X(g.b[0])}" y2="${Y(g.b[1])}" stroke="${COLORS[g.type]}" stroke-width="${(2.2 * sc).toFixed(2)}" stroke-linecap="round"/>`;
+    s += `<line x1="${X(g.a[0])}" y1="${Y(g.a[1])}" x2="${X(g.b[0])}" y2="${Y(g.b[1])}" stroke="${COLORS[g.type]}" stroke-width="${(2.2 * sc).toFixed(2)}" stroke-linecap="round"${g.tree ? ` stroke-dasharray="${(5 * sc).toFixed(2)} ${(3 * sc).toFixed(2)}"` : ""}/>`;
   }));
   d.structures.forEach((st) => st.segments.forEach((g) => {
     if (g.len < 6) return;
