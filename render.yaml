@@ -1,0 +1,17 @@
+# One-click deploy on Render: Dashboard -> New -> Blueprint -> pick this repo.
+services:
+  - type: web
+    name: land-maps
+    runtime: docker
+    plan: standard          # 2 GB RAM; LiDAR tile processing peaks around 0.5 GB per tile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: ESTIMATOR_ADMIN_TOKEN
+        generateValue: true  # copy it from the Render dashboard to unlock /business
+      - key: OPENAI_API_KEY
+        sync: false          # optional: enables AI driveway renderings
+    disk:
+      name: data
+      mountPath: /var/data   # leads, settings, corrections, bulk CSVs and the map cache
+      sizeGB: 20

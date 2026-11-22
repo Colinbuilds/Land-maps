@@ -6,12 +6,13 @@ dashboard. Each service prices off one or more measured areas.
 from __future__ import annotations
 
 import copy
+import os
 import json
 import threading
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
+DATA_DIR = Path(os.environ.get("ESTIMATOR_DATA", Path(__file__).resolve().parent.parent / "data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_PATH = DATA_DIR / "settings.json"
 _lock = threading.Lock()
 
