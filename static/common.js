@@ -160,6 +160,7 @@ function measurementCards(r, keys, labels) {
     { href: "/", label: "Estimate", icon: "🏡" },
     { href: "/business", label: "Business", icon: "📊" },
     { href: "/roof", label: "Roof reports", icon: "📐" },
+    { href: "/data", label: "Buy data", icon: "📄" },
   ];
   const here = location.pathname.replace(/\/+$/, "") || "/";
   const isActive = (h) => (h === "/" ? here === "/" : here === h || here.startsWith(h + "/") || (h === "/roof" && here.startsWith("/r/")));

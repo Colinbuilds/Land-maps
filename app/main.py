@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from shapely.geometry import mapping, Point
 
-from . import accounts, bulk, corrections, counties, render, roofreport
+from . import accounts, bulk, corrections, counties, datastore, render, roofreport
 from .roofpdf import render_pdf
 from .gis import get_json, query_features
 from .imagery import Mosaic
@@ -561,3 +561,185 @@ def admin_edit_company(cid: int, body: CompanyEdit):
 @app.get("/api/admin/roof-reports", dependencies=[Depends(admin)])
 def admin_roof_reports():
     return accounts.list_reports(None, 500)
+
+
+# ================================================================ data sales
+_CLASS_OK = {"R", "C", "I", "A", "E"}
+
+
+def _classes(raw: str | list | None) -> list[str]:
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    out = sorted({c.strip().upper() for c in (raw or []) if c.strip().upper() in _CLASS_OK})
+    return out or ["R"]
+
+
+def _zip5(z: str) -> str:
+    z = "".join(ch for ch in (z or "") if ch.isdigit())
+    if len(z) != 5:
+        raise HTTPException(400, "Enter a 5-digit ZIP code.")
+    return z
+
+
+def _client_ip(request: Request) -> str:
+    return (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (request.client.host if request.client else "")
+
+
+def _base_url(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}"
+
+
+@app.get("/data")
+def page_data():
+    return FileResponse(STATIC / "data.html")
+
+
+@app.get("/data/order/{oid}")
+def page_data_order(oid: str):
+    return FileResponse(STATIC / "data-order.html")
+
+
+@app.get("/api/data/quote")
+def data_quote(zip: str, classes: str = "R"):
+    z = _zip5(zip)
+    try:
+        q = datastore.quote(z, _classes(classes))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    try:
+        zp = bulk.zip_polygon(z)
+        q["zip_geojson"] = mapping(zp.simplify(0.0002))
+    except Exception:
+        q["zip_geojson"] = None
+    q["columns"] = [label for _, label in datastore.COLUMNS]
+    q["stripe"] = datastore.stripe_enabled()
+    return q
+
+
+class SampleReq(BaseModel):
+    email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    zip: str
+    classes: list[str] = ["R"]
+
+
+@app.post("/api/data/sample")
+def data_sample(body: SampleReq, request: Request):
+    z = _zip5(body.zip)
+    why = datastore.sample_allowed(body.email, _client_ip(request))
+    if why:
+        raise HTTPException(429, why)
+    try:
+        rows = datastore.take_sample(body.email, _client_ip(request), z, _classes(body.classes))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    keys = [k for k, _ in datastore.COLUMNS]
+    return {"zip": z, "columns": [{"key": k, "label": l} for k, l in datastore.COLUMNS], "rows": rows,
+            "csv": datastore.to_csv(rows), "keys": keys}
+
+
+class OrderReq(BaseModel):
+    email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    zip: str
+    classes: list[str] = ["R"]
+
+
+@app.post("/api/data/order")
+def data_order(body: OrderReq, request: Request):
+    z = _zip5(body.zip)
+    try:
+        o = datastore.create_order(body.email, z, _classes(body.classes))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    out = {"id": o["id"], "token": o["token"], "amount_cents": o["amount_cents"], "count": o["count"],
+           "order_url": f"/data/order/{o['id']}?t={o['token']}"}
+    if datastore.stripe_enabled():
+        try:
+            out["checkout_url"] = datastore.stripe_checkout(o, _base_url(request))
+        except Exception as e:
+            raise HTTPException(502, f"Payment provider error: {str(e)[:200]}")
+    return out
+
+
+def _order_access(oid: str, t: str | None):
+    o = datastore.get_order(oid)
+    if not o or not t or t != o["token"]:
+        raise HTTPException(404, "order not found")
+    return o
+
+
+@app.get("/api/data/order/{oid}")
+def data_order_status(oid: str, t: str | None = None, session_id: str | None = None):
+    o = _order_access(oid, t)
+    if session_id and o["status"] == "awaiting_payment":
+        datastore.stripe_confirm(o, session_id)
+        o = datastore.get_order(oid)
+    v = datastore.order_view(o)
+    v["stripe"] = datastore.stripe_enabled()
+    v["contact"] = {k: load_settings()["business"].get(k) for k in ("name", "phone", "email")}
+    return v
+
+
+@app.post("/api/data/order/{oid}/checkout")
+def data_order_checkout(oid: str, request: Request, t: str | None = None):
+    o = _order_access(oid, t)
+    if o["status"] != "awaiting_payment" or not datastore.stripe_enabled():
+        raise HTTPException(400, "nothing to pay")
+    return {"checkout_url": datastore.stripe_checkout(o, _base_url(request))}
+
+
+@app.get("/api/data/order/{oid}/csv")
+def data_order_csv(oid: str, t: str | None = None):
+    o = _order_access(oid, t)
+    classes = o["classes"].split(",") if o["classes"] else ["R"]
+    if o["status"] != "ready" and not (o["status"] == "processing" and datastore.dataset_ready(o["zip"], classes)):
+        raise HTTPException(409, "Your sheet isn't ready yet.")
+    rows = datastore.read_dataset(o["zip"], classes)
+    return Response(datastore.to_csv(rows), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="properties_{o["zip"]}_{o["id"]}.csv"'})
+
+
+# ---- owner
+@app.get("/api/admin/data", dependencies=[Depends(admin)])
+def admin_data():
+    zips = []
+    for p in sorted(datastore.ZIPS_DIR.glob("*.json")):
+        meta = json.loads(p.read_text())
+        zips.append({"key": p.stem, **meta})
+    return {"pricing": datastore.pricing(), "orders": datastore.list_orders(), "zips": zips,
+            "stripe": datastore.stripe_enabled()}
+
+
+class DataPricing(BaseModel):
+    rate_cents: float = Field(ge=0.5, le=100)
+    bulk_rate_cents: float = Field(ge=0.5, le=100)
+    bulk_threshold: int = Field(ge=0, le=1_000_000)
+    min_order_usd: float = Field(ge=0, le=100_000)
+
+
+@app.put("/api/admin/data/pricing", dependencies=[Depends(admin)])
+def admin_data_pricing(body: DataPricing):
+    s = load_settings()
+    s["data_sales"] = body.model_dump()
+    save_settings(s)
+    return datastore.pricing()
+
+
+@app.post("/api/admin/data/orders/{oid}/paid", dependencies=[Depends(admin)])
+def admin_data_paid(oid: str):
+    try:
+        return datastore.mark_paid(oid, note="marked paid by owner")
+    except LookupError:
+        raise HTTPException(404)
+
+
+class Prebuild(BaseModel):
+    zip: str
+    classes: list[str] = ["R"]
+
+
+@app.post("/api/admin/data/prebuild", dependencies=[Depends(admin)])
+def admin_data_prebuild(body: Prebuild):
+    """Measure a ZIP ahead of demand so buyers get it instantly."""
+    return {"status": datastore.ensure_dataset(_zip5(body.zip), _classes(body.classes))}

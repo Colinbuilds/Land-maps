@@ -26,7 +26,7 @@ from shapely.ops import unary_union
 
 from .counties import get_county
 from .gis import Projector, ChunkedPolygonLayer, query_features
-from .imagery import Mosaic
+from .imagery import Mosaic, ndvi_for
 from .lidar import LidarSource
 from . import corrections
 
@@ -44,6 +44,8 @@ MEASUREMENTS = {
 }
 
 _CTX_FT = 70.0           # how far around the parcel to look
+_ACREAGE_SQFT = 43560.0  # lots bigger than an acre: measure the home site only
+_HOMESITE_FT = 150.0
 _MIN_BLOB_SQFT = 20.0    # ignore paved specks smaller than this
 
 
@@ -203,6 +205,26 @@ class Measurer:
         attrs = self.parcel_attrs(parcel_feature["attributes"])
         P_wgs = parcel_feature["geometry"]
         P = self.proj.to_local(P_wgs).buffer(0)
+        lot_area = P.area
+        note = ""
+        rest_of_lot = None
+        if lot_area > _ACREAGE_SQFT:
+            # Acreages: the mowed yard is the home site, not the whole farm.
+            # Measure within ~150 ft of the buildings; treat the rest of the
+            # lot like a neighbour so its edges aren't taken for streets.
+            penv = self.proj.to_wgs(box(*P.bounds)).bounds
+            bl = [self.proj.to_local(f["geometry"]).buffer(0) for f in self.buildings.query(penv)]
+            bl = [b for b in bl if b.intersection(P).area > 0.5 * b.area and b.area > 200]
+            if bl:
+                site = P.intersection(unary_union([b.buffer(_HOMESITE_FT) for b in bl])).buffer(0)
+                if site.geom_type == "MultiPolygon":
+                    site = max(site.geoms, key=lambda g: g.area)
+                if site.geom_type == "Polygon" and site.area < 0.9 * lot_area:
+                    rest_of_lot = P.difference(site).buffer(-0.5)
+                    P = site
+                    note = f"acreage: yard measured within {int(_HOMESITE_FT)} ft of the buildings"
+            else:
+                note = "acreage with no mapped buildings"
         ctx = P.buffer(_CTX_FT)
         ctx_box = box(*ctx.bounds)
         env = self.proj.to_wgs(ctx_box).bounds
@@ -214,6 +236,8 @@ class Measurer:
         neigh = [g.buffer(0) for g in neigh if g.intersects(ctx_box)]
         # Stacked condo parcels can duplicate this lot's shape; drop those.
         neigh = [g for g in neigh if not (g.intersection(P).area > 0.8 * P.area)]
+        if rest_of_lot is not None and not rest_of_lot.is_empty:
+            neigh.append(rest_of_lot)
         N = unary_union(neigh) if neigh else None
         bldgs = [self.proj.to_local(f["geometry"]).buffer(0) for f in self.buildings.query(env)]
         B = unary_union([b for b in bldgs if b.intersects(ctx_box)]) if bldgs else None
@@ -262,6 +286,22 @@ class Measurer:
         ft_px = math.sqrt(sqft_px)
 
         hard = classify_hard(mos.rgb)
+        ndvi = None
+        try:
+            ndvi = ndvi_for(mos, self.c.get("infrared"))
+        except Exception:
+            ndvi = None
+        if ndvi is not None:
+            # paving must also be "not growing" in the infrared: kills grass
+            # that a washed-out colour photo makes look like gravel
+            veg = ndi.uniform_filter(ndvi, 5) > 0.22
+            # NAIP is flown in summer: a tree's leaves can cover a driveway
+            # that is plainly bright, colourless concrete in the leaf-off photo
+            sm = ndi.uniform_filter(mos.rgb, size=(5, 5, 1))
+            mx_, mn_ = sm.max(-1), sm.min(-1)
+            plain_concrete = (mx_ > 0.70) & ((mx_ - mn_) / (mx_ + 1e-6) < 0.10)
+            hard &= ~veg | plain_concrete
+            hard = ndi.binary_opening(hard, iterations=1)
         hard &= ~bldg_m
         if not self.pavement and street_lines:
             # No edge-of-pavement layer: the street is the paving outside the
@@ -480,6 +520,16 @@ class Measurer:
         structures_sqft = float((struct_m | pool_m).sum()) * sqft_px
         beds_sqft = float((bed_m | canopy_m).sum()) * sqft_px
 
+        quality, why = "ok", []
+        open_area = max(1.0, P.area - building_sqft)
+        if driveway_sqft > max(5000.0, 0.25 * P.area):
+            why.append("driveway unusually large")
+        if (drive_lot_sqft + other_sqft) > 0.6 * open_area:
+            why.append("most of the yard reads as paving")
+        if lawn_sqft < 50 and open_area > 2000 and not why:
+            why.append("no lawn found")
+        if why:
+            quality = "review"
         result = {
             "pin": pin,
             "pid": f"{self.cid}:{pin}",
@@ -487,7 +537,8 @@ class Measurer:
             "city": attrs.get("city"),
             "zip": attrs.get("zip"),
             "class": attrs.get("class"),
-            "lot_sqft": round(P.area),
+            "lot_sqft": round(lot_area),
+            "measured_area_sqft": round(P.area),
             "building_sqft": round(building_sqft),
             "lawn_sqft": round(lawn_sqft),
             "parkway_sqft": round(parkway_sqft),
@@ -511,7 +562,10 @@ class Measurer:
                 "lidar_year": self.c["lidar"]["year"] if lid is not None else None,
                 "lidar_source": self.c["lidar"].get("source") if lid is not None else None,
                 "imagery_source": img.get("source"),
+                "infrared": bool(ndvi is not None),
                 "county": self.cid,
+                "quality": quality,
+                "note": "; ".join([x for x in [note] + why if x]),
                 "corrected": bool(corr),
             },
         }

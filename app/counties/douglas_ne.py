@@ -40,6 +40,10 @@ COUNTY = {
     # Street segments the city has flagged as having no sidewalk.
     "no_sidewalks": {"url": f"{_DCGIS}/Hosted/No_Sidewalks_Public_View/FeatureServer/0"},
     # Leaf-off orthoimagery, Web-Mercator tile cache (z up to 23).
+    # Statewide 2025 NAIP with near-infrared: tells grass from paving no
+    # matter how a county's colour photo is exposed.
+    "infrared": {"url": "https://gis.ne.gov/Image/rest/services/NAIP2025WM/ImageServer", "red": 0, "nir": 3,
+                 "source": "USDA NAIP 2025 (Nebraska)"},
     "imagery": {
         "tile_url": f"{_DCGIS}/2025_Douglas_County_NE_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}",
         "year": 2025,

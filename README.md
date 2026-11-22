@@ -52,6 +52,38 @@ LiDAR tiles (~180 MB each, about 1,500 × 1,500 ft, roughly 150 homes) are downl
 - Flat mulch beds away from the house, with no shrubs, read as grass. Dormant grass and mulch are the same colour in March imagery.
 - Pool covers that aren't blue or green aren't detected.
 
+## Selling ZIP-code data sheets (`/data`)
+
+Lawn and property companies buy a spreadsheet with one row per property in a ZIP code:
+- address, city, ZIP and county
+- lot size, lawn (grass only), parkway grass and building footprint
+- driveway, sidewalk, patios, structures and beds
+- street frontage, a quality flag, notes, latitude/longitude and the property id
+
+Owner names and mailing addresses are not included.
+
+**How buying works:**
+1. **Pick a ZIP** and property type to see the count, the ZIP boundary on a map, and the exact price.
+2. **Free sample:** 25 properties spread across the ZIP, shown on the page and downloadable as a CSV. Limits: one sample per email, three per connection per day.
+3. **Buy the full sheet:**
+   - With `STRIPE_SECRET_KEY` set, the buyer pays by card (Stripe Checkout). The payment is verified with Stripe when they return.
+   - Without it, the order waits, you invoice the buyer, and you click **Mark paid** in the dashboard.
+4. The buyer's order page shows measuring progress and then a **Download CSV** button. The link is private to the buyer.
+
+**Measure once, sell many times:** each ZIP sheet is measured once and kept under `data/zips/` for a year. Later buyers and free samples are served from it instantly. In the dashboard (**Data sales**) you can measure busy ZIPs ahead of time.
+
+**Pricing** (dashboard → Data sales): default 10¢ per property for the first 2,000, 5¢ after that, $25 minimum.
+
+**Data quality:**
+- **Infrared:** grass vs. paving is checked against statewide NAIP 2025 near-infrared imagery, so washed-out colour photos and dormant grass no longer read as gravel. Bright concrete under summer tree leaves still counts as paving.
+- **Acreages:** on lots over 1 acre only the home site is measured (within 150 ft of the buildings), and a note says so.
+- **Quality flag:** rows with implausible numbers are marked `review` with the reason.
+- **No address, no row:** properties without a street address are left out.
+
+| Env var | Purpose |
+|---|---|
+| `STRIPE_SECRET_KEY` | Card payments for data sheets (Stripe Checkout). Optional. |
+
 ## Counties covered
 
 One map covers Douglas, Sarpy, Lancaster and Cass counties. Each property is sent to its county by location, using Census TIGER county boundaries. Property ids are `county:parcel`, e.g. `sarpy_ne:011589990`. A bare parcel number means Douglas, so older links and saved data keep working.
