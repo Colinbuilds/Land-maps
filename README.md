@@ -52,6 +52,44 @@ LiDAR tiles (~180 MB each, about 1,500 × 1,500 ft, roughly 150 homes) are downl
 - Flat mulch beds away from the house, with no shrubs, read as grass. Dormant grass and mulch are the same colour in March imagery.
 - Pool covers that aren't blue or green aren't detected.
 
+## Roof measurement reports
+
+Roofing companies buy credits from you. They log in at **`/roof`**, type an address, check which buildings to include, and get a roof report in seconds. Each report uses 1 credit.
+
+**What's in a report:** your customer's company name, phone and colour in the header, the aerial photo, and:
+- total roof area, squares, facets and structures
+- ridges, hips, valleys, rakes, eaves and step flashing, as true lengths
+- drip edge (eaves + rakes) and ridge cap (ridges + hips)
+- a colour-coded length diagram with every line labelled
+- a waste table from 6% to 12%, with a suggested waste that rises with the number of hips and valleys
+- per-structure figures and notes
+
+It comes as a web page with a share link and as a 3-page PDF.
+
+**Pitch:** every facet is calculated at **8/12** (`DEFAULT_PITCH` in `app/roofreport.py`).
+- Area = plan area × 1.202
+- Rakes × 1.202
+- Hips and valleys × 1.106
+- Ridges and eaves are level, so they are not scaled
+
+**How lines are found** (`app/roof.py`):
+1. Roof outlines come from the county's 2022 building footprints. Touching footprints are one roof; detached buildings are separate.
+2. The 2022 LiDAR roof surface (1-ft grid) gives each cell's downslope direction. Directions are snapped to the building's four main axes, and connected areas become facets.
+3. Lines between facets are ridges (opposite facets, peak), hips (perpendicular facets, peak) or valleys (trough). A sharp height jump is step flashing.
+4. Outline edges are eaves where the facet drains toward them, and rakes where it slopes along them.
+5. Line ends are snapped together and onto roof corners.
+
+If a roof has no usable LiDAR, its area comes from the outline and all edges count as eaves; the report says so.
+
+**Credits (owner):** in `/business` → **Roof report companies**, create a company (name, login email, password, phone, starting credits) and add credits any time. A credit is only taken when a report is delivered successfully.
+
+**Speed:** about 1 second per report once that area's LiDAR is cached. The first report in a new ~1,500 ft LiDAR tile takes 15–30 s to download it. Running a bulk ZIP measure caches every tile in that ZIP.
+
+**Accuracy:**
+- Tested on synthetic 8/12 gable and hip roofs with known exact answers (`tests/test_roof.py`).
+- Not yet compared against professionally measured reports. Before selling, run 5–10 addresses you already have reports for and compare. Discrepancies can be tuned in `app/roof.py`.
+- Known limits: roofs changed after April 2022; covered porches and pergolas that the county mapped as part of the building; very small dormers (under about 12 sq ft).
+
 ## Run it
 
 ```bash
@@ -71,6 +109,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 | `RENDER_PROVIDER` | `openai` (default). Add other providers in `app/render.py`. |
 | `ESTIMATOR_CACHE` | Directory for the GIS and imagery tile cache (default `.cache`). |
 
+| `ESTIMATOR_SECRET` | Signs roofing-company login sessions. Optional: a random key is generated and stored in the data directory if unset. |
 | `ESTIMATOR_DATA` | Where leads, settings, corrections and bulk-job CSVs are saved (default `data/`). |
 
 ## Deploy

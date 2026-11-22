@@ -1,0 +1,404 @@
+"""Build a roof measurement report for a parcel's structures."""
+from __future__ import annotations
+
+import base64
+import io
+import math
+import time
+
+from shapely.geometry import mapping, shape
+from shapely.ops import transform as shp_transform, unary_union
+
+from .imagery import Mosaic
+from .measure import default_measurer
+from .roof import LINE_LABELS, LINE_TYPES, analyze_roof, pitch_factors
+
+DEFAULT_PITCH = 8.0
+WASTE_STEPS = [0, 6, 7, 8, 9, 10, 11, 12]
+
+
+def _to_las(m, g):
+    return shp_transform(lambda x, y, z=None: m.lidar.to_las.transform(x, y), g)
+
+
+def _to_wgs(m, g):
+    return shp_transform(lambda x, y, z=None: m.lidar.from_las.transform(x, y), g)
+
+
+_struct_cache: dict = {}
+
+
+def _lean_ft(m, g_wgs):
+    """(east, north) feet the roof appears shifted in the photo."""
+    v = _lean_vector(m, g_wgs)
+    if not v:
+        return (0.0, 0.0)
+    h = _eave_height(_neighbors_with_heights(m, g_wgs, radius_deg=0.0002, n=6), g_wgs)
+    return (v[0] * h, v[1] * h) if h else (0.0, 0.0)
+
+
+def _shift_las_to_photo_wgs(m, p_las, lean):
+    from shapely.affinity import translate
+    return _to_wgs(m, translate(p_las, lean[0], lean[1]))
+
+
+def list_structures(pin: str) -> dict:
+    """Roof outlines on a parcel, traced on the aerial photo.
+
+    Footprints that touch are one structure (house + attached garage);
+    detached buildings are separate. Each outline starts from the county
+    footprint and is moved onto the roof edges visible in the photo, with the
+    LiDAR making sure no real roof is cut off. ``geometry_las`` is the traced
+    outline at its true position (for measuring); ``geojson`` is the same
+    outline where it shows in the photo (for drawing and editing)."""
+    import time as _t
+    hit = _struct_cache.get(pin)
+    if hit and _t.time() - hit[0] < 3600:
+        return hit[1]
+    import numpy as np
+    from .photoedge import PhotoSampler, trace_outline
+    m = default_measurer()
+    f = m.get_parcel(pin)
+    if not f:
+        raise LookupError("parcel not found")
+    P = f["geometry"]
+    env = P.buffer(0.0003).bounds
+    blds = []
+    for b in m.buildings.query(env):
+        g = b["geometry"]
+        if g is None or g.is_empty:
+            continue
+        if g.intersection(P).area > 0.5 * g.area:
+            blds.append(_to_las(m, g).buffer(0))
+    merged = unary_union([b.buffer(0.75) for b in blds]).buffer(-0.75) if blds else None
+    parts = [] if merged is None else list(getattr(merged, "geoms", [merged]))
+    parts = [p for p in parts if p.area >= 60]
+    parts.sort(key=lambda p: -p.area)
+
+    def is_roof(xs, ys):
+        r = m.lidar.sample(env, np.asarray(xs, float), np.asarray(ys, float))
+        return r["obj"] > 7.5 if r is not None else np.zeros(len(xs), bool)
+
+    out = []
+    for i, p in enumerate(parts):
+        g = _to_wgs(m, p)
+        lean = (0.0, 0.0)
+        traced, stats = p.simplify(0.6, preserve_topology=True), {}
+        try:
+            lean = _lean_ft(m, g)
+            traced, stats = trace_outline(PhotoSampler(m, p, lean), p, is_roof)
+        except Exception:
+            pass
+        out.append({
+            "id": i,
+            "name": "Main structure" if i == 0 else f"Structure {i + 1}",
+            "plan_sqft": round(traced.area),
+            "county_plan_sqft": round(p.area),
+            "geometry_las": traced,
+            "lean_ft": [round(lean[0], 2), round(lean[1], 2)],
+            "trace": stats,
+            "geojson": mapping(_shift_las_to_photo_wgs(m, traced, lean)),
+        })
+    a = f["attributes"]
+    pf = m.pf
+    info = {"pin": a.get(pf["pin"]), "address": (a.get(pf["address"]) or "").strip(),
+            "city": a.get(pf["city"]), "zip": a.get(pf["zip"]), "parcel": f, "structures": out,
+            "stories": a.get("BLDG_STORY"), "year_built": a.get(pf["year_built"])}
+    _struct_cache[pin] = (_t.time(), info)
+    if len(_struct_cache) > 300:
+        _struct_cache.pop(next(iter(_struct_cache)))
+    return info
+
+
+def outline_from_photo_geojson(m, gj: dict, lean) -> "Polygon":
+    """An outline the user drew/edited on the photo -> true position (LAS)."""
+    from shapely.affinity import translate
+    g = shape(gj).buffer(0)
+    if g.is_empty or g.area <= 0:
+        raise ValueError("empty outline")
+    return translate(_to_las(m, g), -lean[0], -lean[1]).buffer(0)
+
+
+def _snap(segs, outline, pitch, tol=4.0):
+    """Join interior line ends that should meet (hip to ridge, valley to
+    ridge) and pull them onto nearby roof corners, then re-measure."""
+    import numpy as np
+    fac = pitch_factors(pitch)
+    inner = [s for s in segs if s["type"] not in ("eave", "rake")]
+    corners = np.array([p for ring in outline for p in ring[:-1]]) if outline else np.zeros((0, 2))
+    ends = [(i, k) for i in range(len(inner)) for k in ("a", "b")]
+    pts = np.array([inner[i][k] for i, k in ends]) if ends else np.zeros((0, 2))
+    # cluster interior endpoints
+    group = list(range(len(pts)))
+    for x in range(len(pts)):
+        for y in range(x + 1, len(pts)):
+            if np.hypot(*(pts[x] - pts[y])) < tol:
+                gx, gy = group[x], group[y]
+                group = [gx if g == gy else g for g in group]
+    new = pts.copy()
+    for g in set(group):
+        idx = [i for i in range(len(pts)) if group[i] == g]
+        c = pts[idx].mean(0)
+        if len(corners):
+            d = np.hypot(*(corners - c).T)
+            if d.min() < tol * 1.6:
+                c = corners[d.argmin()]
+        new[idx] = c
+    for (i, k), p in zip(ends, new):
+        inner[i][k] = [round(float(p[0]), 2), round(float(p[1]), 2)]
+    out = []
+    for s_ in segs:
+        L = float(np.hypot(s_["b"][0] - s_["a"][0], s_["b"][1] - s_["a"][1]))
+        if s_["type"] not in ("eave", "rake"):
+            s_["len"] = round(L * fac[s_["type"]], 1)
+        if s_["len"] >= 1:
+            out.append(s_)
+    return out
+
+
+def _contrast_offset(rgb, outline_wgs, mos, lim):
+    """Best pixel shift for one outline: maximise the colour difference
+    between just inside and just outside the outline, all the way round."""
+    import numpy as np
+    from PIL import Image as _I, ImageDraw as _D
+    from scipy import ndimage as ndi
+    h, w = rgb.shape[:2]
+    im = _I.new("L", (w, h), 0)
+    d = _D.Draw(im)
+    for p in getattr(outline_wgs, "geoms", [outline_wgs]):
+        d.polygon([mos.to_px(*c[:2]) for c in p.exterior.coords], fill=1)
+    mask = np.asarray(im) > 0
+    if mask.sum() < 200:
+        return None
+    sd = ndi.distance_transform_edt(mask) - ndi.distance_transform_edt(~mask)
+    edge = np.abs(sd) <= 1.0
+    ys, xs = np.nonzero(edge)
+    if len(xs) < 20:
+        return None
+    ny, nx = np.gradient(ndi.gaussian_filter(sd, 1.5))
+    L = np.hypot(nx, ny) + 1e-6
+    nx, ny = nx[ys, xs] / L[ys, xs], ny[ys, xs] / L[ys, xs]      # points inward
+    k = 3
+    ix_in, iy_in = np.round(xs + nx * k).astype(int), np.round(ys + ny * k).astype(int)
+    ix_out, iy_out = np.round(xs - nx * k).astype(int), np.round(ys - ny * k).astype(int)
+
+    def score(dx, dy):
+        a_x, a_y, b_x, b_y = ix_in + dx, iy_in + dy, ix_out + dx, iy_out + dy
+        ok = (a_x >= 0) & (a_x < w) & (a_y >= 0) & (a_y < h) & (b_x >= 0) & (b_x < w) & (b_y >= 0) & (b_y < h)
+        if ok.mean() < 0.9:
+            return 0.0
+        diff = np.abs(rgb[a_y[ok], a_x[ok]] - rgb[b_y[ok], b_x[ok]]).sum(-1)
+        return float(np.median(diff))
+    base = score(0, 0)
+    best, bd = base, (0, 0)
+    for dy in range(-lim, lim + 1, 2):
+        for dx in range(-lim, lim + 1, 2):
+            sc = score(dx, dy)
+            if sc > best:
+                best, bd = sc, (dx, dy)
+    cx, cy = bd
+    for dy in range(cy - 2, cy + 3):
+        for dx in range(cx - 2, cx + 3):
+            sc = score(dx, dy)
+            if sc > best:
+                best, bd = sc, (dx, dy)
+    return bd, best, base
+
+
+_LEAN_CELL = 0.003  # deg; one photo frame covers several of these
+_lean_mem: dict = {}
+
+
+def _lean_vector(m, center_wgs):
+    """Photo lean for this neighbourhood: ground feet of shift (east, north)
+    per foot of building height, measured on nearby houses. Cached."""
+    import json as _json
+    import numpy as np
+    from .gis import CACHE_DIR
+    c = center_wgs.centroid
+    key = (round(c.x / _LEAN_CELL), round(c.y / _LEAN_CELL))
+    if key in _lean_mem:
+        return _lean_mem[key]
+    path = CACHE_DIR / "lean" / f"{key[0]}_{key[1]}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        v = _json.loads(path.read_text())
+        _lean_mem[key] = v
+        return v
+    neigh = _neighbors_with_heights(m, center_wgs, n=10)
+    v = None
+    if neigh:
+        u = unary_union([n[0] for n in neigh])
+        mos = Mosaic(m.c["imagery"]["tile_url"], u.buffer(0.00008).bounds, 19)
+        rgb = np.asarray(mos.image, dtype=np.float32)
+        lim = int(14 / mos.ft_per_px)
+        per_ft = []
+        for g, hgt in neigh:
+            if not hgt or hgt < 6:
+                continue
+            r = _contrast_offset(rgb, g, mos, lim)
+            if r and r[1] > r[2] * 1.1:
+                # pixels -> ground feet (east, north)
+                per_ft.append((r[0][0] * mos.ft_per_px / hgt, -r[0][1] * mos.ft_per_px / hgt))
+        if len(per_ft) >= 3:
+            v = [float(x) for x in np.median(np.array(per_ft), axis=0)]
+    _lean_mem[key] = v
+    path.write_text(_json.dumps(v))
+    return v
+
+
+def _neighbors_with_heights(m, center_wgs, radius_deg=0.0009, n=15):
+    """Nearby footprints with their eave heights (county planimetric attrs)."""
+    from .gis import query_features
+    c = center_wgs.centroid
+    env = (c.x - radius_deg, c.y - radius_deg * 0.75, c.x + radius_deg, c.y + radius_deg * 0.75)
+    feats = query_features(m.c["buildings"]["url"], envelope=env, out_fields="objectid,eaveheight,buildingheight")
+    out = []
+    for f in feats:
+        g = f["geometry"]
+        if g is None or g.area <= 0:
+            continue
+        h = f["attributes"].get("eaveheight") or f["attributes"].get("buildingheight")
+        out.append((g, h))
+    out.sort(key=lambda t: -t[0].area)
+    return out[:n]
+
+
+def _eave_height(neigh, g):
+    hs = [h for ng, h in neigh if h and ng.intersects(g) and ng.intersection(g).area > 0.3 * ng.area]
+    return max(hs) if hs else None
+
+
+def lean_corrected(m, g_wgs):
+    """``g_wgs`` moved to where the roof shows in the photo (drawing only)."""
+    import math as _m
+    from shapely.affinity import translate
+    v = _lean_vector(m, g_wgs)
+    if not v:
+        return g_wgs
+    neigh = _neighbors_with_heights(m, g_wgs, radius_deg=0.0002, n=6)
+    h = _eave_height(neigh, g_wgs)
+    if not h:
+        return g_wgs
+    dx_ft, dy_ft = v[0] * h, v[1] * h
+    lat = g_wgs.centroid.y
+    return translate(g_wgs, dx_ft * 0.3048 / (111320 * _m.cos(_m.radians(lat))), dy_ft * 0.3048 / 110574)
+
+
+def suggested_waste(totals: dict, area: float) -> int:
+    """More hips and valleys means more cutting. Simple gable ~6%, cut-up hip ~12%."""
+    if area <= 0:
+        return 10
+    cut = (totals.get("hip", 0) + totals.get("valley", 0)) / (area / 100.0)  # ft per square
+    for lim, w in ((1.0, 6), (2.0, 7), (3.0, 8), (4.5, 9), (6.0, 10), (8.0, 11)):
+        if cut < lim:
+            return w
+    return 12
+
+
+def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float = DEFAULT_PITCH,
+                 edited: dict | None = None) -> dict:
+    """``edited`` maps structure id -> GeoJSON outline the roofer adjusted on
+    the photo; those outlines are measured exactly as drawn."""
+    m = default_measurer()
+    info = list_structures(pin)
+    structs = info["structures"]
+    if not structs:
+        raise LookupError("no buildings found on this parcel")
+    chosen = [dict(s) for s in structs if structure_ids is None or s["id"] in structure_ids] or [dict(structs[0])]
+    for s in chosen:
+        gj = (edited or {}).get(str(s["id"])) or (edited or {}).get(s["id"])
+        if gj:
+            s["geometry_las"] = outline_from_photo_geojson(m, gj, s.get("lean_ft") or (0, 0))
+            s["geojson"] = gj
+            s["edited"] = True
+    env = info["parcel"]["geometry"].buffer(0.0004).bounds
+
+    def sampler(xs, ys):
+        smp = m.lidar.sample(env, xs, ys)
+        return None if smp is None else smp["obj"]
+
+    out_structs = []
+    totals = {k: 0.0 for k in LINE_TYPES}
+    area = plan = 0.0
+    facets = 0
+    methods = set()
+    for s in chosen:
+        res = analyze_roof(s["geometry_las"], sampler, pitch)
+        g = res.get("grid")
+        segs = []
+        for seg in res["segments"]:
+            if "x0" in seg:
+                a, b = (seg["x0"], seg["y0"]), (seg["x1"], seg["y1"])
+            else:
+                a, b = g.to_xy(seg["r0"], seg["c0"]), g.to_xy(seg["r1"], seg["c1"])
+            segs.append({"type": seg["type"], "a": [round(float(a[0]), 2), round(float(a[1]), 2)],
+                         "b": [round(float(b[0]), 2), round(float(b[1]), 2)], "len": round(float(seg["true_length"]), 1)})
+        outline = [[[round(x, 2), round(y, 2)] for x, y in p.exterior.coords]
+                   for p in getattr(s["geometry_las"], "geoms", [s["geometry_las"]])]
+        if res["method"] == "lidar":
+            segs = _snap(segs, outline, pitch)
+            res["lines"] = {k: sum(x["len"] for x in segs if x["type"] == k) for k in LINE_TYPES}
+        out_structs.append({
+            "id": s["id"], "name": s["name"], "edited": bool(s.get("edited")), "plan_sqft": round(res["plan_area_sqft"]),
+            "roof_sqft": round(res["roof_area_sqft"]), "flat_sqft": round(res.get("flat_area_sqft") or 0),
+            "facets": res.get("facet_count"), "method": res["method"],
+            "lines": {k: round(float(v), 1) for k, v in res["lines"].items()},
+            "segments": segs, "outline": outline,
+        })
+        for k in LINE_TYPES:
+            totals[k] += res["lines"][k]
+        area += res["roof_area_sqft"]
+        plan += res["plan_area_sqft"]
+        facets += res.get("facet_count") or 0
+        methods.add(res["method"])
+
+    sw = suggested_waste(totals, area)
+    waste = [{"pct": w, "area": round(area * (1 + w / 100)),
+              "squares": math.ceil(area * (1 + w / 100) / 100 * 3) / 3,  # bundles: 1/3 square
+              "suggested": w == sw} for w in WASTE_STEPS]
+    t = {k: round(float(v), 1) for k, v in totals.items()}
+    derived = {
+        "drip_edge": round(t["eave"] + t["rake"], 1),
+        "starter": round(t["eave"] + t["rake"], 1),
+        "ridge_cap": round(t["ridge"] + t["hip"], 1),
+        "ice_water_valleys": round(t["valley"], 1),
+    }
+    return {
+        "pin": info["pin"], "address": info["address"], "city": info["city"], "zip": info["zip"],
+        "stories": info["stories"], "year_built": info["year_built"],
+        "pitch": pitch, "pitch_label": f"{pitch:g}/12",
+        "created": time.time(),
+        "roof_sqft": round(area), "plan_sqft": round(plan), "squares": round(area / 100, 2),
+        "facets": facets, "lines": t, "derived": derived,
+        "waste": waste, "suggested_waste": sw,
+        "structures": out_structs,
+        "method": "lidar" if methods == {"lidar"} else ("partial" if "lidar" in methods else "outline_only"),
+        "sources": {"lidar": "Douglas County 2022 QL1 LiDAR", "outlines": "Douglas County 2022 building footprints",
+                    "imagery": "Douglas County 2025 orthoimagery"},
+        "aerial_jpg": _aerial(m, chosen),
+        "line_labels": LINE_LABELS,
+    }
+
+
+def _aerial(m, chosen) -> str:
+    try:
+        u = unary_union([s["geometry_las"] for s in chosen]).buffer(18)
+        env = _to_wgs(m, u.envelope).bounds
+        mos = Mosaic(m.c["imagery"]["tile_url"], env, 21)
+        x0, y0 = mos.to_px(env[0], env[3])
+        x1, y1 = mos.to_px(env[2], env[1])
+        im = mos.image.copy()
+        from PIL import ImageDraw
+        d = ImageDraw.Draw(im)
+        for s in chosen:
+            g = shape(s["geojson"])
+            for p in getattr(g, "geoms", [g]):
+                d.line([mos.to_px(*c[:2]) for c in p.exterior.coords], fill=(0, 229, 255), width=3)
+        im = im.crop((int(x0), int(y0), int(x1), int(y1)))
+        im.thumbnail((1100, 1100))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=82)
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""

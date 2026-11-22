@@ -12,6 +12,7 @@ Heights are in feet.
 """
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import threading
@@ -35,11 +36,55 @@ VEG_CLASSES = (3, 4, 5)
 GROUND_CLASSES = (2, 11)
 
 
+class _Shifted:
+    """A pyproj-like ``transform(x, y)`` with a constant offset added (or
+    removed) on the LAS side."""
+
+    def __init__(self, tr, dx, dy, forward: bool):
+        self.tr, self.dx, self.dy, self.forward = tr, dx, dy, forward
+
+    def transform(self, x, y):
+        if self.forward:
+            X, Y = self.tr.transform(x, y)
+            return X + self.dx, Y + self.dy
+        return self.tr.transform(x - self.dx, y - self.dy)
+
+
 class LidarSource:
+    """Note on datums: when the county's ArcGIS servers hand out coordinates
+    as WGS84 they apply a NAD83(2011)->WGS84 shift (~3.4 ft here). The LiDAR is
+    plain NAD83(2011). We measure that shift once against the server and
+    correct for it, so outlines, parcels and imagery line up with the LiDAR."""
+
     def __init__(self, cfg: dict):
         self.cfg = cfg
-        self.to_las = Transformer.from_crs("EPSG:4326", cfg["crs_wkt"], always_xy=True)
-        self.from_las = Transformer.from_crs(cfg["crs_wkt"], "EPSG:4326", always_xy=True)
+        self._fwd = Transformer.from_crs("EPSG:4326", cfg["crs_wkt"], always_xy=True)
+        self._inv = Transformer.from_crs(cfg["crs_wkt"], "EPSG:4326", always_xy=True)
+        dx, dy = self._calibrate()
+        self.datum_shift_ft = (dx, dy)
+        self.to_las = _Shifted(self._fwd, dx, dy, True)
+        self.from_las = _Shifted(self._inv, dx, dy, False)
+
+    def _calibrate(self) -> tuple[float, float]:
+        cal = self.cfg.get("calibration")
+        if not cal:
+            return 0.0, 0.0
+        try:
+            from .gis import get_json
+            q = {"where": cal["where"], "outFields": "*", "returnGeometry": "true", "f": "json",
+                 "resultRecordCount": 1}
+            wgs = get_json(cal["url"] + "/query", {**q, "outSR": 4326}, ttl=30 * 86400)
+            nat = get_json(cal["url"] + "/query", {**q, "outSR": json.dumps({"wkt": self.cfg["crs_wkt"]})},
+                           ttl=30 * 86400)
+            a = wgs["features"][0]["geometry"]["rings"][0][0]
+            b = nat["features"][0]["geometry"]["rings"][0][0]
+            X, Y = self._fwd.transform(a[0], a[1])
+            dx, dy = b[0] - X, b[1] - Y
+            if abs(dx) < 20 and abs(dy) < 20:
+                return float(dx), float(dy)
+        except Exception:
+            pass
+        return tuple(cal.get("fallback_ft", (0.0, 0.0)))
 
     def tiles_for(self, env_wgs) -> list[str]:
         feats = query_features(self.cfg["index_url"], envelope=env_wgs, out_fields=self.cfg["las_field"],

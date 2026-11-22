@@ -14,6 +14,7 @@
     if (b.dataset.tab === "measure") { if (!mapInit) mapInit = initMeasure(); else mapInit.map.invalidateSize(); }
     if (b.dataset.tab === "leads") loadLeads();
     if (b.dataset.tab === "pricing") loadSettings();
+    if (b.dataset.tab === "roofing") loadRoofing();
   }));
 
   // ---------------- bulk
@@ -188,6 +189,38 @@
           || '<tr><td colspan="9" class="muted">No leads yet.</td></tr>') + "</tbody>";
     } catch (e) { $("leads").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; }
   }
+
+  // ---------------- roofing companies & credits
+  async function loadRoofing() {
+    try {
+      const cos = await api("/api/admin/companies");
+      $("companies").innerHTML = `<thead><tr><th>Company</th><th>Login</th><th class="num">Credits</th><th class="num">Reports</th><th>Add credits</th></tr></thead><tbody>${
+        cos.map((c) => `<tr><td>${esc(c.name)}<div class="small muted">${esc(c.phone || "")}</div></td><td>${esc(c.email)}</td>
+          <td class="num"><b>${c.credits}</b></td><td class="num">${c.reports}</td>
+          <td><div class="row" style="flex-wrap:nowrap"><input type="number" style="width:90px" data-cid="${c.id}" placeholder="+10">
+          <button class="secondary" data-add="${c.id}">Add</button></div></td></tr>`).join("") || '<tr><td colspan="5" class="muted">No companies yet.</td></tr>'}</tbody>`;
+      $("companies").querySelectorAll("[data-add]").forEach((b) => b.addEventListener("click", async () => {
+        const v = +$("companies").querySelector(`input[data-cid="${b.dataset.add}"]`).value;
+        if (!v) return;
+        await api(`/api/admin/companies/${b.dataset.add}/credits`, { method: "POST", json: { delta: v, reason: "added by owner" } });
+        loadRoofing();
+      }));
+      const reps = await api("/api/admin/roof-reports");
+      const tok = localStorage.getItem("adminToken");
+      $("rReports").innerHTML = `<thead><tr><th>Date</th><th>Company</th><th>Address</th><th>Report</th></tr></thead><tbody>${
+        reps.slice(0, 50).map((r) => `<tr><td>${new Date(r.created * 1000).toLocaleDateString()}</td><td>${esc(r.company)}</td><td>${esc(r.address)}</td>
+          <td><a target="_blank" href="/r/${r.id}?t=${r.share_token}">${esc(r.id)}</a></td></tr>`).join("") || '<tr><td colspan="4" class="muted">None yet.</td></tr>'}</tbody>`;
+    } catch (e) { $("companies").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; }
+  }
+  $("cCreate").addEventListener("click", async () => {
+    try {
+      await api("/api/admin/companies", { method: "POST", json: { name: $("cName").value, email: $("cEmail").value,
+        password: $("cPass").value, phone: $("cPhone").value, credits: +$("cCredits").value || 0 } });
+      $("cMsg").innerHTML = '<span class="ok">Company created.</span>';
+      ["cName", "cEmail", "cPass", "cPhone", "cCredits"].forEach((i) => ($(i).value = ""));
+      loadRoofing();
+    } catch (e) { $("cMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  });
 
   // ---------------- settings
   let settings = null;

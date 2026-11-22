@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roof Reports</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
+<link rel="stylesheet" href="/static/styles.css">
+<style>
+  :root { --accent: #1d4ed8; }
+  .credits { font-weight: 700; font-size: 15px; }
+  .structs label { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+  .structs label:first-child { border-top: 0; }
+  #login { max-width: 420px; margin: 40px auto; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span><span id="coName">Roof Reports</span></div>
+  <div class="contact"><span id="credits" class="credits"></span> <button class="secondary hidden" id="logout" style="margin-left:10px;padding:6px 10px">Log out</button></div>
+</header>
+<main>
+  <div class="card stack hidden" id="login">
+    <h2>Log in</h2>
+    <input type="email" id="lEmail" placeholder="Email" autocomplete="username">
+    <input type="password" id="lPass" placeholder="Password" autocomplete="current-password">
+    <button id="lBtn">Log in</button>
+    <div id="lMsg" class="small"></div>
+  </div>
+
+  <section id="app" class="hidden">
+    <h1>Order a roof report</h1>
+    <p class="lead">Type an address, check the buildings to include, and get the report in seconds. Each report uses 1 credit.</p>
+    <div class="search">
+      <input id="addr" type="text" autocomplete="off" placeholder="Property address">
+      <div class="suggest hidden" id="suggest"></div>
+    </div>
+    <div class="layout">
+      <div><div id="map"></div><p class="small muted">The blue outline is traced on the roof edges in the photo. Click <b>Adjust outline</b> to drag any corner onto the edge you see. The report measures exactly that outline. You can also click any lot on the map.</p></div>
+      <div class="stack">
+        <div class="card stack" id="orderCard">
+          <p class="muted" style="margin:0">Look up a property to start.</p>
+        </div>
+        <div class="card">
+          <h2>Your reports</h2>
+          <div class="tablewrap"><table id="reports"></table></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<script src="/static/common.js"></script>
+<script src="/static/roof.js"></script>
+</body>
+</html>
