@@ -19,11 +19,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from shapely.geometry import mapping, Point
 
-from . import accounts, bulk, corrections, render, roofreport
+from . import accounts, bulk, corrections, counties, render, roofreport
 from .roofpdf import render_pdf
 from .gis import get_json, query_features
 from .imagery import Mosaic
-from .measure import default_measurer, MEASUREMENTS
+from .measure import default_measurer, measurer_for, MEASUREMENTS
 from .pricing import DATA_DIR, estimate, load_settings, save_settings
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -72,17 +72,44 @@ def page_business():
 
 
 # --------------------------------------------------------------- public API
+_GEOCODER = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer"
+_BASEMAP = {
+    "tile_url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    "attribution": "Esri, Maxar, Earthstar Geographics",
+    "max_native_zoom": 19,
+}
+
+
+def _region_bbox():
+    from shapely.ops import unary_union
+    return unary_union(list(counties.boundaries().values())).bounds
+
+
 @app.get("/api/config")
 def config():
-    m = default_measurer()
     s = load_settings()
+    layers = []
+    for cid, g in counties.boundaries().items():
+        c = counties.get_county(cid)
+        if c["imagery"]["tile_url"] == _BASEMAP["tile_url"]:
+            continue
+        w, so, e, n = g.bounds
+        layers.append({"county": cid, "name": c["name"], "tile_url": c["imagery"]["tile_url"],
+                       "year": c["imagery"].get("year"), "source": c["imagery"].get("source"),
+                       "max_native_zoom": min(21, c["imagery"].get("max_zoom", 21)),
+                       "bounds": [[so, w], [n, e]]})
+    W, S, E, N = _region_bbox()
     return {
         "business": s["business"],
         "services": {k: {"label": v["label"], "unit": v["unit"], "finishes": {fk: fv["label"] for fk, fv in v.get("finishes", {}).items()}}
                      for k, v in s["services"].items() if v.get("enabled")},
-        "county": {"name": m.c["name"], "center": m.c["center"]},
-        "imagery": {"tile_url": m.c["imagery"]["tile_url"],
-                    "year": m.c["imagery"]["year"], "max_native_zoom": m.c["imagery"].get("max_zoom", 21)},
+        "region": {"name": counties.REGION_NAME, "bounds": [[S, W], [N, E]], "center": [(S + N) / 2, (W + E) / 2]},
+        "counties": [{"id": cid, "name": counties.get_county(cid)["name"]} for cid in counties.COUNTIES],
+        "basemap": _BASEMAP,
+        "imagery_layers": layers,
+        # kept for older pages
+        "county": {"name": counties.REGION_NAME, "center": [(S + N) / 2, (W + E) / 2]},
+        "imagery": {"tile_url": _BASEMAP["tile_url"], "year": None, "max_native_zoom": 19},
         "render_available": render.available(),
         "measurements": MEASUREMENTS,
     }
@@ -90,60 +117,103 @@ def config():
 
 @app.get("/api/suggest")
 def suggest(q: str):
-    m = default_measurer()
+    """Address autocomplete across the whole service area."""
     if len(q.strip()) < 3:
         return []
-    d = get_json(m.c["geocoder"] + "/suggest", {"text": q, "maxSuggestions": 8, "f": "json"}, ttl=86400)
-    return [{"text": s["text"], "magicKey": s.get("magicKey")} for s in d.get("suggestions", [])]
+    W, S, E, N = _region_bbox()
+    d = get_json(_GEOCODER + "/suggest", {"text": q, "maxSuggestions": 8, "f": "json", "countryCode": "USA",
+                                          "searchExtent": f"{W},{S},{E},{N}", "category": "Address,Postal"},
+                 ttl=86400)
+    return [{"text": s_["text"], "magicKey": s_.get("magicKey")} for s_ in d.get("suggestions", [])]
 
 
 @app.get("/api/locate")
 def locate(q: str, magicKey: str | None = None):
-    m = default_measurer()
-    params = {"SingleLine": q, "outSR": 4326, "maxLocations": 5, "f": "json"}
+    W, S, E, N = _region_bbox()
+    params = {"SingleLine": q, "outSR": 4326, "maxLocations": 5, "f": "json", "countryCode": "USA",
+              "searchExtent": f"{W},{S},{E},{N}", "forStorage": "false"}
     if magicKey:
         params["magicKey"] = magicKey
-    d = get_json(m.c["geocoder"] + "/findAddressCandidates", params, ttl=86400)
+    d = get_json(_GEOCODER + "/findAddressCandidates", params, ttl=86400)
     out = [{"address": c["address"], "lat": c["location"]["y"], "lon": c["location"]["x"], "score": c["score"]}
-           for c in d.get("candidates", [])]
+           for c in d.get("candidates", []) if c.get("score", 0) >= 70]
     if not out:
-        raise HTTPException(404, "Address not found in this county.")
+        raise HTTPException(404, "We couldn't find that address.")
     best = out[0]
-    hit = _parcel_at(best["lat"], best["lon"])
-    return {"candidates": out, "best": best, "suggested_pin": hit["attributes"][m.pf["pin"]] if hit else None}
+    cid = counties.county_at(best["lon"], best["lat"])
+    if not cid:
+        raise HTTPException(404, "That address is outside our service area (Douglas, Sarpy, Lancaster and Cass counties).")
+    hit = _parcel_at(best["lat"], best["lon"], cid, best["address"])
+    pid = counties.make_pid(cid, hit["attributes"][measurer_for(cid).pf["pin"]]) if hit else None
+    return {"candidates": out, "best": best, "county": cid, "suggested_pin": pid}
 
 
-def _parcel_at(lat: float, lon: float):
-    m = default_measurer()
-    d = 0.00002
-    feats = query_features(m.c["parcels"]["url"], envelope=(lon - d, lat - d, lon + d, lat + d),
-                           out_fields=f"{m.pf['pin']},{m.pf['address']}")
+def _parcel_at(lat: float, lon: float, cid: str | None = None, address: str | None = None):
+    """The parcel at a geocoded point. Geocoders sometimes drop the point on
+    the street in front of the lot, so look ~40 m around it and prefer the
+    lot whose house number matches the address."""
+    import re
+    cid = cid or counties.county_at(lon, lat)
+    if not cid:
+        return None
+    m = measurer_for(cid)
     pt = Point(lon, lat)
-    feats = [f for f in feats if f["geometry"] is not None]
-    feats.sort(key=lambda f: (not f["geometry"].contains(pt), f["geometry"].area))
-    return feats[0] if feats else None
+    num = None
+    if address:
+        mm = re.match(r"\s*(\d+)", address)
+        num = mm.group(1) if mm else None
+    for d in (0.00002, 0.0004):
+        feats = query_features(m.c["parcels"]["url"], envelope=(lon - d, lat - d, lon + d, lat + d),
+                               out_fields=f"{m.pf['pin']},{m.pf['address']}")
+        feats = [f for f in feats if f["geometry"] is not None]
+        if num:
+            def same_number(f):
+                a = str(f["attributes"].get(m.pf["address"]) or "")
+                return re.match(r"\s*0*" + num + r"\b", a) is not None
+            matched = [f for f in feats if same_number(f)]
+            if matched:
+                matched.sort(key=lambda f: f["geometry"].distance(pt))
+                return matched[0]
+        inside = [f for f in feats if f["geometry"].contains(pt)]
+        if inside:
+            inside.sort(key=lambda f: f["geometry"].area)
+            return inside[0]
+    return None
 
 
 @app.get("/api/parcels")
 def parcels(bbox: str):
-    """Parcel outlines in the map view, so the customer can click theirs."""
-    m = default_measurer()
+    """Parcel outlines in the map view (every county the view touches)."""
     w, s, e, n = [float(v) for v in bbox.split(",")]
     if (e - w) * (n - s) > 0.0004:  # roughly 1.5 x 1.5 km: zoom in first
         raise HTTPException(400, "zoom in to load parcels")
-    pf = m.pf
-    feats = query_features(m.c["parcels"]["url"], envelope=(w, s, e, n),
-                           out_fields=",".join([pf["pin"], pf["address"], pf["class"]]), limit=1500)
-    return {"type": "FeatureCollection", "features": [
-        {"type": "Feature", "geometry": mapping(f["geometry"]),
-         "properties": {"pin": f["attributes"].get(pf["pin"]), "address": (f["attributes"].get(pf["address"]) or "").strip(),
-                        "class": f["attributes"].get(pf["class"])}}
-        for f in feats if f["geometry"] is not None]}
+    out = []
+    for cid in counties.counties_in((w, s, e, n)):
+        m = measurer_for(cid)
+        pf = m.pf
+        fields = ",".join(x for x in (pf["pin"], pf["address"], pf["class"]) if x)
+        try:
+            feats = query_features(m.c["parcels"]["url"], envelope=(w, s, e, n), out_fields=fields, limit=1500)
+        except Exception:
+            continue
+        for f in feats:
+            if f["geometry"] is None:
+                continue
+            a = m.parcel_attrs(f["attributes"])
+            out.append({"type": "Feature", "geometry": mapping(f["geometry"]),
+                        "properties": {"pin": counties.make_pid(cid, a["pin"]), "address": a.get("address") or "",
+                                       "class": a.get("class"), "county": cid}})
+    return {"type": "FeatureCollection", "features": out}
+
+
+def _measurer_and_pin(pid: str):
+    cid, pin = counties.split_pid(pid)
+    return measurer_for(cid), pin
 
 
 @lru_cache(maxsize=512)
-def _measure_cached(pin: str) -> str:
-    m = default_measurer()
+def _measure_cached(pid: str) -> str:
+    m, pin = _measurer_and_pin(pid)
     f = m.get_parcel(pin)
     if not f:
         raise HTTPException(404, "parcel not found")
@@ -209,8 +279,8 @@ def aerial(pin: str):
 
 
 @lru_cache(maxsize=64)
-def _aerial_png(pin: str) -> bytes:
-    m = default_measurer()
+def _aerial_png(pid: str) -> bytes:
+    m, pin = _measurer_and_pin(pid)
     f = m.get_parcel(pin)
     if not f:
         raise HTTPException(404, "parcel not found")
@@ -289,7 +359,10 @@ def job_csv(job_id: str):
 
 @app.get("/api/admin/corrections/{pin}", dependencies=[Depends(admin)])
 def get_corrections(pin: str):
-    return corrections.get(pin) or {"exclude": [], "include": []}
+    cid, bare = counties.split_pid(pin)
+    pid = counties.make_pid(cid, bare)
+    c = corrections.get(pid) or (corrections.get(bare) if cid == counties.DEFAULT_COUNTY else None)
+    return c or {"exclude": [], "include": []}
 
 
 class Corrections(BaseModel):
@@ -302,7 +375,8 @@ def put_corrections(pin: str, body: Corrections):
     for g in body.exclude + body.include:
         if g.get("type") != "Polygon" or not g.get("coordinates"):
             raise HTTPException(400, "corrections must be GeoJSON polygons")
-    out = corrections.put(pin, body.exclude, body.include)
+    cid, bare = counties.split_pid(pin)
+    out = corrections.put(counties.make_pid(cid, bare), body.exclude, body.include)
     _measure_cached.cache_clear()
     return out
 
@@ -377,7 +451,7 @@ def roof_structures(pin: str, c: dict = Depends(roof_company)):
 
 
 class RoofOrder(BaseModel):
-    pin: str = Field(max_length=20)
+    pin: str = Field(max_length=64)
     structure_ids: list[int] | None = None
     # structure id -> GeoJSON Polygon the roofer adjusted on the photo
     edited: dict[str, dict] | None = None

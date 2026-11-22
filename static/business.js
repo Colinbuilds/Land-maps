@@ -30,7 +30,8 @@
     try {
       const r = await api("/api/admin/bulk/preview", { method: "POST", json: bulkReq() });
       const mins = Math.max(1, Math.round(r.count * 0.6 / 60));
-      $("bMsg").innerHTML = `<b>${fmt(r.count)}</b> parcels match. Estimated run time: about ${mins} min.`;
+      const by = Object.entries(r.by_county || {}).map(([k, v]) => `${esc(k)}: ${fmt(v)}`).join(" · ");
+      $("bMsg").innerHTML = `<b>${fmt(r.count)}</b> parcels match${by ? ` (${by})` : ""}. Estimated run time: about ${mins} min.`;
     } catch (e) { $("bMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   });
   $("bStart").addEventListener("click", async () => {
@@ -118,7 +119,7 @@
         const r = await api(`/api/measure/${encodeURIComponent(pin)}`);
         showOverlay(map, holder, r);
         $("mResult").innerHTML = `
-          <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><h2 style="margin:0">${esc(r.address)}</h2><span class="tag">${esc(r.pin)}</span></div>
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><h2 style="margin:0">${esc(r.address)}</h2><span class="tag">${esc(r.pin)} · ${esc((r.sources && r.sources.county) || "")}</span></div>
           <p class="small muted">${esc(r.city || "")} ${esc(r.zip || "")} · class ${esc(r.class)} · ${esc(r.assessor.building || "")} ${r.assessor.year_built ? "built " + esc(r.assessor.year_built) : ""} · ${fmt(r.assessor.living_sqft)} sq ft living
           ${r.sources.driveway_method !== "imagery" ? ` · <span class="tag warn">driveway ${esc(r.sources.driveway_method)}</span>` : ""}
           ${r.sources.corrected ? ' · <span class="tag">hand-corrected</span>' : ""}

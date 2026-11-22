@@ -10,8 +10,15 @@ from shapely.geometry import mapping, shape
 from shapely.ops import transform as shp_transform, unary_union
 
 from .imagery import Mosaic
-from .measure import default_measurer
-from .roof import LINE_LABELS, LINE_TYPES, analyze_roof, pitch_factors
+from .counties import make_pid, split_pid
+from .measure import measurer_for
+from .roof import analyze_roof, pitch_factors
+from .roofplanes import LINE_TYPES, analyze_roof_points
+
+LINE_LABELS = {
+    "ridge": "Ridges", "hip": "Hips", "valley": "Valleys", "rake": "Rakes", "eave": "Eaves",
+    "step_flashing": "Step flashing", "flashing": "Flashing",
+}
 
 DEFAULT_PITCH = 8.0
 WASTE_STEPS = [0, 6, 7, 8, 9, 10, 11, 12]
@@ -57,8 +64,9 @@ def list_structures(pin: str) -> dict:
         return hit[1]
     import numpy as np
     from .photoedge import PhotoSampler, trace_outline
-    m = default_measurer()
-    f = m.get_parcel(pin)
+    cid, bare = split_pid(pin)
+    m = measurer_for(cid)
+    f = m.get_parcel(bare)
     if not f:
         raise LookupError("parcel not found")
     P = f["geometry"]
@@ -99,11 +107,11 @@ def list_structures(pin: str) -> dict:
             "trace": stats,
             "geojson": mapping(_shift_las_to_photo_wgs(m, traced, lean)),
         })
-    a = f["attributes"]
-    pf = m.pf
-    info = {"pin": a.get(pf["pin"]), "address": (a.get(pf["address"]) or "").strip(),
-            "city": a.get(pf["city"]), "zip": a.get(pf["zip"]), "parcel": f, "structures": out,
-            "stories": a.get("BLDG_STORY"), "year_built": a.get(pf["year_built"])}
+    a = m.parcel_attrs(f["attributes"])
+    info = {"pin": make_pid(cid, a["pin"]), "address": a.get("address") or "",
+            "city": a.get("city"), "zip": a.get("zip"), "parcel": f, "structures": out, "county": cid,
+            "county_name": m.c["name"],
+            "stories": f["attributes"].get("BLDG_STORY"), "year_built": a.get("year_built")}
     _struct_cache[pin] = (_t.time(), info)
     if len(_struct_cache) > 300:
         _struct_cache.pop(next(iter(_struct_cache)))
@@ -248,18 +256,30 @@ def _lean_vector(m, center_wgs):
 
 
 def _neighbors_with_heights(m, center_wgs, radius_deg=0.0009, n=15):
-    """Nearby footprints with their eave heights (county planimetric attrs)."""
+    """Nearby building outlines with their eave/roof heights in feet, from
+    the county's (or national) building layer."""
     from .gis import query_features
+    b = m.c["buildings"]
+    hf = b.get("height_field")
+    oid = b.get("oid", "objectid")
+    to_ft = 3.28084 if b.get("height_units") == "m" else 1.0
     c = center_wgs.centroid
     env = (c.x - radius_deg, c.y - radius_deg * 0.75, c.x + radius_deg, c.y + radius_deg * 0.75)
-    feats = query_features(m.c["buildings"]["url"], envelope=env, out_fields="objectid,eaveheight,buildingheight")
+    feats = query_features(b["url"], envelope=env, out_fields=",".join(x for x in (oid, hf) if x))
     out = []
     for f in feats:
         g = f["geometry"]
         if g is None or g.area <= 0:
             continue
-        h = f["attributes"].get("eaveheight") or f["attributes"].get("buildingheight")
-        out.append((g, h))
+        h = f["attributes"].get(hf) if hf else None
+        try:
+            h = float(h) * to_ft if h else None
+        except (TypeError, ValueError):
+            h = None
+        # national layers give roof height; eaves sit lower on pitched roofs
+        if h and b.get("height_units") == "m":
+            h *= 0.8
+        out.append((g, h if h and h > 0 else 18.0))
     out.sort(key=lambda t: -t[0].area)
     return out[:n]
 
@@ -300,7 +320,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
                  edited: dict | None = None) -> dict:
     """``edited`` maps structure id -> GeoJSON outline the roofer adjusted on
     the photo; those outlines are measured exactly as drawn."""
-    m = default_measurer()
+    m = measurer_for(split_pid(pin)[0])
     info = list_structures(pin)
     structs = info["structures"]
     if not structs:
@@ -323,8 +343,46 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
     area = plan = 0.0
     facets = 0
     methods = set()
+    pitch_areas: dict = {}
     for s in chosen:
+        # Preferred: fit real roof planes to the raw LiDAR points (measured
+        # pitch per plane). Fallback: the older 1-ft grid method at a fixed pitch.
+        res = None
+        try:
+            pts = m.lidar.building_points(env, s["geometry_las"].buffer(3).bounds)
+            r2 = analyze_roof_points(s["geometry_las"], pts)
+            if r2.get("method") == "lidar_planes":
+                res = r2
+        except Exception:
+            res = None
+        if res is not None:
+            segs = [{"type": x["type"], "a": [round(x["a"][0], 2), round(x["a"][1], 2)],
+                     "b": [round(x["b"][0], 2), round(x["b"][1], 2)], "len": round(x["len"], 1)}
+                    for x in res["segments"]]
+            outline = [[[round(x, 2), round(y, 2)] for x, y in p.exterior.coords]
+                       for p in getattr(s["geometry_las"], "geoms", [s["geometry_las"]])]
+            for k, v in res["pitch_areas"].items():
+                pitch_areas[k] = pitch_areas.get(k, 0) + v
+            out_structs.append({
+                "id": s["id"], "name": s["name"], "edited": bool(s.get("edited")),
+                "plan_sqft": round(res["plan_area_sqft"]), "roof_sqft": round(res["roof_area_sqft"]),
+                "facets": res["facet_count"], "method": "lidar",
+                "predominant_pitch": res["predominant_pitch"],
+                "lines": {k: round(float(v), 1) for k, v in res["lines"].items()},
+                "segments": segs, "outline": outline,
+                "planes": [{"pitch": q["pitch"], "plan_sqft": round(q["plan_sqft"], 1),
+                            "area_sqft": round(q["area_sqft"], 1)} for q in res["planes"]],
+            })
+            for k in LINE_TYPES:
+                totals[k] += res["lines"].get(k, 0.0)
+            area += res["roof_area_sqft"]
+            plan += res["plan_area_sqft"]
+            facets += res["facet_count"]
+            methods.add("lidar")
+            continue
         res = analyze_roof(s["geometry_las"], sampler, pitch)
+        res["lines"].setdefault("flashing", 0.0)
+        pitch_areas[int(pitch)] = pitch_areas.get(int(pitch), 0) + res["roof_area_sqft"]
         g = res.get("grid")
         segs = []
         for seg in res["segments"]:
@@ -339,6 +397,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
         if res["method"] == "lidar":
             segs = _snap(segs, outline, pitch)
             res["lines"] = {k: sum(x["len"] for x in segs if x["type"] == k) for k in LINE_TYPES}
+        methods.add("outline_only" if res["method"] != "lidar" else "lidar_grid")
         out_structs.append({
             "id": s["id"], "name": s["name"], "edited": bool(s.get("edited")), "plan_sqft": round(res["plan_area_sqft"]),
             "roof_sqft": round(res["roof_area_sqft"]), "flat_sqft": round(res.get("flat_area_sqft") or 0),
@@ -351,7 +410,6 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
         area += res["roof_area_sqft"]
         plan += res["plan_area_sqft"]
         facets += res.get("facet_count") or 0
-        methods.add(res["method"])
 
     sw = suggested_waste(totals, area)
     waste = [{"pct": w, "area": round(area * (1 + w / 100)),
@@ -364,18 +422,24 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
         "ridge_cap": round(t["ridge"] + t["hip"], 1),
         "ice_water_valleys": round(t["valley"], 1),
     }
+    pitch_table = [{"pitch": f"{k}/12" if k else "Flat", "area": round(v), "pct": float(round(100 * v / area, 1)) if area else 0.0}
+                   for k, v in sorted(pitch_areas.items())]
+    pred = max(pitch_areas, key=pitch_areas.get) if pitch_areas else pitch
     return {
         "pin": info["pin"], "address": info["address"], "city": info["city"], "zip": info["zip"],
+        "county": info.get("county"), "county_name": info.get("county_name"),
         "stories": info["stories"], "year_built": info["year_built"],
-        "pitch": pitch, "pitch_label": f"{pitch:g}/12",
+        "pitch": pred, "pitch_label": f"{pred:g}/12" if pred else "Flat", "pitch_table": pitch_table,
+        "pitch_measured": "lidar" in methods,
         "created": time.time(),
         "roof_sqft": round(area), "plan_sqft": round(plan), "squares": round(area / 100, 2),
         "facets": facets, "lines": t, "derived": derived,
         "waste": waste, "suggested_waste": sw,
         "structures": out_structs,
-        "method": "lidar" if methods == {"lidar"} else ("partial" if "lidar" in methods else "outline_only"),
-        "sources": {"lidar": "Douglas County 2022 QL1 LiDAR", "outlines": "Douglas County 2022 building footprints",
-                    "imagery": "Douglas County 2025 orthoimagery"},
+        "method": "lidar" if methods == {"lidar"} else ("partial" if methods & {"lidar", "lidar_grid"} else "outline_only"),
+        "sources": {"lidar": (m.c.get("lidar") or {}).get("source"), "outlines": m.c["buildings"].get("source"),
+                    "imagery": m.c["imagery"].get("source"),
+                    "lidar_year": (m.c.get("lidar") or {}).get("year")},
         "aerial_jpg": _aerial(m, chosen),
         "line_labels": LINE_LABELS,
     }

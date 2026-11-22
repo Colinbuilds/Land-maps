@@ -21,6 +21,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
 from shapely.geometry import box, LineString, MultiLineString, Point, Polygon, shape
+from shapely.ops import transform as shp_transform
 from shapely.ops import unary_union
 
 from .counties import get_county
@@ -92,24 +93,85 @@ class _BlockCache:
         return out
 
 
+def _split_situs(addr: str, city=None, zip_=None) -> dict:
+    """Split a one-line situs address into street / city / ZIP.
+    "21200 SW 72ND ST, CRETE, NE, 68368" (commas), "1101 FENWICK ST  PAPILLION NE 68046"
+    (two spaces before the city), "16920 6TH AVE PLATTSMOUTH NE 68048" (city known)."""
+    import re
+    addr = re.sub(r"\s+$", "", addr)
+    m = re.match(r"^(.*?)\s+NE[,\s]+(\d{5})(?:-\d{4})?$", addr.replace(",", " ").strip()) if "," not in addr else None
+    if "," in addr:
+        parts = [p.strip() for p in addr.split(",") if p.strip()]
+        zip_m = next((p for p in parts if re.fullmatch(r"\d{5}(-\d{4})?", p)), None)
+        parts = [p for p in parts if p not in ("NE", zip_m)]
+        street = ", ".join(p for p in parts[:-1]) if len(parts) > 1 else parts[0]
+        return {"address": street, "city": city or (parts[-1].title() if len(parts) > 1 else None),
+                "zip": zip_ or (zip_m[:5] if zip_m else None)}
+    if m:
+        head, z = m.group(1), m.group(2)
+        if city and head.upper().endswith(str(city).upper()):
+            return {"address": head[: -len(city)].strip(), "city": city, "zip": zip_ or z}
+        if "  " in head:
+            street, c = head.rsplit("  ", 1)
+            return {"address": street.strip(), "city": city or c.strip(), "zip": zip_ or z}
+        return {"address": head.strip(), "city": city, "zip": zip_ or z}
+    return {"address": addr.strip(), "city": city, "zip": zip_}
+
+
 class Measurer:
     def __init__(self, county_id: str | None = None):
         self.c = get_county(county_id)
+        self.cid = self.c["id"]
         self.proj = Projector(self.c["crs"])
-        pf = self.c["parcels"]["fields"]
-        self.pf = pf
-        self.parcels = _BlockCache(self.c["parcels"]["url"], f"OBJECTID,{pf['pin']}")
-        self.buildings = _BlockCache(self.c["buildings"]["url"], "objectid")
-        self.pavement = ChunkedPolygonLayer(self.c["pavement"]["url"], self.proj)
-        self.lidar = LidarSource(self.c["lidar"]) if self.c.get("lidar") else None
+        pc = self.c["parcels"]
+        self.pf = {k: (v[0] if isinstance(v, tuple) else v) for k, v in pc["fields"].items()}
+        self._mult = {k: v[1] for k, v in pc["fields"].items() if isinstance(v, tuple)}
+        oid = pc.get("oid", "OBJECTID")
+        self.parcels = _BlockCache(pc["url"], f"{oid},{self.pf['pin']}")
+        b = self.c["buildings"]
+        bfields = ",".join(x for x in (b.get("oid", "objectid"), b.get("height_field")) if x)
+        self.buildings = _BlockCache(b["url"], bfields)
+        pv = self.c.get("pavement")
+        self.pavement = ChunkedPolygonLayer(pv["url"], self.proj) if pv else None
+        st = self.c.get("streets")
+        self.streets = _BlockCache(st["url"], "OBJECTID") if st and not pv else None
+        lc = self.c.get("lidar")
+        if not lc:
+            self.lidar = None
+        elif lc.get("type") == "ept":
+            from .lidar import EptLidar
+            self.lidar = EptLidar(lc, self.c["crs"], footprints_fn=self._footprints_las)
+        else:
+            self.lidar = LidarSource(lc)
+
+    def _footprints_las(self, env_wgs):
+        """Building outlines in an area, in LiDAR CRS feet (for alignment)."""
+        out = []
+        for f in self.buildings.query(env_wgs):
+            g = f["geometry"]
+            if g is not None and not g.is_empty:
+                out.append(shp_transform(lambda x, y, z=None: self.lidar.to_las.transform(x, y), g).buffer(0))
+        return out
 
     # ------------------------------------------------------------------ data
     def parcel_attrs(self, a: dict) -> dict:
-        pf = self.pf
-        return {k: a.get(v) for k, v in pf.items()}
+        out = {}
+        for k, field in self.pf.items():
+            v = a.get(field) if field else None
+            if v is not None and k in self._mult:
+                try:
+                    v = float(v) * self._mult[k]
+                except (TypeError, ValueError):
+                    v = None
+            out[k] = v
+        if self.c["parcels"].get("address_has_city_zip") and out.get("address"):
+            out.update(_split_situs(str(out["address"]), out.get("city"), out.get("zip")))
+        if out.get("address"):
+            out["address"] = str(out["address"]).strip()
+        return out
 
     def get_parcel(self, pin: str) -> dict | None:
-        pin = "".join(ch for ch in pin if ch.isalnum())
+        pin = "".join(ch for ch in str(pin) if ch.isalnum() or ch in "-.")
         feats = query_features(self.c["parcels"]["url"], where=f"{self.pf['pin']}='{pin}'")
         return feats[0] if feats else None
 
@@ -130,8 +192,11 @@ class Measurer:
             return None
         if smp is None:
             return None
-        return _lidar_masks(smp["obj"], smp["veg"], smp["gnd"], ft_px, ft_px * ft_px,
-                            inten=smp.get("inten"), bldg=bldg_m)
+        struct, bed, canopy = _lidar_masks(smp["obj"], smp["veg"], smp["gnd"], ft_px, ft_px * ft_px,
+                                           inten=smp.get("inten"), bldg=bldg_m)
+        if smp.get("sparse"):  # USGS data: only keep solid, deck-sized objects
+            struct = _drop_small(struct, 30.0 / (ft_px * ft_px))
+        return struct, bed, canopy
 
     # --------------------------------------------------------------- measure
     def measure(self, parcel_feature: dict, want_overlay: bool = False) -> dict:
@@ -152,7 +217,20 @@ class Measurer:
         N = unary_union(neigh) if neigh else None
         bldgs = [self.proj.to_local(f["geometry"]).buffer(0) for f in self.buildings.query(env)]
         B = unary_union([b for b in bldgs if b.intersects(ctx_box)]) if bldgs else None
-        pave = self.pavement.get_local(env, ctx_box)
+        street_lines = None
+        if self.pavement:
+            pave = self.pavement.get_local(env, ctx_box)
+        elif self.streets:
+            hw = float(self.c["streets"].get("half_width_ft", 15.0))
+            lines = [self.proj.to_local(f["geometry"]) for f in self.streets.query(env)]
+            lines = [g for g in lines if g.intersects(ctx_box.buffer(hw))]
+            street_lines = [g.intersection(ctx_box.buffer(5)) for g in lines]
+            pave = [g.buffer(hw, cap_style=2).intersection(ctx_box) for g in lines]
+            pave = [g for g in pave if not g.is_empty]
+        else:
+            pave = []
+        if self.pavement or not self.streets:
+            street_lines = None
         V = unary_union(pave) if pave else None
 
         row = ctx_box.difference(P)
@@ -185,6 +263,29 @@ class Measurer:
 
         hard = classify_hard(mos.rgb)
         hard &= ~bldg_m
+        if not self.pavement and street_lines:
+            # No edge-of-pavement layer: the street is the paving outside the
+            # lots that connects to a street centreline (handles wide
+            # arterials and cul-de-sac bulbs a fixed width can't).
+            centre = to_mask(unary_union(street_lines).buffer(4.0))
+            outside = hard & ~parcel_m
+            if N is not None:
+                outside &= ~to_mask(N)
+            lab, nl = ndi.label(outside)
+            if nl:
+                keep = np.unique(lab[centre & outside])
+                keep = keep[keep > 0]
+                if len(keep):
+                    road = np.isin(lab, keep)
+                    # keep only street-width paving: sidewalks and aprons
+                    # (< ~7 ft wide) hang off the street but aren't street
+                    k = max(1, int(round(3.5 / ft_px)))
+                    road = ndi.binary_opening(road, iterations=k)
+                    lab2, n2 = ndi.label(road)
+                    if n2:
+                        keep2 = np.unique(lab2[centre & road])
+                        road = np.isin(lab2, keep2[keep2 > 0])
+                    pave_m = ndi.binary_dilation(road, iterations=2) | pave_m
 
         def px_of(pt_local):
             lon, lat = self.proj.inv.transform(pt_local.x, pt_local.y)
@@ -200,6 +301,7 @@ class Measurer:
         # -------------------------------------------------- sidewalk stations
         step = 2.0
         stations = []  # (point, outward normal, dist_to_pavement, run_start, run_end)
+        out_hard = []  # per station: feet of paving seen beyond the lot line
         for seg in frontage:
             n_st = max(1, int(seg.length // step))
             for i in range(n_st):
@@ -215,6 +317,12 @@ class Measurer:
                 if not row.contains(Point(p.x + nx * 4, p.y + ny * 4)):
                     continue  # a sliver between neighbouring lot lines, not a street
                 dist_pave = V.distance(p) if V is not None else 0.0
+                if not self.pavement and V is not None:
+                    # walk out to where the (photo-detected) street starts
+                    for o in np.arange(0.5, 60.0, 0.5):
+                        if sample(pave_m, Point(p.x + nx * o, p.y + ny * o)):
+                            dist_pave = float(o)
+                            break
                 reach = min(max(dist_pave, 0.0), 30.0)
                 # walk from 8 ft inside the lot out to the curb
                 offs = np.arange(-8.0, reach + 0.01, 0.5)
@@ -224,6 +332,8 @@ class Measurer:
                 if run:
                     rs, re = offs[run[0]], offs[run[1]]
                 stations.append((p, (nx, ny), dist_pave, rs, re))
+                # visible paving between the lot line and the street (apron)
+                out_hard.append(0.5 * sum(1 for o, v in zip(offs, vals) if v and o > 0))
 
         if frontage:
             frontage_ft = len(stations) * step
@@ -243,6 +353,21 @@ class Measurer:
         sw_band_m = np.zeros(hard.shape, bool)
         if sw_inside and frontage:
             sw_band_m = to_mask(unary_union(frontage).buffer(sw_w + 1.5).intersection(P))
+        # Station by station: a walk/trail strip just inside the lot line (a
+        # 2.5-10 ft run of paving that ends near the line) is a sidewalk, not
+        # the start of a driveway, even where other sides have it outside.
+        strips = []
+        for p, (nx, ny), _, rs, re in stations:
+            # must have lawn on its inner side (rs > -7.5): a driveway runs
+            # on past the 8-ft look-in window and is not a strip
+            if rs is None or not (-7.5 < rs < -1.0 and re <= 1.5 and 2.5 <= re - rs <= 10):
+                continue
+            tx, ty = -ny * step * 0.6, nx * step * 0.6
+            a0, a1 = rs - 0.5, re + 0.5
+            strips.append(Polygon([(p.x - tx + nx * a0, p.y - ty + ny * a0), (p.x + tx + nx * a0, p.y + ty + ny * a0),
+                                   (p.x + tx + nx * a1, p.y + ty + ny * a1), (p.x - tx + nx * a1, p.y - ty + ny * a1)]))
+        if len(strips) >= 4:  # a real strip runs along the line, not one spot
+            sw_band_m |= to_mask(unary_union(strips).intersection(P))
 
         # ------------------------------------------------------------ driveway
         lot_hard = hard & parcel_m & ~sw_band_m
@@ -278,11 +403,13 @@ class Measurer:
         # apron: driveway width at the lot line x distance to curb (minus walk)
         apron_sqft = 0.0
         if drive_m.any() and V is not None:
-            for p, (nx, ny), dist_pave, _, _ in stations:
+            for si, (p, (nx, ny), dist_pave, _, _) in enumerate(stations):
                 inside = Point(p.x - nx * 1.5, p.y - ny * 1.5)
                 if sample(drive_m, inside):
                     gap = min(dist_pave, 30.0) - (0 if sw_inside or not sw_stations else sw_w)
-                    apron_sqft += max(0.0, gap) * step
+                    # never more than the paving actually visible out to the street
+                    seen = out_hard[si] if si < len(out_hard) else gap
+                    apron_sqft += max(0.0, min(gap, seen)) * step
         driveway_sqft = drive_lot_sqft + apron_sqft
         driveway_method = "imagery"
         if driveway_sqft < 120 and building_in is not None and not building_in.is_empty and V is not None and frontage:
@@ -321,7 +448,8 @@ class Measurer:
         if driveway_method == "estimated":
             est_cut = est_in_lot
         # hand corrections saved by the business for this property
-        corr = corrections.get(pin)
+        from .counties import DEFAULT_COUNTY
+        corr = corrections.get(f"{self.cid}:{pin}") or (corrections.get(pin) if self.cid == DEFAULT_COUNTY else None)
         if corr:
             for g in corr.get("exclude", []):
                 lawn_m &= ~mos.rasterize(shape(g))
@@ -354,6 +482,7 @@ class Measurer:
 
         result = {
             "pin": pin,
+            "pid": f"{self.cid}:{pin}",
             "address": (attrs.get("address") or "").strip(),
             "city": attrs.get("city"),
             "zip": attrs.get("zip"),
@@ -380,6 +509,9 @@ class Measurer:
                 "sidewalk_detected": bool(sw_stations),
                 "driveway_method": driveway_method,
                 "lidar_year": self.c["lidar"]["year"] if lid is not None else None,
+                "lidar_source": self.c["lidar"].get("source") if lid is not None else None,
+                "imagery_source": img.get("source"),
+                "county": self.cid,
                 "corrected": bool(corr),
             },
         }
@@ -437,18 +569,38 @@ def _lidar_masks(obj, veg, gnd, ft_px, sqft_px, inten=None, bldg=None):
 
 
 
-def classify_hard(rgb: np.ndarray) -> np.ndarray:
-    """Pixel classifier for paved / concrete surfaces on leaf-off imagery.
+def _otsu(v: np.ndarray, bins: int = 64) -> float:
+    hist, edges = np.histogram(v, bins=bins)
+    p = hist / max(hist.sum(), 1)
+    w = np.cumsum(p)
+    mu = np.cumsum(p * (edges[:-1] + edges[1:]) / 2)
+    between = (mu[-1] * w - mu) ** 2 / np.maximum(w * (1 - w), 1e-9)
+    return float((edges[:-1] + edges[1:])[np.argmax(between)] / 2)
 
-    Concrete and asphalt are near-neutral grey; dormant lawn, mulch and soil are
-    noticeably saturated (tan/brown/green). Shadowed concrete is darker but
-    stays neutral, while shadowed grass gets *more* saturated.
+
+def classify_hard(rgb: np.ndarray) -> np.ndarray:
+    """Pixel classifier for paved / concrete surfaces.
+
+    Concrete and asphalt are near-neutral grey; grass (dormant or green),
+    mulch and soil always have less blue than red/green. Photos differ a lot
+    by county and season (tan leaf-off Douglas vs washed-out Lincoln), so the
+    cut-off on that "blue deficit" is picked per photo (Otsu's method),
+    within sane limits. On strongly coloured leaf-off photos this agrees with
+    the original fixed saturation rule.
     """
     sm = ndi.uniform_filter(rgb, size=(3, 3, 1))
     mx = sm.max(-1)
     mn = sm.min(-1)
     sat = (mx - mn) / (mx + 1e-6)
-    hard = ((sat < 0.27) & (mx > 0.42)) | ((sat < 0.20) & (mx > 0.18))
+    if np.median(sat) > 0.25:
+        # vivid leaf-off photo (Douglas 2025): original, field-checked rule
+        hard = ((sat < 0.27) & (mx > 0.42)) | ((sat < 0.20) & (mx > 0.18))
+    else:
+        y = ((sm[..., 0] + sm[..., 1]) / 2 - sm[..., 2]) / (mx + 1e-6)
+        valid = mx > 0.15
+        t = _otsu(y[valid][:: max(1, valid.sum() // 200000)]) if valid.any() else 0.15
+        t = float(np.clip(t, 0.06, 0.25))
+        hard = (y < t) & (sat < 0.30) & (mx > 0.18)
     hard = ndi.binary_opening(hard, iterations=2)
     hard = ndi.binary_closing(hard, iterations=3)
     hard = ndi.binary_fill_holes(hard)  # parked cars
@@ -592,13 +744,18 @@ def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, front
     }
 
 
-_default: Measurer | None = None
+_measurers: dict = {}
 _default_lock = threading.Lock()
 
 
-def default_measurer() -> Measurer:
-    global _default
+def measurer_for(county_id: str | None = None) -> Measurer:
+    from .counties import DEFAULT_COUNTY
+    cid = county_id or DEFAULT_COUNTY
     with _default_lock:
-        if _default is None:
-            _default = Measurer()
-        return _default
+        if cid not in _measurers:
+            _measurers[cid] = Measurer(cid)
+        return _measurers[cid]
+
+
+def default_measurer() -> Measurer:
+    return measurer_for(None)

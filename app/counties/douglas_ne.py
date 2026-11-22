@@ -6,6 +6,7 @@ _DCGIS = "https://dcgis.org/server/rest/services"
 COUNTY = {
     "id": "douglas_ne",
     "name": "Douglas County, NE",
+    "fips": "31055",
     # Local projected CRS used for all area/length maths (NAD83 / Nebraska, US feet).
     "crs": "EPSG:26852",
     "center": [41.2565, -96.0],
@@ -27,9 +28,13 @@ COUNTY = {
             "year_built": "BLDG_YRBLT",
         },
         "max_records": 2000,
+        "oid": "OBJECTID",
+        # property type -> where clause (bulk runs)
+        "classes": {"R": "CLASS='R'", "C": "CLASS='C'", "I": "CLASS='I'", "A": "CLASS='A'", "E": "CLASS='E'"},
     },
     # 2022 building footprints (planimetric, roof outlines).
-    "buildings": {"url": f"{_DCGIS}/Hosted/2022_Building_Footprints/FeatureServer/0"},
+    "buildings": {"source": "Douglas County 2022 building footprints", "url": f"{_DCGIS}/Hosted/2022_Building_Footprints/FeatureServer/0", "oid": "objectid",
+                  "height_field": "eaveheight", "height_units": "ft"},
     # 2022 LiDAR edge-of-pavement (streets / public pavement only).
     "pavement": {"url": f"{_DCGIS}/Hosted/Pavement_2022/FeatureServer/0"},
     # Street segments the city has flagged as having no sidewalk.
@@ -38,13 +43,16 @@ COUNTY = {
     "imagery": {
         "tile_url": f"{_DCGIS}/2025_Douglas_County_NE_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}",
         "year": 2025,
+        "source": "Douglas County 2025 orthoimagery",
         "zoom": 20,
         "max_zoom": 22,
     },
     # 2022 QL1 classified LiDAR point cloud (public S3), used to find decks,
     # sheds, play sets, trampolines and shrub beds so they're kept out of the lawn.
     "lidar": {
+        "type": "tiles",
         "year": 2022,
+        "source": "Douglas County 2022 QL1 LiDAR",
         "index_url": f"{_DCGIS}/Hosted/Douglas_County_NE_LiDAR_Tiles_view/FeatureServer/4",
         "las_field": "las_tile",
         "las_base_url": "https://dcgis-lidar.s3.amazonaws.com/2022/Point_Cloud/Classified/",

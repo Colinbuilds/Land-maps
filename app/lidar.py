@@ -100,7 +100,8 @@ class LidarSource:
             if las_name in _mem:
                 return _mem[las_name]
             path = _LIDAR_DIR / (las_name.rsplit(".", 1)[0] + ".npz")
-            if not path.exists():
+            bld = _LIDAR_DIR / (las_name.rsplit(".", 1)[0] + "_bld.npz")
+            if not path.exists() or not bld.exists():
                 with _build_sem:
                     if not _build(self.cfg["las_base_url"] + las_name, path):
                         return None
@@ -110,6 +111,32 @@ class LidarSource:
                 _mem.pop(next(iter(_mem)))
             _mem[las_name] = t
             return t
+
+    def building_points(self, env_wgs, bounds_las) -> np.ndarray:
+        """Raw building-class LiDAR points (x, y, z in LAS feet) inside a
+        LAS-CRS bounding box. Used to fit roof planes precisely."""
+        minx, miny, maxx, maxy = bounds_las
+        out = []
+        for n in self.tiles_for(env_wgs):
+            if self.tile(n) is None:
+                continue
+            key = n + "#bld"
+            if key not in _mem:
+                p = _LIDAR_DIR / (n.rsplit(".", 1)[0] + "_bld.npz")
+                if not p.exists():
+                    continue
+                z = np.load(p)
+                _mem[key] = {"xyz": z["xyz"], "x0": float(z["x0"]), "y0": float(z["y0"])}
+                if len(_mem) >= _MEM_MAX * 2:
+                    _mem.pop(next(iter(_mem)))
+            t = _mem[key]
+            xyz = t["xyz"]
+            x = xyz[:, 0].astype(np.float64) + t["x0"]
+            y = xyz[:, 1].astype(np.float64) + t["y0"]
+            m = (x >= minx) & (x <= maxx) & (y >= miny) & (y <= maxy)
+            if m.any():
+                out.append(np.column_stack([x[m], y[m], xyz[m, 2].astype(np.float64)]))
+        return np.vstack(out) if out else np.zeros((0, 3))
 
     def sample(self, env_wgs, xs_las: np.ndarray, ys_las: np.ndarray) -> dict | None:
         """Sample obj/veg/gnd at LAS-CRS coordinates (arrays of any shape)."""
@@ -185,6 +212,7 @@ def _build(url: str, out_path) -> bool:
         # pass 2: heights above ground
         obj = np.full(n, -1.0)
         veg = np.full(n, -1.0)
+        bpts = []
         with laspy.open(tmp) as f:
             for pts in f.chunk_iterator(2_000_000):
                 c = np.asarray(pts.classification)
@@ -194,6 +222,10 @@ def _build(url: str, out_path) -> bool:
                 np.maximum.at(obj, li[m], h[m])
                 m = np.isin(c, VEG_CLASSES)
                 np.maximum.at(veg, li[m], h[m])
+                b = c == 6  # building: keep raw points for roof planes
+                if b.any():
+                    bpts.append(np.column_stack([np.asarray(pts.x)[b] - x0, np.asarray(pts.y)[b] - mins[1],
+                                                 np.asarray(pts.z)[b]]).astype(np.float32))
         np.savez_compressed(
             out_path,
             obj=obj.reshape(H, W).astype(np.float16),
@@ -203,9 +235,181 @@ def _build(url: str, out_path) -> bool:
             inten=np.clip(np.where(gcnt > 0, isum / np.maximum(gcnt, 1) / 256.0, 0), 0, 255).reshape(H, W).astype(np.uint8),
             x0=x0, y1=y1, cell=cell,
         )
+        bld_path = str(out_path).replace(".npz", "_bld.npz")
+        np.savez_compressed(bld_path, xyz=np.vstack(bpts) if bpts else np.zeros((0, 3), np.float32),
+                            x0=x0, y0=float(mins[1]))
         return True
     finally:
         try:
             os.remove(tmp)
         except OSError:
             pass
+
+
+class EptLidar:
+    """USGS 3DEP LiDAR (EPT on public S3) behind the same interface as the
+    county tile source: ``sample()`` height rasters for yards and
+    ``building_points()`` for roofs, in the county's survey feet.
+
+    3DEP classifies only ground (2) and "unclassified" (1), so:
+      * roof / structure points = unclassified, single-return, above ground
+      * vegetation = unclassified points from multi-return pulses
+    The point cloud and the county's own maps can disagree by a few feet
+    (datum handling), so the offset is measured per neighbourhood by sliding
+    the roof points onto the county building outlines.
+    """
+
+    def __init__(self, cfg: dict, crs: str, footprints_fn=None):
+        from pyproj import Transformer
+        from .ept import EptProject
+        self.cfg = cfg
+        urls = cfg.get("urls") or [cfg["url"]]
+        self.projects = [EptProject(u) for u in urls]
+        self._fwd = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+        self._inv = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+        self._3857_to_las = Transformer.from_crs("EPSG:3857", crs, always_xy=True)
+        self._wgs_to_3857 = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+        self.to_las = _Shifted(self._fwd, 0.0, 0.0, True)
+        self.from_las = _Shifted(self._inv, 0.0, 0.0, False)
+        self.footprints_fn = footprints_fn
+        self._cache: dict = {}
+        self._offsets: dict = {}
+        self.datum_shift_ft = (0.0, 0.0)
+
+    # ------------------------------------------------------------- raw points
+    def _raw(self, env_wgs, pad_m: float = 6.0):
+        """Points in a WGS84 box, in county feet (x, y, z) + class/returns."""
+        key = tuple(round(v, 5) for v in env_wgs)
+        if key in self._cache:
+            return self._cache[key]
+        x0, y0 = self._wgs_to_3857.transform(env_wgs[0], env_wgs[1])
+        x1, y1 = self._wgs_to_3857.transform(env_wgs[2], env_wgs[3])
+        parts = [p.points((x0 - pad_m, y0 - pad_m, x1 + pad_m, y1 + pad_m)) for p in self.projects if p.ok]
+        parts = [q for q in parts if len(q["x"])]
+        if not parts:
+            return None
+        r = {k: np.concatenate([q[k] for q in parts]) for k in parts[0]}
+        X, Y = self._3857_to_las.transform(r["x"], r["y"])
+        r["x"], r["y"] = np.asarray(X), np.asarray(Y)
+        r["z"] = r["z"] / 0.3048006096  # metres -> US survey feet
+        dx, dy = self._offset(env_wgs, r)
+        r["x"] = r["x"] + dx
+        r["y"] = r["y"] + dy
+        if len(self._cache) > 16:
+            self._cache.pop(next(iter(self._cache)))
+        self._cache[key] = r
+        return r
+
+    def _ground_z(self, r, xs, ys):
+        g = r["cls"] == 2
+        if g.sum() < 3:
+            return np.full(np.shape(xs), np.nan)
+        from scipy.spatial import cKDTree
+        t = cKDTree(np.column_stack([r["x"][g], r["y"][g]]))
+        d, i = t.query(np.column_stack([np.ravel(xs), np.ravel(ys)]), k=min(6, int(g.sum())))
+        z = r["z"][g][i]
+        return np.median(z, axis=1).reshape(np.shape(xs))
+
+    def _offset(self, env_wgs, r):
+        """Shift (ft) that best puts above-ground single-return points inside
+        the county building outlines. Cached per ~0.02 deg cell."""
+        c = ((env_wgs[0] + env_wgs[2]) / 2, (env_wgs[1] + env_wgs[3]) / 2)
+        cell = (round(c[0] / 0.02), round(c[1] / 0.02))
+        if cell in self._offsets:
+            return self._offsets[cell]
+        best = (0.0, 0.0)
+        try:
+            polys = self.footprints_fn(env_wgs) if self.footprints_fn else []
+            if polys:
+                import shapely
+                from shapely.ops import unary_union
+                fp = unary_union(polys)
+                h = r["z"] - self._ground_z(r, r["x"], r["y"])
+                m = (r["cls"] != 2) & (r["nret"] <= 1) & (h > 8)
+                px, py = r["x"][m], r["y"][m]
+                if len(px) > 50:
+                    def score(dx, dy):
+                        return shapely.contains_xy(fp, px + dx, py + dy).mean()
+                    top = (score(0, 0), 0.0, 0.0)
+                    for dx in np.arange(-14, 14.01, 1.0):
+                        for dy in np.arange(-14, 14.01, 1.0):
+                            s_ = score(dx, dy)
+                            if s_ > top[0]:
+                                top = (s_, dx, dy)
+                    _, bx, by = top
+                    for dx in np.arange(bx - 1, bx + 1.01, 0.25):
+                        for dy in np.arange(by - 1, by + 1.01, 0.25):
+                            s_ = score(dx, dy)
+                            if s_ > top[0]:
+                                top = (s_, dx, dy)
+                    best = (float(top[1]), float(top[2]))
+        except Exception:
+            pass
+        self._offsets[cell] = best
+        self.datum_shift_ft = best
+        return best
+
+    # ------------------------------------------------------------ interface
+    def building_points(self, env_wgs, bounds_las) -> np.ndarray:
+        r = self._raw(env_wgs)
+        if r is None:
+            return np.zeros((0, 3))
+        minx, miny, maxx, maxy = bounds_las
+        m = (r["x"] >= minx) & (r["x"] <= maxx) & (r["y"] >= miny) & (r["y"] <= maxy) & (r["cls"] != 2)
+        if (r["cls"] == 6).any():
+            m &= r["cls"] == 6
+        else:
+            h = r["z"] - self._ground_z(r, r["x"], r["y"])
+            m &= (h > 6) & (r["nret"] <= 1) & (r["cls"] != 7) & (r["cls"] < 17)
+        return np.column_stack([r["x"][m], r["y"][m], r["z"][m]])
+
+    def sample(self, env_wgs, xs_las: np.ndarray, ys_las: np.ndarray) -> dict | None:
+        """obj / veg heights and ground density, sampled at LAS-CRS points
+        (same contract as the county tile source). USGS data is sparse
+        (a point every 1.5-3 ft), so the grid is 2 ft, the ground comes from
+        the nearest ground returns, and anything under 1.5 ft is ground noise."""
+        from scipy.spatial import cKDTree
+        r = self._raw(env_wgs)
+        if r is None or len(r["x"]) < 50:
+            return None
+        cell = 2.0
+        x0, y1 = np.floor(xs_las.min()) - 4, np.ceil(ys_las.max()) + 4
+        W = int(np.ceil((xs_las.max() - x0) / cell)) + 4
+        H = int(np.ceil((y1 - ys_las.min()) / cell)) + 4
+        g = r["cls"] == 2
+        if g.sum() < 10:
+            return None
+        cx = x0 + (np.arange(W) + 0.5) * cell
+        cy = y1 - (np.arange(H) + 0.5) * cell
+        CX, CY = np.meshgrid(cx, cy)
+        t = cKDTree(np.column_stack([r["x"][g], r["y"][g]]))
+        _, gi = t.query(np.column_stack([CX.ravel(), CY.ravel()]), k=min(6, int(g.sum())))
+        gz = np.median(r["z"][g][gi], axis=1)  # (H*W,)
+        ci = np.clip(((r["x"] - x0) / cell).astype(int), 0, W - 1)
+        ri = np.clip(((y1 - r["y"]) / cell).astype(int), 0, H - 1)
+        lin = ri * W + ci
+        n = W * H
+        h = r["z"] - gz[lin]
+        nong = ~g & (r["cls"] != 7) & (r["cls"] < 17) & (h > 1.5)
+        single = nong & (r["nret"] <= 1)
+        multi = nong & (r["nret"] > 1)
+        obj = np.full(n, -1.0)
+        veg = np.full(n, -1.0)
+        np.maximum.at(obj, lin[single], h[single])
+        np.maximum.at(veg, lin[multi], h[multi])
+        gc = np.bincount(lin[g], None, n).reshape(H, W)
+        gnd = np.clip(ndi.uniform_filter(gc.astype(float), 5) * 25, 0, 255)  # ground hits within ~10 ft
+        obj, veg = obj.reshape(H, W), veg.reshape(H, W)
+        c = np.floor((xs_las - x0) / cell).astype(int)
+        rr = np.floor((y1 - ys_las) / cell).astype(int)
+        ok = (c >= 0) & (c < W) & (rr >= 0) & (rr < H)
+        out = {"obj": np.full(xs_las.shape, -1.0, np.float32), "veg": np.full(xs_las.shape, -1.0, np.float32),
+               "gnd": np.zeros(xs_las.shape, np.int16), "inten": None, "covered": ok, "sparse": True}
+        # bare winter branches often give a single return and look solid:
+        # anything within ~3 ft of a multi-return (tree) hit is tree, not deck
+        treeish = ndi.binary_dilation(veg > 2.0, iterations=2)
+        obj = np.where(treeish & (obj < 12), -1.0, obj)
+        out["obj"][ok] = obj[rr[ok], c[ok]]
+        out["veg"][ok] = veg[rr[ok], c[ok]]
+        out["gnd"][ok] = gnd[rr[ok], c[ok]]
+        return out

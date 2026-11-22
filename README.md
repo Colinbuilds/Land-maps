@@ -52,6 +52,36 @@ LiDAR tiles (~180 MB each, about 1,500 × 1,500 ft, roughly 150 homes) are downl
 - Flat mulch beds away from the house, with no shrubs, read as grass. Dormant grass and mulch are the same colour in March imagery.
 - Pool covers that aren't blue or green aren't detected.
 
+## Counties covered
+
+One map covers Douglas, Sarpy, Lancaster and Cass counties. Each property is sent to its county by location, using Census TIGER county boundaries. Property ids are `county:parcel`, e.g. `sarpy_ne:011589990`. A bare parcel number means Douglas, so older links and saved data keep working.
+
+| County | Parcels | Building outlines | Photo | LiDAR | Street edge |
+|---|---|---|---|---|---|
+| Douglas | DOGIS | County 2022 | County 2025 | County 2022 QL1 | County 2022 pavement |
+| Sarpy | Sarpy GIS | County | County 2026 | USGS 3DEP 2016 | Centerlines + photo |
+| Lancaster | Lincoln-Lancaster GIS | FEMA/ORNL USA Structures | Lincoln-Lancaster 2026 | USGS 3DEP 2016 | Centerlines + photo |
+| Cass | Cass County GIS | FEMA/ORNL USA Structures | Esri World Imagery | USGS 3DEP 2018 | Centerlines + photo |
+
+**How the pieces fit:**
+- **Address search** uses the Esri World Geocoder, limited to the four-county area.
+- **The map** uses Esri World Imagery as the base everywhere, with each county's own photos on top inside that county.
+- **USGS 3DEP LiDAR** is read straight from the public AWS bucket (Entwine Point Tiles). Only the octree nodes covering a property are downloaded, then cached.
+  - It labels only ground and "unclassified", so roof and structure points are unclassified single returns above ground, and trees are multi-return hits.
+  - The offset between the point cloud and the county maps is measured per neighbourhood by sliding roof points onto the building outlines.
+  - The plane finder adapts to the lower point density.
+- **The grass vs. paving cutoff** is picked per photo (Otsu's method on a "blue deficit" index), because photos differ by county and season.
+- **Street edge:** without a pavement layer, the street is the paving outside the lots that connects to a street centreline, with anything narrower than ~7 ft (sidewalks, aprons) removed.
+- **Bulk ZIP runs** use the Census ZIP Code Tabulation Area polygon and measure every parcel inside it, whichever counties it touches.
+
+**Known limits outside Douglas:**
+- The LiDAR is older (2016/2018), so decks or pools added or removed since then can be off. Use *Fix this yard*.
+- National building outlines are rougher than county ones. Check the roof outline with *Adjust outline*.
+- Sidewalk detection is less reliable where sidewalks hug the lot line.
+- Cass uses Esri World Imagery, which is lower resolution than the county photos.
+
+To add a county, copy a file in `app/counties/`, point it at that county's services, and register it in `app/counties/__init__.py`.
+
 ## Roof measurement reports
 
 Roofing companies buy credits from you. They log in at **`/roof`**, type an address, check which buildings to include, and get a roof report in seconds. Each report uses 1 credit.

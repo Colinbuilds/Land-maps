@@ -40,11 +40,20 @@ const MEASURE_COLORS = {
 };
 
 function makeMap(el, cfg) {
-  const map = L.map(el, { zoomControl: true, maxZoom: 22 }).setView(cfg.county.center, 12);
-  L.tileLayer(cfg.imagery.tile_url, {
-    maxNativeZoom: Math.min(cfg.imagery.max_native_zoom || 21, 21), maxZoom: 22,
-    attribution: `${esc(cfg.county.name)} ${cfg.imagery.year} imagery (DOGIS)`,
-  }).addTo(map);
+  // Whole-region basemap, with each county's own (sharper, newer) photos
+  // layered on top inside that county.
+  const map = L.map(el, { zoomControl: true, maxZoom: 22 });
+  const base = cfg.basemap || { tile_url: cfg.imagery.tile_url, max_native_zoom: cfg.imagery.max_native_zoom || 19 };
+  L.tileLayer(base.tile_url, { maxNativeZoom: base.max_native_zoom || 19, maxZoom: 22,
+    attribution: base.attribution || "" }).addTo(map);
+  (cfg.imagery_layers || []).forEach((l) => {
+    L.tileLayer(l.tile_url, {
+      bounds: l.bounds, maxNativeZoom: l.max_native_zoom || 21, maxZoom: 22, minZoom: 13,
+      attribution: esc(l.source || l.name),
+    }).addTo(map);
+  });
+  if (cfg.region && cfg.region.bounds) map.fitBounds(cfg.region.bounds);
+  else map.setView(cfg.county.center, 11);
   return map;
 }
 

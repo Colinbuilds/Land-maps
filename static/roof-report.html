@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Roof Measurement Report</title>
-<link rel="stylesheet" href="/static/styles.css?v=5">
+<link rel="stylesheet" href="/static/styles.css?v=7">
 <style>
   :root { --accent: #1d4ed8; }
   header.top { background: var(--accent); color: #fff; border: 0; }
@@ -29,10 +29,10 @@
   <div class="contact" id="coContact"></div>
 </header>
 <main class="stack" id="main"><p class="muted"><span class="spinner"></span>Loading report…</p></main>
-<script src="/static/common.js?v=5"></script>
+<script src="/static/common.js?v=7"></script>
 <script>
-const COLORS = { ridge: "#dc2626", hip: "#ea580c", valley: "#2563eb", rake: "#16a34a", eave: "#a16207", step_flashing: "#9333ea" };
-const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing"];
+const COLORS = { ridge: "#dc2626", hip: "#ea580c", valley: "#2563eb", rake: "#16a34a", eave: "#a16207", step_flashing: "#9333ea", flashing: "#0891b2" };
+const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flashing"];
 (async function () {
   const rid = location.pathname.split("/")[2];
   const t = new URLSearchParams(location.search).get("t");
@@ -55,7 +55,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing"];
     </div>
     <div>
       <h1 style="margin-bottom:2px">Roof Measurement Report</h1>
-      <div class="muted">${esc(d.address)}, ${esc((d.city || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()))} NE ${esc(d.zip || "")} · Parcel ${esc(d.pin)} · Report ${esc(r.id)} · ${new Date(r.created * 1000).toLocaleDateString(undefined, { dateStyle: "long" })}</div>
+      <div class="muted">${esc(d.address)}, ${esc((d.city || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()))} NE ${esc(d.zip || "")} · Parcel ${esc(String(d.pin).split(':').pop())}${d.county_name ? ` · ${esc(d.county_name)}` : ''} · Report ${esc(r.id)} · ${new Date(r.created * 1000).toLocaleDateString(undefined, { dateStyle: "long" })}</div>
     </div>
     <div class="cover">
       <div class="card">${d.aerial_jpg ? `<img alt="Aerial photo of the property" src="data:image/jpeg;base64,${d.aerial_jpg}">` : ""}</div>
@@ -64,10 +64,10 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing"];
         <div class="big">${d.roof_sqft.toLocaleString()} sq ft</div>
         <div class="muted">${d.squares.toFixed(2)} squares · ${sug.squares.toFixed(2)} with ${sug.pct}% suggested waste</div>
         <table class="kv" style="margin-top:12px">
-          <tr><td>Pitch (all facets)</td><td>${esc(d.pitch_label)}</td></tr>
+          <tr><td>Predominant pitch</td><td>${esc(d.pitch_label)}</td></tr>
           <tr><td>Roof facets</td><td>${d.facets || "–"}</td></tr>
           <tr><td>Structures</td><td>${d.structures.length}</td></tr>
-          ${ORDER.map((k) => `<tr><td><span class="sw2" style="background:${COLORS[k]}"></span>${esc(d.line_labels[k])}</td><td>${ft(L[k])}</td></tr>`).join("")}
+          ${ORDER.map((k) => `<tr><td><span class="sw2" style="background:${COLORS[k]}"></span>${esc(d.line_labels[k])}</td><td>${ft(L[k] || 0)}</td></tr>`).join("")}
           <tr><td>Drip edge (eaves + rakes)</td><td>${ft(d.derived.drip_edge)}</td></tr>
           <tr><td>Ridge cap (ridges + hips)</td><td>${ft(d.derived.ridge_cap)}</td></tr>
         </table>
@@ -75,9 +75,9 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing"];
     </div>
     <div class="card">
       <h2>Length diagram</h2>
-      <p class="small muted" style="margin-top:-8px">True lengths in feet at ${esc(d.pitch_label)}. North is up.</p>
+      <p class="small muted" style="margin-top:-8px">True lengths in feet, using each roof plane's own pitch. North is up.</p>
       ${diagram(d)}
-      <div class="legend">${ORDER.map((k) => `<span><i class="sw2" style="background:${COLORS[k]}"></i>${esc(d.line_labels[k])} ${Math.round(L[k])}'</span>`).join("")}</div>
+      <div class="legend">${ORDER.map((k) => `<span><i class="sw2" style="background:${COLORS[k]}"></i>${esc(d.line_labels[k])} ${Math.round(L[k] || 0)}'</span>`).join("")}</div>
     </div>
     <div class="grid2">
       <div class="card">
@@ -88,11 +88,15 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing"];
         <p class="small muted">Squares are rounded up to the nearest 1/3 square (one bundle).</p>
       </div>
       <div class="card">
-        <h2>Structures</h2>
+        <h2>Areas per pitch</h2>
+        <table><thead><tr><th>Pitch</th><th class="num">Area (sq ft)</th><th class="num">% of roof</th></tr></thead><tbody>
+        ${(d.pitch_table || []).map((p) => `<tr><td>${esc(p.pitch)}</td><td class="num">${p.area.toLocaleString()}</td><td class="num">${p.pct}%</td></tr>`).join("")}
+        </tbody></table>
+        <h2 style="margin-top:16px">Structures</h2>
         <div class="tablewrap"><table><thead><tr><th>Structure</th><th class="num">Roof sq ft</th><th class="num">Facets</th><th class="num">Ridges</th><th class="num">Hips</th><th class="num">Valleys</th><th class="num">Rakes</th><th class="num">Eaves</th></tr></thead><tbody>
         ${d.structures.map((s) => `<tr><td>${esc(s.name)}</td><td class="num">${s.roof_sqft.toLocaleString()}</td><td class="num">${s.facets || "–"}</td>${["ridge", "hip", "valley", "rake", "eave"].map((k) => `<td class="num">${Math.round(s.lines[k])}</td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
-        <p class="small muted">All facets calculated at ${esc(d.pitch_label)}. Roof outlines: Douglas County 2022 building footprints. Roof planes and lines: Douglas County 2022 LiDAR. Photo: 2025 county imagery. Changes after April 2022 are not reflected. Verify on site before ordering material.</p>
+        <p class="small muted">Pitch measured per roof plane from LiDAR, rounded to the nearest 1/12. Roof outlines: ${esc(d.sources?.outlines || "county building footprints")}. Roof planes and lines: ${esc(d.sources?.lidar || "LiDAR")}. Photo: ${esc(d.sources?.imagery || "aerial imagery")}. Changes after the ${esc(d.sources?.lidar_year || "LiDAR")} scan are not reflected. Verify on site before ordering material.</p>
       </div>
     </div>`;
   document.getElementById("copy").addEventListener("click", async () => {
