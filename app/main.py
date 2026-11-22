@@ -35,6 +35,18 @@ app = FastAPI(title="Property Estimator")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@app.middleware("http")
+async def no_stale_pages(request: Request, call_next):
+    """Phones (Safari especially) keep old copies of scripts, so a new page can
+    end up running an old script. Make browsers re-check pages and scripts on
+    every load; unchanged files still come back as a cheap 304."""
+    resp = await call_next(request)
+    path = request.url.path
+    if path.startswith("/static/") or not path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 def admin(request: Request):
     if not ADMIN_TOKEN:
         return  # dev mode: open. Set ESTIMATOR_ADMIN_TOKEN in production.
