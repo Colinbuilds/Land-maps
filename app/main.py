@@ -363,9 +363,12 @@ def roof_structures(pin: str, c: dict = Depends(roof_company)):
             "structures": [{k: v for k, v in s.items() if k != "geometry_las"} for s in info["structures"]]}
 
 
+
 class RoofOrder(BaseModel):
     pin: str = Field(max_length=20)
     structure_ids: list[int] | None = None
+    # structure id -> GeoJSON Polygon the roofer adjusted on the photo
+    edited: dict[str, dict] | None = None
 
 
 @app.post("/api/roof/report")
@@ -373,9 +376,14 @@ def roof_order(body: RoofOrder, c: dict = Depends(roof_company)):
     if not accounts.has_credit(c["id"]):
         raise HTTPException(402, "You're out of report credits.")
     try:
-        rep = roofreport.build_report(body.pin, body.structure_ids)
+        for gj in (body.edited or {}).values():
+            if gj.get("type") != "Polygon" or len(json.dumps(gj)) > 50000:
+                raise HTTPException(400, "edited outlines must be GeoJSON polygons")
+        rep = roofreport.build_report(body.pin, body.structure_ids, edited=body.edited)
     except LookupError as e:
         raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     try:
         rid = accounts.spend_and_save(c["id"], rep)
     except PermissionError:

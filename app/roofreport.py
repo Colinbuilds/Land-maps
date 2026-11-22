@@ -25,9 +25,38 @@ def _to_wgs(m, g):
     return shp_transform(lambda x, y, z=None: m.lidar.from_las.transform(x, y), g)
 
 
+_struct_cache: dict = {}
+
+
+def _lean_ft(m, g_wgs):
+    """(east, north) feet the roof appears shifted in the photo."""
+    v = _lean_vector(m, g_wgs)
+    if not v:
+        return (0.0, 0.0)
+    h = _eave_height(_neighbors_with_heights(m, g_wgs, radius_deg=0.0002, n=6), g_wgs)
+    return (v[0] * h, v[1] * h) if h else (0.0, 0.0)
+
+
+def _shift_las_to_photo_wgs(m, p_las, lean):
+    from shapely.affinity import translate
+    return _to_wgs(m, translate(p_las, lean[0], lean[1]))
+
+
 def list_structures(pin: str) -> dict:
-    """Roof outlines on a parcel. Footprints that touch are one structure
-    (house + attached garage); detached buildings are separate."""
+    """Roof outlines on a parcel, traced on the aerial photo.
+
+    Footprints that touch are one structure (house + attached garage);
+    detached buildings are separate. Each outline starts from the county
+    footprint and is moved onto the roof edges visible in the photo, with the
+    LiDAR making sure no real roof is cut off. ``geometry_las`` is the traced
+    outline at its true position (for measuring); ``geojson`` is the same
+    outline where it shows in the photo (for drawing and editing)."""
+    import time as _t
+    hit = _struct_cache.get(pin)
+    if hit and _t.time() - hit[0] < 3600:
+        return hit[1]
+    import numpy as np
+    from .photoedge import PhotoSampler, trace_outline
     m = default_measurer()
     f = m.get_parcel(pin)
     if not f:
@@ -45,27 +74,49 @@ def list_structures(pin: str) -> dict:
     parts = [] if merged is None else list(getattr(merged, "geoms", [merged]))
     parts = [p for p in parts if p.area >= 60]
     parts.sort(key=lambda p: -p.area)
+
+    def is_roof(xs, ys):
+        r = m.lidar.sample(env, np.asarray(xs, float), np.asarray(ys, float))
+        return r["obj"] > 7.5 if r is not None else np.zeros(len(xs), bool)
+
     out = []
     for i, p in enumerate(parts):
         g = _to_wgs(m, p)
-        disp = g
-        try:  # draw it where the roof appears in the photo (building lean)
-            disp = lean_corrected(m, g)
+        lean = (0.0, 0.0)
+        traced, stats = p.simplify(0.6, preserve_topology=True), {}
+        try:
+            lean = _lean_ft(m, g)
+            traced, stats = trace_outline(PhotoSampler(m, p, lean), p, is_roof)
         except Exception:
             pass
         out.append({
             "id": i,
             "name": "Main structure" if i == 0 else f"Structure {i + 1}",
-            "plan_sqft": round(p.area),
-            "geometry_las": p,
-            "geojson": mapping(disp),
-            "true_geojson": mapping(g),
+            "plan_sqft": round(traced.area),
+            "county_plan_sqft": round(p.area),
+            "geometry_las": traced,
+            "lean_ft": [round(lean[0], 2), round(lean[1], 2)],
+            "trace": stats,
+            "geojson": mapping(_shift_las_to_photo_wgs(m, traced, lean)),
         })
     a = f["attributes"]
     pf = m.pf
-    return {"pin": a.get(pf["pin"]), "address": (a.get(pf["address"]) or "").strip(),
+    info = {"pin": a.get(pf["pin"]), "address": (a.get(pf["address"]) or "").strip(),
             "city": a.get(pf["city"]), "zip": a.get(pf["zip"]), "parcel": f, "structures": out,
             "stories": a.get("BLDG_STORY"), "year_built": a.get(pf["year_built"])}
+    _struct_cache[pin] = (_t.time(), info)
+    if len(_struct_cache) > 300:
+        _struct_cache.pop(next(iter(_struct_cache)))
+    return info
+
+
+def outline_from_photo_geojson(m, gj: dict, lean) -> "Polygon":
+    """An outline the user drew/edited on the photo -> true position (LAS)."""
+    from shapely.affinity import translate
+    g = shape(gj).buffer(0)
+    if g.is_empty or g.area <= 0:
+        raise ValueError("empty outline")
+    return translate(_to_las(m, g), -lean[0], -lean[1]).buffer(0)
 
 
 def _snap(segs, outline, pitch, tol=4.0):
@@ -245,13 +296,22 @@ def suggested_waste(totals: dict, area: float) -> int:
     return 12
 
 
-def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float = DEFAULT_PITCH) -> dict:
+def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float = DEFAULT_PITCH,
+                 edited: dict | None = None) -> dict:
+    """``edited`` maps structure id -> GeoJSON outline the roofer adjusted on
+    the photo; those outlines are measured exactly as drawn."""
     m = default_measurer()
     info = list_structures(pin)
     structs = info["structures"]
     if not structs:
         raise LookupError("no buildings found on this parcel")
-    chosen = [s for s in structs if structure_ids is None or s["id"] in structure_ids] or structs[:1]
+    chosen = [dict(s) for s in structs if structure_ids is None or s["id"] in structure_ids] or [dict(structs[0])]
+    for s in chosen:
+        gj = (edited or {}).get(str(s["id"])) or (edited or {}).get(s["id"])
+        if gj:
+            s["geometry_las"] = outline_from_photo_geojson(m, gj, s.get("lean_ft") or (0, 0))
+            s["geojson"] = gj
+            s["edited"] = True
     env = info["parcel"]["geometry"].buffer(0.0004).bounds
 
     def sampler(xs, ys):
@@ -280,7 +340,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
             segs = _snap(segs, outline, pitch)
             res["lines"] = {k: sum(x["len"] for x in segs if x["type"] == k) for k in LINE_TYPES}
         out_structs.append({
-            "id": s["id"], "name": s["name"], "plan_sqft": round(res["plan_area_sqft"]),
+            "id": s["id"], "name": s["name"], "edited": bool(s.get("edited")), "plan_sqft": round(res["plan_area_sqft"]),
             "roof_sqft": round(res["roof_area_sqft"]), "flat_sqft": round(res.get("flat_area_sqft") or 0),
             "facets": res.get("facet_count"), "method": res["method"],
             "lines": {k: round(float(v), 1) for k, v in res["lines"].items()},
