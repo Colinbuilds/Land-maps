@@ -37,6 +37,7 @@ const MEASURE_COLORS = {
   lawn_sqft: "var(--lawn)", driveway_sqft: "var(--drive)", sidewalk_sqft: "var(--walk)",
   other_hardscape_sqft: "var(--other)", structures_sqft: "var(--struct)", beds_sqft: "var(--beds)",
   parkway_sqft: "var(--lawn)", grass_total: "var(--lawn)", building_sqft: "var(--bldg)", lot_sqft: "#cbd5e1", frontage_ft: "#94a3b8",
+  tree_count: "var(--tree)", tree_canopy_sqft: "var(--tree)", lawn_under_trees_sqft: "var(--tree)",
 };
 
 function makeMap(el, cfg) {
@@ -150,7 +151,7 @@ function showOverlay(map, holder, r) {
 function measurementCards(r, keys, labels) {
   return keys.map((k) => `
     <div class="m"><div class="k"><i class="sw" style="background:${MEASURE_COLORS[k] || "#999"}"></i>${esc(labels[k] || k)}</div>
-    <div class="v">${fmt(r[k])} <span class="small muted">${k.endsWith("_ft") ? "ft" : "sq ft"}</span></div></div>`).join("");
+    <div class="v">${fmt(r[k])} <span class="small muted">${k.endsWith("_ft") ? "ft" : k.endsWith("_count") ? "" : "sq ft"}</span></div></div>`).join("");
 }
 
 // ---------------------------------------------------------------- site menu
@@ -160,6 +161,7 @@ function measurementCards(r, keys, labels) {
     { href: "/", label: "Estimate", icon: "🏡" },
     { href: "/business", label: "Business", icon: "📊" },
     { href: "/roof", label: "Roof reports", icon: "📐" },
+    { href: "/data", label: "Buy data", icon: "📄" },
   ];
   const here = location.pathname.replace(/\/+$/, "") || "/";
   const isActive = (h) => (h === "/" ? here === "/" : here === h || here.startsWith(h + "/") || (h === "/roof" && here.startsWith("/r/")));

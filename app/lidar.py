@@ -361,7 +361,55 @@ class EptLidar:
         else:
             h = r["z"] - self._ground_z(r, r["x"], r["y"])
             m &= (h > 6) & (r["nret"] <= 1) & (r["cls"] != 7) & (r["cls"] < 17)
+            m &= ~self._tree_single(r, m, h)
         return np.column_stack([r["x"][m], r["y"][m], r["z"][m]])
+
+    @staticmethod
+    def _tree_single(r, cand, h):
+        """Single-return points that are really branches.
+
+        USGS scans here only separate ground from everything else, and a
+        dense or leaf-off crown often sends back a single echo, which then
+        looks like roof. A branch point is both rough (its neighbours don't
+        lie on a plane) and next to multi-echo pulses (tree). Roof points
+        pass one test or the other: ridges are rough but have no multi-echo
+        neighbours, eave edges have multi-echo neighbours but are planar."""
+        from scipy.spatial import cKDTree
+        out = np.zeros(len(r["x"]), bool)
+        ci = np.nonzero(cand)[0]
+        multi = (r["cls"] != 2) & (r["nret"] > 1) & (h > 6)
+        if len(ci) < 12 or not multi.any():
+            return out
+        P = np.column_stack([r["x"][ci], r["y"][ci], r["z"][ci]])
+        M = np.column_stack([r["x"][multi], r["y"][multi], r["z"][multi]])
+        near = cKDTree(M).query_ball_point(P, 4.0, return_length=True)
+        sel = np.nonzero(near >= 2)[0]
+        if not len(sel):
+            return out
+        k = min(10, len(ci))
+        _, nb = cKDTree(P).query(P[sel], k=k)
+        Q = P[nb] - P[nb].mean(axis=1, keepdims=True)  # (s, k, 3)
+        cov = np.einsum("ski,skj->sij", Q, Q) / k
+        rms = np.sqrt(np.clip(np.linalg.eigvalsh(cov)[:, 0], 0, None))  # off-plane spread
+        out[ci[sel[rms > 0.6]]] = True
+        return out
+
+    def tree_points(self, env_wgs, bounds_las) -> np.ndarray:
+        """Tree returns (x, y, z) in a LAS-CRS box: multi-echo pulses and
+        single echoes flagged as branches, more than 6 ft above ground."""
+        r = self._raw(env_wgs)
+        if r is None:
+            return np.zeros((0, 3))
+        minx, miny, maxx, maxy = bounds_las
+        box = (r["x"] >= minx) & (r["x"] <= maxx) & (r["y"] >= miny) & (r["y"] <= maxy)
+        h = r["z"] - self._ground_z(r, r["x"], r["y"])
+        ok = box & (r["cls"] != 2) & (r["cls"] != 7) & (r["cls"] < 17) & (h > 6)
+        if (r["cls"] == 6).any():
+            t = ok & (r["cls"] != 6)
+        else:
+            single = ok & (r["nret"] <= 1)
+            t = (ok & (r["nret"] > 1)) | (single & self._tree_single(r, single, h))
+        return np.column_stack([r["x"][t], r["y"][t], r["z"][t]])
 
     def sample(self, env_wgs, xs_las: np.ndarray, ys_las: np.ndarray) -> dict | None:
         """obj / veg heights and ground density, sampled at LAS-CRS points

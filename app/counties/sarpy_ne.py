@@ -34,6 +34,10 @@ COUNTY = {
     # No edge-of-pavement layer: street centrelines widened to a typical
     # residential street stand in for it (sidewalk / driveway apron checks).
     "streets": {"url": f"{_SARPY}/Cadastral/LandRecordsDynamic/MapServer/3", "half_width_ft": 15.0},
+    # Statewide 2025 NAIP with near-infrared: tells grass from paving no
+    # matter how a county's colour photo is exposed.
+    "infrared": {"url": "https://gis.ne.gov/Image/rest/services/NAIP2025WM/ImageServer", "red": 0, "nir": 3,
+                 "source": "USDA NAIP 2025 (Nebraska)"},
     "imagery": {
         "tile_url": "https://tiles.arcgis.com/tiles/OiG7dbwhQEWoy77N/arcgis/rest/services/Aerials2026/MapServer/tile/{z}/{y}/{x}",
         "year": 2026,

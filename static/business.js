@@ -15,6 +15,7 @@
     if (b.dataset.tab === "leads") loadLeads();
     if (b.dataset.tab === "pricing") loadSettings();
     if (b.dataset.tab === "roofing") loadRoofing();
+    if (b.dataset.tab === "datasales") loadData();
   }));
 
   // ---------------- bulk
@@ -227,6 +228,39 @@
       ["cName", "cEmail", "cPass", "cPhone", "cCredits"].forEach((i) => ($(i).value = ""));
       loadRoofing();
     } catch (e) { $("cMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  });
+
+  // ---------------- data sales
+  async function loadData() {
+    let d;
+    try { d = await api("/api/admin/data"); } catch (e) { $("dOrders").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; return; }
+    $("dRate").value = d.pricing.rate_cents; $("dBulk").value = d.pricing.bulk_rate_cents;
+    $("dThr").value = d.pricing.bulk_threshold; $("dMin").value = d.pricing.min_order_usd;
+    $("dStripe").innerHTML = d.stripe ? "Card payments: <b>on</b> (Stripe)."
+      : "Card payments: <b>off</b>. Set STRIPE_SECRET_KEY in Railway to take cards. Until then, orders wait for you to invoice and click <i>Mark paid</i>.";
+    const usd = (c) => "$" + (c / 100).toFixed(2);
+    $("dOrders").innerHTML = `<thead><tr><th>Date</th><th>Order</th><th>Email</th><th>ZIP</th><th class="num">Properties</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead><tbody>${
+      d.orders.map((o) => `<tr><td>${new Date(o.created * 1000).toLocaleDateString()}</td><td>${esc(o.id)}</td><td>${esc(o.email)}</td><td>${esc(o.zip)}</td>
+        <td class="num">${fmt(o.count)}</td><td class="num">${usd(o.amount_cents)}</td><td>${esc(o.status.replace("_", " "))}</td>
+        <td>${o.status === "awaiting_payment" ? `<button class="secondary" data-paid="${esc(o.id)}">Mark paid</button>` : ""}
+            <a href="/data/order/${esc(o.id)}?t=${esc(o.token)}" target="_blank">open</a></td></tr>`).join("") || '<tr><td colspan="8" class="muted">No orders yet.</td></tr>'}</tbody>`;
+    $("dOrders").querySelectorAll("[data-paid]").forEach((b) => b.addEventListener("click", async () => {
+      await api(`/api/admin/data/orders/${b.dataset.paid}/paid`, { method: "POST" }); loadData();
+    }));
+    $("dZips").innerHTML = `<thead><tr><th>ZIP / type</th><th>Status</th><th class="num">Properties</th></tr></thead><tbody>${
+      d.zips.map((z) => `<tr><td>${esc(z.key.replace("_", " · "))}</td><td>${esc(z.status)}</td><td class="num">${fmt(z.count)}</td></tr>`).join("") || '<tr><td colspan="3" class="muted">None yet.</td></tr>'}</tbody>`;
+  }
+  $("dSave").addEventListener("click", async () => {
+    try {
+      await api("/api/admin/data/pricing", { method: "PUT", json: { rate_cents: +$("dRate").value, bulk_rate_cents: +$("dBulk").value,
+        bulk_threshold: +$("dThr").value, min_order_usd: +$("dMin").value } });
+      $("dMsg").innerHTML = '<span class="ok">Saved.</span>';
+    } catch (e) { $("dMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  });
+  $("dPre").addEventListener("click", async () => {
+    try { const r = await api("/api/admin/data/prebuild", { method: "POST", json: { zip: $("dZip").value.trim() } });
+      $("dPreMsg").innerHTML = `<span class="ok">${r.status === "ready" ? "Already measured." : "Measuring started."}</span>`; loadData(); }
+    catch (e) { $("dPreMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   });
 
   // ---------------- settings

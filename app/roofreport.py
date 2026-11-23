@@ -87,14 +87,32 @@ def list_structures(pin: str) -> dict:
         r = m.lidar.sample(env, np.asarray(xs, float), np.asarray(ys, float))
         return r["obj"] > 7.5 if r is not None else np.zeros(len(xs), bool)
 
+    from .trees import tree_grid
+
     out = []
     for i, p in enumerate(parts):
         g = _to_wgs(m, p)
         lean = (0.0, 0.0)
         traced, stats = p.simplify(0.6, preserve_topology=True), {}
+        trees = None
+        try:
+            trees = tree_grid(m.lidar, env, p.buffer(8))
+        except Exception:
+            trees = None
         try:
             lean = _lean_ft(m, g)
-            traced, stats = trace_outline(PhotoSampler(m, p, lean), p, is_roof)
+            traced, stats = trace_outline(PhotoSampler(m, p, lean), p, is_roof,
+                                          trees.at if trees is not None and trees.mask.any() else None)
+        except Exception:
+            pass
+        try:
+            from .roofclean import fit_hidden_edges, orthogonalize
+            traced = orthogonalize(traced)
+            if trees is not None and trees.mask.any():
+                # walls under trees: from where the scan's roof points stop
+                bp = m.lidar.building_points(env, traced.buffer(8).bounds)
+                traced, n_hidden = fit_hidden_edges(traced, bp, trees.at)
+                stats["lidar_edges"] = n_hidden
         except Exception:
             pass
         out.append({
@@ -338,7 +356,35 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
         smp = m.lidar.sample(env, xs, ys)
         return None if smp is None else smp["obj"]
 
+    from .trees import tree_grid
+
+    def tree_cover(s, pts=None):
+        """Roof hidden under tree canopy: plan polygon (LAS ft) or None."""
+        try:
+            tg = tree_grid(m.lidar, env, s["geometry_las"].buffer(2), roof_pts=pts)
+            g = tg.polygon(clip=s["geometry_las"]) if tg is not None else None
+            return g if g is not None and g.area >= 15 else None
+        except Exception:
+            return None
+
+    def add_trees(st, cover, roof_sqft, plan_sqft):
+        st["tree_overhang_sqft"] = 0
+        st["tree_cover"] = []
+        if cover is None:
+            return 0.0
+        hidden = cover.area * (roof_sqft / plan_sqft if plan_sqft else 1.0)
+        st["tree_overhang_sqft"] = round(hidden)
+        st["tree_cover"] = [[[round(x, 2), round(y, 2)] for x, y in p.exterior.coords]
+                            for p in getattr(cover, "geoms", [cover]) if p.geom_type == "Polygon"]
+        near = cover.buffer(1.5)
+        from shapely.geometry import LineString
+        for g in st["segments"]:
+            ln = LineString([g["a"], g["b"]])
+            g["tree"] = bool(ln.length and ln.intersection(near).length >= 0.5 * ln.length)
+        return hidden
+
     out_structs = []
+    tree_total = 0.0
     totals = {k: 0.0 for k in LINE_TYPES}
     area = plan = 0.0
     facets = 0
@@ -359,8 +405,9 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
             segs = [{"type": x["type"], "a": [round(x["a"][0], 2), round(x["a"][1], 2)],
                      "b": [round(x["b"][0], 2), round(x["b"][1], 2)], "len": round(x["len"], 1)}
                     for x in res["segments"]]
+            used = res.get("outline") or s["geometry_las"]  # after any low-sliver trim
             outline = [[[round(x, 2), round(y, 2)] for x, y in p.exterior.coords]
-                       for p in getattr(s["geometry_las"], "geoms", [s["geometry_las"]])]
+                       for p in getattr(used, "geoms", [used])]
             for k, v in res["pitch_areas"].items():
                 pitch_areas[k] = pitch_areas.get(k, 0) + v
             out_structs.append({
@@ -373,6 +420,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
                 "planes": [{"pitch": q["pitch"], "plan_sqft": round(q["plan_sqft"], 1),
                             "area_sqft": round(q["area_sqft"], 1)} for q in res["planes"]],
             })
+            tree_total += add_trees(out_structs[-1], tree_cover(s, pts), res["roof_area_sqft"], res["plan_area_sqft"])
             for k in LINE_TYPES:
                 totals[k] += res["lines"].get(k, 0.0)
             area += res["roof_area_sqft"]
@@ -405,6 +453,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
             "lines": {k: round(float(v), 1) for k, v in res["lines"].items()},
             "segments": segs, "outline": outline,
         })
+        tree_total += add_trees(out_structs[-1], tree_cover(s), res["roof_area_sqft"], res["plan_area_sqft"])
         for k in LINE_TYPES:
             totals[k] += res["lines"][k]
         area += res["roof_area_sqft"]
@@ -435,6 +484,12 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
         "roof_sqft": round(area), "plan_sqft": round(plan), "squares": round(area / 100, 2),
         "facets": facets, "lines": t, "derived": derived,
         "waste": waste, "suggested_waste": sw,
+        "tree_overhang_sqft": round(tree_total),
+        "tree_overhang_pct": round(100 * tree_total / area, 1) if area else 0.0,
+        "tree_note": (f"About {round(tree_total):,} sq ft ({100 * tree_total / area:.0f}%) of the roof is under tree "
+                      "canopy (hatched on the diagram). Planes there are measured from the scan points that reach "
+                      "the roof and the surrounding planes; lines marked as under trees should be checked on site."
+                      if area and tree_total >= 25 else ""),
         "structures": out_structs,
         "method": "lidar" if methods == {"lidar"} else ("partial" if methods & {"lidar", "lidar_grid"} else "outline_only"),
         "sources": {"lidar": (m.c.get("lidar") or {}).get("source"), "outlines": m.c["buildings"].get("source"),

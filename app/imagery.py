@@ -111,3 +111,45 @@ def _polys(g):
             out.extend(_polys(p))
         return out
     return []
+
+
+def ndvi_for(mos: "Mosaic", cfg: dict) -> np.ndarray | None:
+    """Vegetation index (NDVI, -1..1) on the mosaic's exact pixel grid, from a
+    4-band (red + near-infrared) image service such as NAIP. Grass and trees
+    are strongly positive; concrete, asphalt, roofs and bare soil are near 0."""
+    import httpx
+    if not cfg:
+        return None
+    h, w = mos.shape
+    n = 2 ** mos.z * 256
+    R = 6378137.0
+    world = 2 * math.pi * R
+
+    def merc(X, Y):
+        return X / n * world - world / 2, world / 2 - Y / n * world
+
+    x0, y1 = merc(mos.tx0 * 256, mos.ty0 * 256)
+    x1, y0 = merc(mos.tx0 * 256 + w, mos.ty0 * 256 + h)
+    params = {"bbox": f"{x0},{y0},{x1},{y1}", "bboxSR": 3857, "imageSR": 3857, "size": f"{w},{h}",
+              "bandIds": f"{cfg.get('red', 0)},{cfg.get('nir', 3)},{cfg.get('green', 1)}", "format": "png",
+              "interpolation": "RSP_BilinearInterpolation", "f": "image"}
+    from .gis import get_bytes
+    url = cfg["url"] + "/exportImage?" + "&".join(f"{k}={httpx.QueryParams({k: v})[k]}" for k, v in params.items())
+    data = get_bytes(url)
+    if not data:
+        return None
+    try:
+        im = Image.open(io.BytesIO(data))
+        a = np.asarray(im).astype(np.float32)
+    except Exception:
+        return None
+    if a.ndim != 3 or a.shape[2] < 2:
+        return None
+    if a.shape[:2] != (h, w):  # server capped the size: stretch back to the grid
+        a = np.asarray(im.convert("RGB").resize((w, h), Image.BILINEAR)).astype(np.float32)
+    if a.shape[:2] != (h, w):
+        return None
+    red, nir = a[..., 0], a[..., 1]
+    if nir.max() <= 0:
+        return None
+    return (nir - red) / np.maximum(nir + red, 1.0)

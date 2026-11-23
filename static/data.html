@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Property Measurement Data</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  .hero { max-width: 760px; }
+  .stat { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; padding: 3px 9px; border-radius: 99px; background: #eef7f0; color: var(--accent); font-weight: 600; font-size: 13px; }
+  #zmap { height: 340px; border-radius: var(--radius); border: 1px solid var(--line); }
+  .cols { font-size: 13px; color: var(--muted); }
+  .cols span { display: inline-block; margin: 2px 6px 2px 0; padding: 2px 8px; border-radius: 99px; background: #f1f5f2; }
+  #sampleTable td, #sampleTable th { font-size: 12.5px; }
+  .steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+  @media (max-width: 700px) { .steps { grid-template-columns: 1fr; } }
+  .steps .card b { display: block; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span><span id="bizName">Property Data</span></div>
+  <div class="contact" id="bizContact"></div>
+</header>
+<main>
+  <div class="hero">
+    <h1>Lawn and property measurements for every home in a ZIP code</h1>
+    <p class="lead">Skip measuring by hand. Every row is one property: lawn (grass only), driveway, sidewalk, building, beds and lot size, measured from aerial photos and LiDAR. Try 25 properties free.</p>
+  </div>
+
+  <div class="steps">
+    <div class="card"><b>1. Pick a ZIP</b><span class="muted small">See how many properties and the exact price.</span></div>
+    <div class="card"><b>2. Get 25 free</b><span class="muted small">A sample from across the ZIP, shown right here. No card needed.</span></div>
+    <div class="card"><b>3. Buy the full sheet</b><span class="muted small" id="rateLine">Pay by card and download a spreadsheet (CSV).</span></div>
+  </div>
+
+  <div class="card stack">
+    <div class="row" style="align-items:flex-end">
+      <label style="flex:0 1 180px">ZIP code<input type="text" id="zip" inputmode="numeric" maxlength="5" placeholder="68135"></label>
+      <label style="flex:0 1 240px">Property type
+        <select id="cls">
+          <option value="R">Residential (homes)</option>
+          <option value="C">Commercial</option>
+          <option value="R,C">Residential + commercial</option>
+          <option value="A">Agricultural / acreages</option>
+        </select>
+      </label>
+      <button id="check" style="flex:0 0 auto">Check ZIP</button>
+    </div>
+    <div id="quoteMsg" class="small"></div>
+  </div>
+
+  <div class="layout hidden" id="result">
+    <div class="stack">
+      <div id="zmap"></div>
+      <div class="cols" id="cols"></div>
+    </div>
+    <div class="stack">
+      <div class="card">
+        <div class="muted small" id="qZip"></div>
+        <div class="stat" id="qCount"></div>
+        <div class="muted" id="qBy"></div>
+        <div style="margin-top:10px" id="qReady"></div>
+      </div>
+      <div class="card stack" id="freeCard">
+        <h2 style="margin:0">Free sample: 25 properties</h2>
+        <p class="small muted" style="margin:0">Spread across the whole ZIP so you can check them against properties you know. One free sample per email.</p>
+        <div class="row"><input type="email" id="sEmail" placeholder="you@company.com"><button id="sBtn" style="flex:0 0 auto">Get 25 free</button></div>
+        <div id="sMsg" class="small"></div>
+      </div>
+      <div class="card stack">
+        <h2 style="margin:0">Full sheet</h2>
+        <div><span class="stat" id="qPrice"></span> <span class="muted" id="qRate"></span></div>
+        <div class="row"><input type="email" id="bEmail" placeholder="you@company.com"><button id="bBtn" style="flex:0 0 auto">Buy sheet</button></div>
+        <div id="bMsg" class="small"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card hidden" id="sampleCard" style="margin-top:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <h2 style="margin:0">Your free sample</h2>
+      <a class="btn secondary" id="sDl" download="sample.csv" href="#">Download CSV</a>
+    </div>
+    <div class="tablewrap" style="margin-top:10px"><table id="sampleTable"></table></div>
+  </div>
+
+  <p class="small muted" style="margin-top:18px">Measurements come from public aerial photos, LiDAR and county parcel data, which can be a few years old. Sheets contain no owner names or mailing addresses. Coverage today: Douglas, Sarpy, Lancaster and Cass counties, Nebraska.</p>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/common.js?v=9"></script>
+<script src="/static/data.js?v=9"></script>
+</body>
+</html>

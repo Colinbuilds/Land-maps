@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your Data Order</title>
+<link rel="stylesheet" href="/static/styles.css?v=9">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span><span id="bizName">Property Data</span></div>
+  <div class="contact" id="bizContact"></div>
+</header>
+<main style="max-width:720px">
+  <div class="card stack" id="box"><p class="muted"><span class="spinner"></span>Loading your order…</p></div>
+  <p class="small muted">Keep this page's link: it's how you get back to your download.</p>
+</main>
+<script src="/static/common.js?v=9"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const oid = location.pathname.split("/").pop();
+  const qs = new URLSearchParams(location.search);
+  const t = qs.get("t"), sid = qs.get("session_id");
+  const usd = (c) => "$" + (c / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let first = true;
+  async function load() {
+    let o;
+    try { o = await api(`/api/data/order/${oid}?t=${encodeURIComponent(t || "")}${first && sid ? `&session_id=${encodeURIComponent(sid)}` : ""}`); }
+    catch (e) { $("box").innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+    first = false;
+    if (o.contact && o.contact.name) $("bizName").textContent = o.contact.name;
+    $("bizContact").textContent = [o.contact?.phone, o.contact?.email].filter(Boolean).join(" · ");
+    const head = `<div class="muted small">Order ${esc(o.id)} · ${esc(o.email)}</div>
+      <h1 style="margin:0">ZIP ${esc(o.zip)}: ${o.count.toLocaleString()} properties</h1>
+      <div class="muted">${usd(o.amount_cents)}</div>`;
+    let body = "";
+    if (o.status === "awaiting_payment") {
+      body = o.stripe
+        ? `<p>Your order is saved but not paid yet.</p><button id="pay">Pay ${usd(o.amount_cents)} by card</button>`
+        : `<p><b>We've got your order.</b> We'll email an invoice to ${esc(o.email)}. As soon as it's paid, your sheet is measured and this page updates with the download.</p>
+           <p class="small muted">Questions: ${esc([o.contact?.phone, o.contact?.email].filter(Boolean).join(" · ") || "reply to the invoice email")}</p>`;
+    } else if (o.status === "processing") {
+      const p = o.progress || {};
+      const pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+      body = `<p><b>Paid, thank you.</b> We're measuring every property in the ZIP now${p.total ? ` (${p.done.toLocaleString()} of ${p.total.toLocaleString()})` : ""}. This page updates by itself.</p>
+        <div class="progress"><div style="width:${pct}%"></div></div>`;
+      setTimeout(load, 5000);
+    } else if (o.status === "ready") {
+      body = `<p><b>Your sheet is ready.</b> One row per property.</p>
+        <a class="btn" href="/api/data/order/${esc(o.id)}/csv?t=${encodeURIComponent(t)}">Download CSV</a>`;
+    }
+    $("box").innerHTML = head + body;
+    const pay = document.getElementById("pay");
+    if (pay) pay.addEventListener("click", async () => {
+      pay.disabled = true;
+      try { const r = await api(`/api/data/order/${oid}/checkout?t=${encodeURIComponent(t)}`, { method: "POST" }); location.href = r.checkout_url; }
+      catch (e) { pay.disabled = false; alert(e.message); }
+    });
+  }
+  load();
+})();
+</script>
+</body>
+</html>

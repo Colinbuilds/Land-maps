@@ -26,7 +26,7 @@ from shapely.ops import unary_union
 
 from .counties import get_county
 from .gis import Projector, ChunkedPolygonLayer, query_features
-from .imagery import Mosaic
+from .imagery import Mosaic, ndvi_for
 from .lidar import LidarSource
 from . import corrections
 
@@ -40,10 +40,15 @@ MEASUREMENTS = {
     "other_hardscape_sqft": "Patios, walks & other paving",
     "structures_sqft": "Decks, sheds, play sets & other structures",
     "beds_sqft": "Landscape beds & shrubs",
+    "tree_count": "Trees on the lot (count)",
+    "tree_canopy_sqft": "Tree canopy over the lot",
+    "lawn_under_trees_sqft": "Lawn under tree canopy",
     "frontage_ft": "Street frontage (linear ft)",
 }
 
 _CTX_FT = 70.0           # how far around the parcel to look
+_ACREAGE_SQFT = 43560.0  # lots bigger than an acre: measure the home site only
+_HOMESITE_FT = 150.0
 _MIN_BLOB_SQFT = 20.0    # ignore paved specks smaller than this
 
 
@@ -196,13 +201,51 @@ class Measurer:
                                            inten=smp.get("inten"), bldg=bldg_m)
         if smp.get("sparse"):  # USGS data: only keep solid, deck-sized objects
             struct = _drop_small(struct, 30.0 / (ft_px * ft_px))
-        return struct, bed, canopy
+        veg = np.asarray(smp["veg"], np.float32)
+        r_ = lambda ft: max(1, int(round(ft / ft_px)))
+        if bldg_m is not None and bldg_m.any():
+            # pulses that clip a gutter come back as "vegetation" at roof
+            # height: right around a house only taller growth is a tree
+            roof_h = ndi.maximum_filter(np.where(bldg_m, smp["obj"], 0).astype(np.float32), size=2 * r_(6.0) + 1)
+            near = ndi.binary_dilation(bldg_m, iterations=r_(4.0))
+            veg = np.where(near & (veg <= roof_h + 2.0), -1.0, veg)
+        crowns, tops = _trees(veg, ft_px, ft_px * ft_px, sparse=bool(smp.get("sparse")))
+        if crowns.any() and struct.any():
+            # swing sets, pergolas and the like echo like branches; a crown
+            # that is mostly a solid raised structure isn't a tree
+            lab, n = ndi.label(crowns)
+            frac = ndi.mean(struct, lab, range(1, n + 1))
+            bad = np.zeros(n + 1, bool)
+            bad[1:] = np.asarray(frac) > 0.4
+            crowns = crowns & ~bad[lab]
+            tops = [t for t in tops if crowns[t[0], t[1]]]
+        return struct, bed, canopy, crowns, tops
 
     # --------------------------------------------------------------- measure
     def measure(self, parcel_feature: dict, want_overlay: bool = False) -> dict:
         attrs = self.parcel_attrs(parcel_feature["attributes"])
         P_wgs = parcel_feature["geometry"]
         P = self.proj.to_local(P_wgs).buffer(0)
+        lot_area = P.area
+        note = ""
+        rest_of_lot = None
+        if lot_area > _ACREAGE_SQFT:
+            # Acreages: the mowed yard is the home site, not the whole farm.
+            # Measure within ~150 ft of the buildings; treat the rest of the
+            # lot like a neighbour so its edges aren't taken for streets.
+            penv = self.proj.to_wgs(box(*P.bounds)).bounds
+            bl = [self.proj.to_local(f["geometry"]).buffer(0) for f in self.buildings.query(penv)]
+            bl = [b for b in bl if b.intersection(P).area > 0.5 * b.area and b.area > 200]
+            if bl:
+                site = P.intersection(unary_union([b.buffer(_HOMESITE_FT) for b in bl])).buffer(0)
+                if site.geom_type == "MultiPolygon":
+                    site = max(site.geoms, key=lambda g: g.area)
+                if site.geom_type == "Polygon" and site.area < 0.9 * lot_area:
+                    rest_of_lot = P.difference(site).buffer(-0.5)
+                    P = site
+                    note = f"acreage: yard measured within {int(_HOMESITE_FT)} ft of the buildings"
+            else:
+                note = "acreage with no mapped buildings"
         ctx = P.buffer(_CTX_FT)
         ctx_box = box(*ctx.bounds)
         env = self.proj.to_wgs(ctx_box).bounds
@@ -214,6 +257,8 @@ class Measurer:
         neigh = [g.buffer(0) for g in neigh if g.intersects(ctx_box)]
         # Stacked condo parcels can duplicate this lot's shape; drop those.
         neigh = [g for g in neigh if not (g.intersection(P).area > 0.8 * P.area)]
+        if rest_of_lot is not None and not rest_of_lot.is_empty:
+            neigh.append(rest_of_lot)
         N = unary_union(neigh) if neigh else None
         bldgs = [self.proj.to_local(f["geometry"]).buffer(0) for f in self.buildings.query(env)]
         B = unary_union([b for b in bldgs if b.intersects(ctx_box)]) if bldgs else None
@@ -262,6 +307,22 @@ class Measurer:
         ft_px = math.sqrt(sqft_px)
 
         hard = classify_hard(mos.rgb)
+        ndvi = None
+        try:
+            ndvi = ndvi_for(mos, self.c.get("infrared"))
+        except Exception:
+            ndvi = None
+        if ndvi is not None:
+            # paving must also be "not growing" in the infrared: kills grass
+            # that a washed-out colour photo makes look like gravel
+            veg = ndi.uniform_filter(ndvi, 5) > 0.22
+            # NAIP is flown in summer: a tree's leaves can cover a driveway
+            # that is plainly bright, colourless concrete in the leaf-off photo
+            sm = ndi.uniform_filter(mos.rgb, size=(5, 5, 1))
+            mx_, mn_ = sm.max(-1), sm.min(-1)
+            plain_concrete = (mx_ > 0.70) & ((mx_ - mn_) / (mx_ + 1e-6) < 0.10)
+            hard &= ~veg | plain_concrete
+            hard = ndi.binary_opening(hard, iterations=1)
         hard &= ~bldg_m
         if not self.pavement and street_lines:
             # No edge-of-pavement layer: the street is the paving outside the
@@ -434,9 +495,11 @@ class Measurer:
         # dense evergreens and pools.
         yard = parcel_m & ~bldg_m
         lid = self._lidar_layers(mos, env, ft_px, bldg_m) if self.lidar else None
-        struct_m = bed_m = canopy_m = np.zeros(hard.shape, bool)
+        struct_m = bed_m = canopy_m = crown_m = np.zeros(hard.shape, bool)
+        tops = []
         if lid is not None:
-            struct_m, bed_m, canopy_m = lid
+            struct_m, bed_m, canopy_m, crown_m, tops = lid
+            crown_m = crown_m & ~bldg_m
             struct_m &= yard
             canopy_m &= yard & ~struct_m
             bed_m &= yard & ~hard & ~struct_m & ~canopy_m
@@ -479,7 +542,24 @@ class Measurer:
         parkway_sqft = float(parkway_m.sum()) * sqft_px
         structures_sqft = float((struct_m | pool_m).sum()) * sqft_px
         beds_sqft = float((bed_m | canopy_m).sum()) * sqft_px
+        # Trees: a tree belongs to this lot when its trunk (crown top) is on it.
+        # Canopy counts every crown over the lot, including a neighbour's
+        # tree hanging over the fence. Lawn under deciduous trees stays lawn
+        # (it gets mowed); dense evergreens were already taken out above.
+        lot_tops = [t for t in tops if parcel_m[t[0], t[1]]]
+        tree_canopy_sqft = float((crown_m & parcel_m).sum()) * sqft_px
+        lawn_under_trees_sqft = float((lawn_m & crown_m).sum()) * sqft_px
 
+        quality, why = "ok", []
+        open_area = max(1.0, P.area - building_sqft)
+        if driveway_sqft > max(5000.0, 0.25 * P.area):
+            why.append("driveway unusually large")
+        if (drive_lot_sqft + other_sqft) > 0.6 * open_area:
+            why.append("most of the yard reads as paving")
+        if lawn_sqft < 50 and open_area > 2000 and not why:
+            why.append("no lawn found")
+        if why:
+            quality = "review"
         result = {
             "pin": pin,
             "pid": f"{self.cid}:{pin}",
@@ -487,7 +567,8 @@ class Measurer:
             "city": attrs.get("city"),
             "zip": attrs.get("zip"),
             "class": attrs.get("class"),
-            "lot_sqft": round(P.area),
+            "lot_sqft": round(lot_area),
+            "measured_area_sqft": round(P.area),
             "building_sqft": round(building_sqft),
             "lawn_sqft": round(lawn_sqft),
             "parkway_sqft": round(parkway_sqft),
@@ -496,6 +577,12 @@ class Measurer:
             "other_hardscape_sqft": round(other_sqft),
             "structures_sqft": round(structures_sqft),
             "beds_sqft": round(beds_sqft),
+            "tree_count": len(lot_tops),
+            "tree_canopy_sqft": round(tree_canopy_sqft),
+            "lawn_under_trees_sqft": round(lawn_under_trees_sqft),
+            "trees": [{"lat": round(la, 7), "lon": round(lo, 7), "height_ft": round(hh)}
+                      for la, lo, hh in ((mos.px_to_lonlat(c + 0.5, r + 0.5)[1], mos.px_to_lonlat(c + 0.5, r + 0.5)[0], h_)
+                                         for r, c, h_ in lot_tops)],
             "frontage_ft": round(frontage_ft),
             "assessor": {
                 "lot_sqft": attrs.get("lot_sqft"),
@@ -511,13 +598,17 @@ class Measurer:
                 "lidar_year": self.c["lidar"]["year"] if lid is not None else None,
                 "lidar_source": self.c["lidar"].get("source") if lid is not None else None,
                 "imagery_source": img.get("source"),
+                "infrared": bool(ndvi is not None),
                 "county": self.cid,
+                "quality": quality,
+                "note": "; ".join([x for x in [note] + why if x]),
                 "corrected": bool(corr),
             },
         }
         if want_overlay:
             result["overlay"] = _overlay_png(mos, parcel_m, lawn_m | parkway_m, drive_m, other_m, struct_m | pool_m, bed_m | canopy_m,
-                                             frontage, sw_stations, self, step, sw_w)
+                                             frontage, sw_stations, self, step, sw_w,
+                                             crown_m=crown_m & (parcel_m | parkway_m), tops=lot_tops)
             result["parcel_geojson"] = _geojson(P_wgs)
         return result
 
@@ -567,6 +658,44 @@ def _lidar_masks(obj, veg, gnd, ft_px, sqft_px, inten=None, bldg=None):
     canopy = ndi.binary_opening(canopy, iterations=r(1.0))
     return struct, bed, canopy
 
+
+def _trees(veg, ft_px, sqft_px, sparse=False):
+    """Tree crowns and individual trees from the vegetation height raster.
+
+    Crowns: vegetation taller than 8 ft (shrubs and hedges stay beds).
+    Trees: tops of the smoothed canopy height model, at least 12 ft tall and
+    no closer than the crown radius of a tree that tall (~18% of its
+    height, 5-11 ft), so a big tree's lumpy crown isn't counted several times
+    while young trees planted in a row still are. Works on leaf-off scans too: branches
+    still return multiple echoes."""
+    r = lambda ft: max(1, int(round(ft / ft_px)))
+    v = np.where(np.isfinite(veg), veg, -1).astype(np.float32)
+    crown = v > 8.0
+    crown = ndi.binary_closing(crown, iterations=r(2.0))  # gaps between bare branches
+    crown = ndi.binary_opening(crown, iterations=r(1.0))
+    crown = _drop_small(crown, 25.0 / sqft_px)
+    if not crown.any():
+        return crown, []
+    chm = ndi.grey_dilation(np.where(v > 0, v, 0), size=r(2.0))  # fill sparse holes
+    chm = ndi.gaussian_filter(chm, r(2.5 if sparse else 1.5))
+    peak = np.zeros(chm.shape, bool)
+    for lo, hi, rad in ((12, 30, 5.0), (30, 45, 7.5), (45, 999, 10.5)):
+        band = (chm > lo) & (chm <= hi)
+        if band.any():
+            peak |= band & (chm >= ndi.maximum_filter(chm, footprint=_disk(r(rad))) - 1e-3)
+    peak &= crown
+    lab, n = ndi.label(peak)
+    tops = []
+    if n:
+        for (sl_r, sl_c), i in zip(ndi.find_objects(lab), range(1, n + 1)):
+            rr, cc = np.nonzero(lab[sl_r, sl_c] == i)
+            r0, c0 = int(rr.mean()) + sl_r.start, int(cc.mean()) + sl_c.start
+            tops.append((r0, c0, float(chm[r0, c0])))
+    return crown, tops
+
+def _disk(rad: int) -> np.ndarray:
+    yy, xx = np.ogrid[-rad:rad + 1, -rad:rad + 1]
+    return xx * xx + yy * yy <= rad * rad
 
 
 def _otsu(v: np.ndarray, bins: int = 64) -> float:
@@ -713,7 +842,8 @@ def _geojson(g):
     return mapping(g)
 
 
-def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, frontage, sw_stations, meas, step, sw_w):
+def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, frontage, sw_stations, meas, step, sw_w,
+                 crown_m=None, tops=()):
     h, w = parcel_m.shape
     rgba = np.zeros((h, w, 4), np.uint8)
     rgba[lawn_m] = (34, 197, 94, 110)
@@ -732,6 +862,15 @@ def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, front
                 if 0 <= xi < w and 0 <= yi < h:
                     sw[max(0, yi - 2):yi + 3, max(0, xi - 2):xi + 3] = True
         rgba[sw & ~drive_m] = (236, 72, 153, 170)
+    if crown_m is not None and crown_m.any():
+        # tree crowns: dark green outline over whatever is underneath
+        ring = crown_m & ~ndi.binary_erosion(crown_m, iterations=2)
+        rgba[ring] = (20, 83, 45, 230)
+    rr, cc = np.ogrid[:h, :w]
+    for r, c, _ in tops:  # crown top (about where the trunk is)
+        d2 = (rr - r) ** 2 + (cc - c) ** 2
+        rgba[d2 <= 49] = (250, 250, 250, 255)
+        rgba[d2 <= 25] = (20, 83, 45, 255)
     edge = parcel_m ^ ndi.binary_erosion(parcel_m, iterations=2)
     rgba[edge] = (250, 250, 250, 255)
     im = Image.fromarray(rgba, "RGBA")

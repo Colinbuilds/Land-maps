@@ -33,6 +33,10 @@ COUNTY = {
     # residential street stand in for it (sidewalk / driveway apron checks).
     "streets": {"url": "https://services3.arcgis.com/oIhWXTph9P1clNT3/arcgis/rest/services/Street_Centerlines/FeatureServer/71", "half_width_ft": 15.0},
     # No county imagery service is published: Esri World Imagery.
+    # Statewide 2025 NAIP with near-infrared: tells grass from paving no
+    # matter how a county's colour photo is exposed.
+    "infrared": {"url": "https://gis.ne.gov/Image/rest/services/NAIP2025WM/ImageServer", "red": 0, "nir": 3,
+                 "source": "USDA NAIP 2025 (Nebraska)"},
     "imagery": {
         "tile_url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         "year": None,

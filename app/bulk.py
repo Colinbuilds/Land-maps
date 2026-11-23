@@ -84,7 +84,7 @@ def preview(zip_code: str, classes: list[str]) -> dict:
 
 
 def start_job(zip_code: str, classes: list[str], measures: list[str], limit: int | None = None,
-              include_owner: bool = False, workers: int = 6) -> dict:
+              include_owner: bool = False, workers: int = 6, on_done=None) -> dict:
     measures = [k for k in measures if k in MEASUREMENTS] or list(MEASUREMENTS)
     job_id = uuid.uuid4().hex[:10]
     job = {
@@ -95,7 +95,7 @@ def start_job(zip_code: str, classes: list[str], measures: list[str], limit: int
     with _lock:
         _jobs[job_id] = job
     _save(job)
-    threading.Thread(target=_run, args=(job, workers), daemon=True).start()
+    threading.Thread(target=_run, args=(job, workers, on_done), daemon=True).start()
     return job
 
 
@@ -129,7 +129,7 @@ def _save(job):
     (JOBS_DIR / f"{job['id']}.json").write_text(json.dumps(job))
 
 
-def _run(job: dict, workers: int):
+def _run(job: dict, workers: int, on_done=None):
     try:
         job["status"] = "loading parcels"
         items = _zip_parcels(job["zip"], job["classes"], job["limit"] or None)
@@ -142,7 +142,8 @@ def _run(job: dict, workers: int):
         job["status"] = "measuring"
         _save(job)
 
-        cols = ["pin", "county", "address", "city", "zip", "class"] + job["measures"] + ["driveway_method", "sidewalk_detected"]
+        cols = (["pin", "county", "address", "city", "zip", "class"] + job["measures"]
+                + ["driveway_method", "sidewalk_detected", "quality", "notes"])
         if job["include_owner"]:
             cols += ["owner", "mail_address", "mail_city", "mail_state", "mail_zip"]
         cols += ["lat", "lon"]
@@ -162,6 +163,8 @@ def _run(job: dict, workers: int):
                         row["county"] = m.c["name"]
                         row["driveway_method"] = r["sources"]["driveway_method"]
                         row["sidewalk_detected"] = r["sources"]["sidewalk_detected"]
+                        row["quality"] = r["sources"].get("quality")
+                        row["notes"] = r["sources"].get("note")
                         for k in job["measures"]:
                             job["totals"][k] += r.get(k) or 0
                     except Exception as e:
@@ -187,3 +190,8 @@ def _run(job: dict, workers: int):
         traceback.print_exc()
     job["finished"] = time.time()
     _save(job)
+    if on_done:
+        try:
+            on_done(job)
+        except Exception:
+            traceback.print_exc()

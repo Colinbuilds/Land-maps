@@ -49,12 +49,18 @@ class PhotoSampler:
         return np.abs(gx * nx - gy * ny)
 
 
-def trace_outline(sampler: PhotoSampler, outline: Polygon, is_roof=None) -> tuple[Polygon, dict]:
+def trace_outline(sampler: PhotoSampler, outline: Polygon, is_roof=None, is_tree=None) -> tuple[Polygon, dict]:
     """Return the photo-traced outline (LAS CRS, true position) and stats.
 
     ``is_roof(xs, ys)`` (LiDAR: is there roof here?) is a safety net: an
     edge may not move inward past where the scan still shows roof, which
-    stops dark roof-on-shadow sides from being cut off."""
+    stops dark roof-on-shadow sides from being cut off.
+
+    ``is_tree(xs, ys)`` marks tree canopy above the roof. Where most of a
+    side is under leaves, the photo edge is the crown, not the roof, so that
+    side ignores the photo and follows the shift of its neighbouring sides
+    (which usually carries the footprint's overall offset), like a side
+    with no visible edge."""
     poly = outline.simplify(0.4, preserve_topology=True)
     if not isinstance(poly, Polygon):
         return outline, {"moved_edges": 0}
@@ -66,6 +72,7 @@ def trace_outline(sampler: PhotoSampler, outline: Polygon, is_roof=None) -> tupl
     moves = np.zeros(n)
     strong = np.zeros(n, bool)
     lens = np.zeros(n)
+    treed = 0
     for i in range(n):
         p0, p1 = ring[i], ring[(i + 1) % n]
         d = p1 - p0
@@ -77,6 +84,11 @@ def trace_outline(sampler: PhotoSampler, outline: Polygon, is_roof=None) -> tupl
         nrm = np.array([u[1], -u[0]])  # outward for a CCW ring
         ts = np.linspace(0.15, 0.85, max(6, int(L * 2)))
         base = p0 + np.outer(ts * L, u)
+        hidden = False
+        if is_tree is not None:
+            band = np.vstack([base + o * nrm for o in (-2.0, 0.0, 2.0)])
+            hidden = float(np.mean(is_tree(band[:, 0], band[:, 1]))) >= 0.4
+            treed += int(hidden)
         scores = []
         for o in offs:
             pts = base + o * nrm
@@ -89,7 +101,7 @@ def trace_outline(sampler: PhotoSampler, outline: Polygon, is_roof=None) -> tupl
         weighted = scores * (1 - 0.04 * np.abs(offs))
         k = int(np.argmax(weighted))
         med = np.median(scores)
-        if scores[k] > 1.35 * med and scores[k] > 0:
+        if not hidden and scores[k] > 1.35 * med and scores[k] > 0:
             moves[i] = offs[k]
             strong[i] = True
         if is_roof is not None:
@@ -134,5 +146,5 @@ def trace_outline(sampler: PhotoSampler, outline: Polygon, is_roof=None) -> tupl
           and max(np.hypot(*(np.array(new) - ring).T)) < SEARCH_FT * 1.8)
     if not ok:
         return outline, {"moved_edges": 0, "rejected": True}
-    return traced, {"moved_edges": int(strong.sum()), "edges": n,
+    return traced, {"moved_edges": int(strong.sum()), "edges": n, "tree_edges": treed,
                     "mean_move_ft": float(np.mean(np.abs(moves[strong]))) if strong.any() else 0.0}
