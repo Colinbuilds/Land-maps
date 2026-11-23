@@ -2,65 +2,327 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Property Measurement Data</title>
 <meta name="description" content="Every home in a ZIP code, already measured: grass-only lawn, driveway, sidewalk, trees and more. 25 properties free.">
+<meta name="theme-color" content="#f6f7f2">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=11">
+<link rel="stylesheet" href="/static/styles.css?v=12">
 <style>
-  .stat { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.15; }
-  .pill { display: inline-block; padding: 3px 9px; border-radius: 99px; background: #eef7f0; color: var(--accent); font-weight: 600; font-size: 13px; }
-  #zmap { height: 340px; border-radius: var(--radius); border: 1px solid var(--line); }
-  .cols { font-size: 13px; color: var(--muted); }
-  .cols span { display: inline-block; margin: 2px 6px 2px 0; padding: 2px 8px; border-radius: 99px; background: #f1f5f2; }
-  #sampleTable td, #sampleTable th, #exTable td, #exTable th { font-size: 12.5px; }
-  .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
-  .tiles.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  @media (max-width: 900px) { .tiles.four { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 700px) { .tiles, .tiles.four { grid-template-columns: 1fr; } }
-  .tiles .card b { display: block; margin-bottom: 4px; }
-  .kicker { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
-  section { margin-top: 40px; }
-  section > h2 { font-size: 22px; letter-spacing: -0.01em; margin-bottom: 6px; }
-  section > p.sub { color: var(--muted); margin: 0 0 14px; max-width: 720px; }
+  /* ------------------------------------------------------------------
+     Page-scoped design for /data. Everything is under body.dp so the
+     shared styles.css stays untouched for the other pages.
+     ------------------------------------------------------------------ */
+  body.dp {
+    --bg: #f6f7f2;
+    --tint: #ecf1e8;
+    --card: #ffffff;
+    --ink: #15342b;
+    --muted: #55665c;
+    --line: rgba(21, 52, 43, .10);
+    --hair: rgba(21, 52, 43, .09);
+    --field: #f3f5f0;
+    --acc-strong: #15803d;
+    --acc-strong: color-mix(in srgb, var(--accent) 80%, #04140c);
+    --acc-text: #166534;
+    --acc-text: color-mix(in srgb, var(--accent) 62%, #0b2419);
+    --acc-soft: #e4f3e7;
+    --acc-soft: color-mix(in srgb, var(--accent) 13%, #ffffff);
+    --acc-glow: color-mix(in srgb, var(--accent) 35%, #ffffff);
+    --shadow-sm: 0 1px 2px rgba(16, 40, 30, .05), 0 2px 8px -2px rgba(16, 40, 30, .06);
+    --shadow: 0 1px 2px rgba(16, 40, 30, .04), 0 12px 32px -12px rgba(16, 40, 30, .16);
+    --r-lg: 24px; --r: 18px; --r-sm: 14px;
+    --display: "Manrope", "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    font: 16px/1.6 "DM Sans", "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .dp main { max-width: none; padding: 0; }
+  .dp .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px; }
+  .dp h1, .dp h2, .dp h3 { font-family: var(--display); color: var(--ink); letter-spacing: -0.035em; }
+  .dp .muted { color: var(--muted); }
+  .dp .small { font-size: 14px; }
+  .dp .num { font-variant-numeric: tabular-nums; }
 
-  /* hero */
-  .hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 28px; align-items: center; margin-top: 10px; }
-  @media (max-width: 900px) { .hero { grid-template-columns: 1fr; } }
-  .hero h1 { font-size: clamp(28px, 4.6vw, 44px); line-height: 1.08; margin: 6px 0 12px; }
-  .zipform { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
-  .zipform input, .zipform select { font-size: 16px; padding: 12px 13px; }
-  .zipform #zip { flex: 0 1 130px; }
-  .zipform #cls { flex: 1 1 190px; width: auto; }
-  .zipform button { flex: 0 0 auto; padding: 12px 20px; font-size: 16px; }
-  .illus { padding: 12px; }
-  .illus svg { width: 100%; height: auto; display: block; }
-  .illus svg text { font: 600 11px system-ui, sans-serif; fill: #17201a; }
-  .illus svg .val { font-weight: 800; font-size: 12.5px; }
-  .callout rect { fill: #fff; stroke: #e1e6e2; }
+  /* header */
+  .dp header.top { background: transparent; border-bottom: 1px solid var(--hair); padding: 14px max(20px, calc((100% - 1140px) / 2)); position: relative; z-index: 2; }
+  .dp header.top .brand { font-family: var(--display); font-weight: 800; letter-spacing: -0.02em; font-size: 18px; }
+  .dp header.top .brand .dot { width: 26px; height: 26px; border-radius: 8px; background: var(--acc-strong);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-5h-6v5H5a1 1 0 0 1-1-1z'/%3E%3C/svg%3E");
+    background-size: 16px; background-position: center; background-repeat: no-repeat; }
+  .dp header.top .contact { font-size: 13px; }
+  .dp .site-nav a { border-radius: 999px; }
 
-  .trust { display: flex; flex-wrap: wrap; gap: 10px 22px; margin: 18px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 14px; }
-  .trust li { display: flex; gap: 7px; align-items: center; }
-  .trust li::before { content: ""; width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;
-    background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4l2.5 2.4L12 5.4' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/16px no-repeat; }
+  /* type helpers */
+  .dp .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--acc-text); margin: 0 0 14px; }
+  .dp .eyebrow::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  .dp .sec-head { max-width: 680px; margin-bottom: 32px; }
+  .dp .sec-head h2 { font-size: clamp(30px, 6.4vw, 44px); line-height: 1.08; margin: 0 0 14px; font-weight: 800; }
+  .dp .sec-head p { color: var(--muted); margin: 0; font-size: 17px; }
+  .dp .sec-head p.eyebrow { color: var(--acc-text); font-size: 12.5px; margin: 0 0 14px; }
+  .dp .sec-head.split { max-width: none; }
+  @media (min-width: 900px) {
+    .dp .sec-head.split { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 48px; align-items: end; }
+  }
 
-  .num { font-variant-numeric: tabular-nums; }
-  .step-n { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: #eef7f0; color: var(--accent);
-    font-weight: 800; align-items: center; justify-content: center; margin-bottom: 8px; }
+  /* sections */
+  .dp .sec { padding: 64px 0; }
+  .dp .sec.tint { background: var(--tint); }
+  @media (min-width: 900px) { .dp .sec { padding: 104px 0; } }
 
-  .price-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; padding: 0; overflow: hidden; }
-  .price-card > div { padding: 18px; border-left: 1px solid var(--line); }
-  .price-card > div:first-child { border-left: 0; }
-  @media (max-width: 700px) { .price-card { grid-template-columns: 1fr; } .price-card > div { border-left: 0; border-top: 1px solid var(--line); } .price-card > div:first-child { border-top: 0; } }
-  .vs th, .vs td { white-space: normal; }
-  .vs td:first-child { color: var(--muted); }
-  .vs .us { font-weight: 700; }
+  /* surfaces */
+  .dp .card { background: var(--card); border: 1px solid var(--hair); border-radius: var(--r); padding: 22px; box-shadow: var(--shadow-sm); }
+  .dp .soft { background: var(--card); border-radius: var(--r-lg); box-shadow: var(--shadow); border: 1px solid rgba(21,52,43,.05); }
 
-  .cta { text-align: center; padding: 28px 18px; }
-  .cta h2 { font-size: 24px; margin-bottom: 6px; }
+  /* controls */
+  .dp select, .dp input[type=text], .dp input[type=email], .dp input[type=number] {
+    font: inherit; font-size: 16px; color: var(--ink); min-height: 52px; padding: 12px 16px;
+    border: 1.5px solid transparent; border-radius: var(--r-sm); background-color: var(--field); width: 100%;
+    transition: border-color .15s, background-color .15s, box-shadow .15s; }
+  .dp select { appearance: none; -webkit-appearance: none; padding-right: 42px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2315342b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 14px center; background-size: 18px; }
+  .dp select:focus, .dp input:focus { outline: none; border-color: var(--accent); background-color: #fff;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .dp input::placeholder { color: #7b8a81; }
+  .dp button, .dp .btn { font: inherit; font-weight: 700; font-size: 16px; min-height: 52px; padding: 13px 24px; border-radius: 999px;
+    background: var(--acc-strong); color: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    text-decoration: none; letter-spacing: -0.005em; white-space: nowrap;
+    box-shadow: 0 1px 0 rgba(255,255,255,.18) inset, 0 6px 16px -6px color-mix(in srgb, var(--accent) 70%, transparent);
+    transition: transform .15s, box-shadow .15s, background-color .15s; }
+  .dp button:hover, .dp .btn:hover { transform: translateY(-1px); }
+  .dp button:focus-visible, .dp .btn:focus-visible, .dp summary:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+  .dp .btn.secondary { background: var(--acc-soft); color: var(--ink); box-shadow: none; }
+  .dp .arrow::after { content: ""; width: 16px; height: 16px; flex: 0 0 auto;
+    background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17L17 7M8 7h9v9'/%3E%3C/svg%3E") center/contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17L17 7M8 7h9v9'/%3E%3C/svg%3E") center/contain no-repeat; }
+  .dp .pill { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 99px; background: var(--acc-soft); color: var(--acc-text); font-weight: 700; font-size: 13px; }
+  .dp .stat { font-family: var(--display); font-size: 32px; font-weight: 800; letter-spacing: -0.035em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .dp .ok { color: var(--acc-text); }
+
+  /* ---------------------------------------------------------- hero */
+  .dp .hero-sec { padding: 36px 0 56px; position: relative; overflow: hidden; }
+  .dp .hero-sec::before { content: ""; position: absolute; inset: -20% -30% auto auto; width: 620px; height: 620px; border-radius: 50%;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 14%, transparent), transparent); pointer-events: none; }
+  .dp .hero { display: grid; grid-template-columns: 1fr; gap: 36px; position: relative; }
+  .dp .hero h1 { font-size: clamp(36px, 10vw, 60px); line-height: 1.04; font-weight: 800; margin: 0 0 18px; letter-spacing: -0.045em; }
+  .dp .hero h1 .soft-t { color: #4f7a61; color: color-mix(in srgb, var(--accent) 42%, #4c6b5a); }
+  .dp .hero .lead { font-size: 18px; line-height: 1.6; color: var(--muted); margin: 0 0 26px; max-width: 560px; }
+  .dp #zipbox { padding: 18px; border-radius: var(--r-lg); }
+  .dp .zipform { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .dp .zipform #zip { font-size: 18px; font-weight: 600; letter-spacing: .04em; }
+  .dp .zipform button { width: 100%; }
+  .dp #quoteMsg { margin: 12px 4px 0; font-size: 14px; color: var(--muted); }
+  .dp #quoteMsg:empty { display: none; }
+  @media (min-width: 560px) {
+    .dp .zipform { grid-template-columns: 140px minmax(0, 1fr) auto; }
+    .dp .zipform button { width: auto; }
+  }
+  .dp .trust { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin: 22px 0 0; padding: 0 4px; list-style: none; color: var(--muted); font-size: 14.5px; line-height: 1.4; }
+  .dp .trust li { display: flex; gap: 9px; align-items: flex-start; }
+  .dp .trust li::before { content: ""; width: 20px; height: 20px; border-radius: 50%; flex: 0 0 auto; margin-top: -1px;
+    background: var(--acc-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 8.3l2.3 2.3L11.5 5.6' fill='none' stroke='%23166534' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/14px no-repeat; }
+  .dp .illus { padding: 14px; position: relative; }
+  .dp .illus .badge { position: static; display: inline-block; margin: 0 0 10px 4px; font-size: 11.5px; font-weight: 700; letter-spacing: .04em;
+    background: rgba(255,255,255,.92); color: var(--ink); padding: 5px 10px; border-radius: 99px; box-shadow: var(--shadow-sm); }
+  .dp .illus svg { width: 100%; height: auto; display: block; border-radius: calc(var(--r-lg) - 10px); background: #d6dad7; }
+  .dp .illus svg text { font: 600 11px "DM Sans", system-ui, sans-serif; fill: #15342b; }
+  .dp .illus svg .val { font-family: "Manrope", system-ui, sans-serif; font-weight: 800; font-size: 12.5px; }
+  .dp .callout rect { fill: #fff; stroke: none; filter: drop-shadow(0 2px 4px rgba(16,40,30,.18)); }
+  .dp .illus .cap { padding: 14px 6px 4px; font-size: 14px; color: var(--muted); }
+  @media (min-width: 900px) {
+    .dp .hero-sec { padding: 64px 0 96px; }
+    .dp .hero { grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 56px; align-items: center; }
+  }
+  @media (max-width: 380px) { .dp .trust { grid-template-columns: 1fr; } }
+
+  /* ---------------------------------------------------------- result */
+  .dp #result { margin-top: 40px; gap: 16px; scroll-margin-top: 16px; }
+  .dp #zmap { height: 300px; border-radius: var(--r-lg); border: 0; box-shadow: var(--shadow); background: #dfe5df; z-index: 0; }
+  @media (min-width: 900px) { .dp #zmap { height: 460px; } }
+  .dp .cols { font-size: 13px; color: var(--muted); line-height: 2; }
+  .dp .cols span { display: inline-block; margin: 0 4px 0 0; padding: 1px 10px; border-radius: 99px; background: #fff; box-shadow: var(--shadow-sm); line-height: 1.8; }
+  .dp #result .card h2 { font-size: 21px; margin: 0; letter-spacing: -0.02em; }
+  .dp #result .card { padding: 22px; }
+  .dp .count-card { background: linear-gradient(160deg, var(--acc-soft), #fff 70%); }
+  .dp #qCount { font-size: 34px; margin: 4px 0 2px; }
+  .dp #qReady { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+  .dp .buy-card #qPrice { font-size: 40px; }
+  .dp .buy-card #qRate { display: block; margin-top: 2px; }
+  @media (max-width: 899px) { .dp #result > .stack:first-child { order: 2; } }
+  .dp .formrow { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  @media (min-width: 560px) { .dp .formrow { grid-template-columns: minmax(0, 1fr) auto; } }
+  .dp #sampleCard { margin-top: 16px; padding: 22px; border-radius: var(--r-lg); }
+  .dp #sampleCard .tablewrap { margin: 14px -22px -8px; padding: 0 22px 8px; -webkit-overflow-scrolling: touch; }
+  .dp #sampleTable th, .dp #sampleTable td { font-size: 13px; padding: 10px 10px; border-bottom-color: var(--hair); }
+  .dp #sampleTable tbody tr:nth-child(odd) td { background: #fafbf8; }
+
+  /* ---------------------------------------------------------- who */
+  .dp .tiles { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 760px) { .dp .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; } }
+  .dp .feature { padding: 26px; border-radius: var(--r-lg); }
+  .dp .feature .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
+  .dp .feature .ico { width: 48px; height: 48px; border-radius: 14px; background: var(--acc-soft); color: var(--acc-text); display: grid; place-items: center; }
+  .dp .feature .ico svg { width: 24px; height: 24px; }
+  .dp .feature .idx { font-size: 12.5px; font-weight: 700; letter-spacing: .1em; color: #7a887f; }
+  .dp .feature h3 { font-size: 21px; margin: 0 0 8px; letter-spacing: -0.025em; }
+  .dp .feature p { margin: 0; color: var(--muted); font-size: 15.5px; }
+
+  /* ---------------------------------------------------------- steps */
+  .dp .how { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  @media (min-width: 900px) { .dp .how { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 64px; align-items: start; } }
+  .dp .how .sec-head { margin-bottom: 20px; }
+  .dp .steps { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  .dp .steps li { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 16px; padding: 24px 0; border-bottom: 1px solid var(--line); }
+  .dp .steps .n { width: 44px; height: 44px; border-radius: 50%; background: #fff; color: var(--acc-text); box-shadow: var(--shadow-sm);
+    font-family: var(--display); font-weight: 800; font-size: 17px; display: grid; place-items: center; }
+  .dp .steps h3 { font-size: 20px; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .dp .steps p { margin: 0; color: var(--muted); font-size: 15.5px; }
+
+  /* ---------------------------------------------------------- example rows: table on desktop, stacked cards on phones */
+  .dp .ex-wrap { padding: 8px 10px; border-radius: var(--r-lg); }
+  .dp #exTable th, .dp #exTable td { font-size: 14px; padding: 14px 12px; border-bottom-color: var(--hair); }
+  .dp #exTable tbody tr:last-child td { border-bottom: 0; }
+  .dp #exTable td:first-child { font-weight: 700; }
+  .dp .q { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 12.5px; font-weight: 700; background: var(--acc-soft); color: var(--acc-text); }
+  .dp .q.rev { background: #fdf1dc; color: #7a4a00; }
+  .dp .note { font-size: 14px; color: var(--muted); margin: 16px 4px 0; }
+  @media (max-width: 759px) {
+    .dp .ex-wrap { background: none; box-shadow: none; border: 0; padding: 0; }
+    .dp .ex-wrap .tablewrap { overflow: visible; }
+    .dp #exTable, .dp #exTable tbody { display: block; }
+    .dp #exTable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .dp #exTable tr { position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px 8px; background: #fff; border-radius: var(--r);
+      padding: 18px 18px 20px; box-shadow: var(--shadow-sm); border: 1px solid var(--hair); margin-bottom: 12px; }
+    .dp #exTable td { display: block; border: 0; padding: 0; text-align: left; white-space: normal; font-size: 17px; font-weight: 700;
+      font-family: var(--display); letter-spacing: -0.02em; }
+    .dp #exTable td::before { content: attr(data-l); display: block; font-family: "DM Sans", system-ui, sans-serif; font-size: 11.5px; font-weight: 600;
+      letter-spacing: .03em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+    .dp #exTable td:first-child { grid-column: 1 / -1; font-size: 18px; padding: 0 70px 12px 0; border-bottom: 1px solid var(--hair); }
+    .dp #exTable td:first-child::before { display: none; }
+    .dp #exTable td:last-child { position: absolute; top: 18px; right: 18px; }
+    .dp #exTable td:last-child::before { display: none; }
+    .dp #exTable td:nth-child(2) { color: var(--acc-text); }
+  }
+
+  /* ---------------------------------------------------------- price examples */
+  .dp .grid2 { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 760px) { .dp .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; } }
+  .dp .formula { padding: 26px; border-radius: var(--r-lg); }
+  .dp .formula h3 { font-size: 20px; margin: 0 0 14px; letter-spacing: -0.02em; }
+  .dp .formula .eq { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 16px; font-weight: 700; font-size: 14px; }
+  .dp .formula .eq span { background: var(--field); padding: 5px 10px; border-radius: 99px; white-space: nowrap; }
+  .dp .formula .eq i { font-style: normal; color: var(--muted); font-weight: 600; }
+  .dp .formula .eq .res { background: var(--acc-soft); color: var(--acc-text); }
+  .dp .formula p { margin: 0; color: var(--muted); font-size: 15.5px; }
+  .dp .formula p b { color: var(--ink); }
+
+  /* ---------------------------------------------------------- savings calculator */
+  .dp .calc { padding: 22px; border-radius: var(--r-lg); }
+  .dp .calc-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; align-items: end; }
+  .dp .calc-fields:has(#cMilesBox.hidden) .labor { grid-column: 1 / -1; }
+  .dp .calc-fields label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600; color: var(--ink); line-height: 1.3; }
+  .dp .calc-fields label.wide { grid-column: 1 / -1; }
+  @media (min-width: 900px) {
+    .dp .calc { padding: 32px; }
+    .dp .calc-fields { grid-template-columns: repeat(6, minmax(0, 1fr)); align-items: end; }
+    .dp .calc-fields label, .dp .calc-fields label.wide, .dp .calc-fields:has(#cMilesBox.hidden) .labor { grid-column: span 1; }
+    .dp .calc-fields label.how { grid-column: span 2; }
+    .dp .calc-fields:has(#cMilesBox:not(.hidden)) { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  }
+  .dp .outs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 22px; }
+  .dp .outs .good, .dp .outs .hl { grid-column: 1 / -1; }
+  @media (min-width: 900px) { .dp .outs { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; } .dp .outs .good, .dp .outs .hl { grid-column: auto; } }
+  .dp .out { border-radius: var(--r); padding: 16px; background: var(--field); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .dp .out .lbl { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .dp .out .stat { font-size: clamp(22px, 6.4vw, 32px); overflow-wrap: anywhere; }
+  .dp .out .sub { font-size: 13px; color: var(--muted); line-height: 1.4; }
+  .dp .out.good { background: var(--acc-strong); color: #fff; }
+  .dp .out.good .lbl, .dp .out.good .sub { color: rgba(255,255,255,.86); }
+  .dp .out.hl { background: var(--acc-soft); }
+  .dp .out.hl .lbl { color: var(--acc-text); }
+  .dp .calc .fine { margin: 18px 2px 0; font-size: 14px; color: var(--muted); }
+
+  /* ---------------------------------------------------------- pricing */
+  .dp .tiers { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 760px) { .dp .tiers { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; } }
+  .dp .tier { padding: 26px; border-radius: var(--r-lg); display: flex; flex-direction: column; gap: 4px; }
+  .dp .tier .t-lbl { font-size: 12.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .dp .tier .stat { font-size: 48px; margin: 10px 0 2px; }
+  .dp .tier .t-sub { font-size: 15px; color: var(--muted); }
+  .dp .tier.free { background: linear-gradient(155deg, var(--acc-soft), #f4faf3); border-color: transparent; }
+  .dp .tier.free .t-lbl { color: var(--acc-text); }
+  .dp .vs-wrap { margin-top: 18px; padding: 8px 10px; border-radius: var(--r-lg); }
+  .dp .vs th, .dp .vs td { white-space: normal; font-size: 15px; padding: 16px 14px; border-bottom-color: var(--hair); vertical-align: top; }
+  .dp .vs th { font-size: 12.5px; }
+  .dp .vs tbody tr:last-child td { border-bottom: 0; }
+  .dp .vs td:first-child { color: var(--ink); font-weight: 600; }
+  .dp .vs td:not(:first-child) { color: var(--muted); }
+  .dp .vs th.us-h { color: var(--acc-text); }
+  .dp .vs td.us { font-weight: 800; color: var(--acc-text); background: color-mix(in srgb, var(--accent) 7%, #fff); }
+  @media (max-width: 759px) {
+    .dp .vs-wrap { background: none; box-shadow: none; border: 0; padding: 0; }
+    .dp .vs-wrap .tablewrap { overflow: visible; }
+    .dp .vs, .dp .vs tbody { display: block; }
+    .dp .vs thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .dp .vs tr { display: block; background: #fff; border-radius: var(--r); padding: 6px 18px 8px; box-shadow: var(--shadow-sm); border: 1px solid var(--hair); margin-bottom: 12px; }
+    .dp .vs td { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--hair); background: none !important; }
+    .dp .vs td::before { content: attr(data-l); color: var(--muted); font-weight: 500; flex: 0 0 auto; white-space: nowrap; }
+    .dp .vs td:not(:first-child) { text-align: right; }
+    .dp .vs td:first-child { display: block; font-family: var(--display); font-size: 17px; font-weight: 800; letter-spacing: -0.02em; padding: 12px 0 10px; }
+    .dp .vs td:first-child::before { display: none; }
+    .dp .vs td:last-child { border-bottom: 0; }
+    .dp .vs td.us::before { color: var(--acc-text); font-weight: 700; }
+  }
+
+  /* ---------------------------------------------------------- faq */
+  .dp .faq { border-top: 1px solid var(--line); }
+  .dp .faq details { border-bottom: 1px solid var(--line); }
+  .dp .faq summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 20px;
+    padding: 22px 2px; font-family: var(--display); font-weight: 700; font-size: 18px; letter-spacing: -0.02em; min-height: 48px; }
+  .dp .faq summary::-webkit-details-marker { display: none; }
+  .dp .faq summary::after { content: ""; flex: 0 0 auto; width: 32px; height: 32px; border-radius: 50%; background: var(--acc-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23166534' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M12 6v12M6 12h12'/%3E%3C/svg%3E") center/16px no-repeat;
+    transition: transform .2s; }
+  .dp .faq details[open] summary::after { transform: rotate(45deg); }
+  .dp .faq details p { margin: -6px 0 0; padding: 0 48px 22px 2px; color: var(--muted); font-size: 16px; }
+  @media (min-width: 900px) { .dp .faq-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 64px; align-items: start; } }
+
+  /* ---------------------------------------------------------- closing cta */
+  .dp .cta-sec { background: #11302a; background: color-mix(in srgb, var(--accent) 14%, #0e2a22); color: #fff; position: relative; overflow: hidden; text-align: center; }
+  .dp .cta-sec::before { content: ""; position: absolute; left: 50%; top: -260px; width: 720px; height: 520px; transform: translateX(-50%); border-radius: 50%;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 45%, transparent), transparent); opacity: .55; pointer-events: none; }
+  .dp .cta-sec .wrap { position: relative; }
+  .dp .cta-sec .eyebrow { color: #bde7c7; }
+  .dp .cta-sec .eyebrow::before { background: #8be0a4; }
+  .dp .cta-sec h2 { color: #fff; font-size: clamp(34px, 8vw, 56px); line-height: 1.04; margin: 0 0 16px; font-weight: 800; }
+  .dp .cta-sec p { color: rgba(255,255,255,.84); margin: 0 auto 28px; font-size: 18px; max-width: 520px; }
+  .dp .cta-sec .btn { background: #d7f5dd; background: var(--acc-glow); color: #0e2a22; box-shadow: 0 10px 30px -10px rgba(0,0,0,.5); }
+  .dp .foot { padding-top: 28px; padding-bottom: 36px; font-size: 14px; color: var(--muted); }
+
+  /* ---------------------------------------------------------- sticky phone CTA */
+  .dp .sticky-cta { display: none; }
+  @media (max-width: 700px) {
+    .dp .sticky-cta { display: flex; position: fixed; left: 16px; right: 16px; z-index: 1900;
+      bottom: calc(64px + env(safe-area-inset-bottom) + 12px);
+      box-shadow: 0 12px 30px -8px rgba(10, 40, 25, .45); transition: transform .25s, opacity .25s; }
+    .dp .sticky-cta.off { transform: translateY(24px); opacity: 0; pointer-events: none; }
+    .dp .foot { padding-bottom: 96px; }
+    .dp header.top .contact:empty { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dp *, .dp *::before, .dp *::after { transition: none !important; animation-duration: .01ms !important; scroll-behavior: auto !important; }
+    .dp button:hover, .dp .btn:hover { transform: none; }
+  }
 </style>
 </head>
-<body>
+<body class="dp">
 <header class="top">
   <div class="brand"><span class="dot"></span><span id="bizName">Property Data</span></div>
   <div class="contact" id="bizContact"></div>
@@ -68,237 +330,337 @@
 <main>
 
   <!-- ============================================================ hero -->
-  <div class="hero">
-    <div>
-      <div class="kicker">For lawn, snow &amp; concrete companies</div>
-      <h1>Price every lawn in a ZIP code before you drive anywhere</h1>
-      <p class="lead">Stop measuring yards on satellite maps one at a time, or driving out just to write a quote. Every home in your ZIP, already measured. One spreadsheet, ready in minutes.</p>
-      <div class="card stack" id="zipbox" style="padding:14px">
-        <div class="zipform">
-          <input type="text" id="zip" inputmode="numeric" maxlength="5" placeholder="ZIP code" aria-label="ZIP code">
-          <select id="cls" aria-label="Property type">
-            <option value="R">Residential (homes)</option>
-            <option value="C">Commercial</option>
-            <option value="R,C">Residential + commercial</option>
-            <option value="A">Agricultural / acreages</option>
-          </select>
-          <button id="check">See my ZIP</button>
+  <section class="hero-sec">
+    <div class="wrap">
+      <div class="hero">
+        <div>
+          <p class="eyebrow">For lawn, snow &amp; concrete companies</p>
+          <h1>Price every lawn in a ZIP code <span class="soft-t">before you drive anywhere.</span></h1>
+          <p class="lead">Stop measuring yards on satellite maps one at a time, or driving out just to write a quote. Every home in your ZIP, already measured. One spreadsheet, ready in minutes.</p>
+          <div class="soft" id="zipbox">
+            <div class="zipform">
+              <input type="text" id="zip" inputmode="numeric" maxlength="5" placeholder="ZIP code" aria-label="ZIP code" autocomplete="postal-code">
+              <select id="cls" aria-label="Property type">
+                <option value="R">Residential (homes)</option>
+                <option value="C">Commercial</option>
+                <option value="R,C">Residential + commercial</option>
+                <option value="A">Agricultural / acreages</option>
+              </select>
+              <button id="check" class="arrow">See my ZIP</button>
+            </div>
+            <div id="quoteMsg" class="small muted">Shows the number of homes and the exact price. Then get 25 free, no card needed.</div>
+          </div>
+          <ul class="trust">
+            <li>Grass only: no driveways, beds, decks or sheds</li>
+            <li>Measured from aerial photos + LiDAR</li>
+            <li>25 free, instantly</li>
+            <li>No subscription</li>
+          </ul>
         </div>
-        <div id="quoteMsg" class="small muted">Shows the number of homes and the exact price. Then get 25 free, no card needed.</div>
-      </div>
-      <ul class="trust">
-        <li>Grass only: no driveways, beds, decks or sheds</li>
-        <li>Measured from aerial photos + LiDAR</li>
-        <li>25 free, instantly</li>
-        <li>No subscription</li>
-      </ul>
-    </div>
 
-    <div class="card illus" aria-label="Example of one measured property">
-      <svg viewBox="0 0 380 300" role="img" aria-label="Illustration: a lot with lawn, house, driveway, sidewalk, beds and trees, each with its square footage">
-        <!-- street + sidewalk -->
-        <rect x="0" y="262" width="380" height="38" fill="#d6dad7"/>
-        <rect x="0" y="236" width="380" height="8" fill="#ec4899" opacity=".75"/>
-        <rect x="0" y="244" width="380" height="18" fill="#86efac"/>
-        <rect x="0" y="228" width="380" height="8" fill="#86efac"/>
-        <!-- lot -->
-        <rect x="40" y="18" width="300" height="210" fill="#22c55e" opacity=".85" stroke="#fff" stroke-width="2"/>
-        <!-- house + beds -->
-        <rect x="88" y="96" width="132" height="84" fill="#a855f7" opacity=".8" rx="3"/>
-        <rect x="94" y="100" width="120" height="76" fill="#64748b"/>
-        <path d="M94 138 H214" stroke="#94a3b8" stroke-width="2"/>
-        <!-- patio -->
-        <rect x="120" y="58" width="64" height="38" fill="#eab308" opacity=".9"/>
-        <!-- driveway -->
-        <path d="M214 120 H268 V262 H214 Z" fill="#3b82f6" opacity=".9"/>
-        <rect x="222" y="104" width="46" height="72" fill="#64748b"/>
-        <!-- shed -->
-        <rect x="290" y="32" width="30" height="24" fill="#ef4444" opacity=".9"/>
-        <!-- trees -->
-        <circle cx="66" cy="56" r="20" fill="none" stroke="#14532d" stroke-width="3"/><circle cx="66" cy="56" r="4" fill="#14532d"/>
-        <circle cx="300" cy="190" r="16" fill="none" stroke="#14532d" stroke-width="3"/><circle cx="300" cy="190" r="4" fill="#14532d"/>
-        <!-- callouts -->
-        <g class="callout"><rect x="8" y="150" width="96" height="36" rx="7"/><text x="16" y="165">Lawn (grass)</text><text class="val" x="16" y="180">7,480 sq ft</text></g>
-        <g class="callout"><rect x="276" y="96" width="96" height="36" rx="7"/><text x="284" y="111">Driveway</text><text class="val" x="284" y="126">1,020 sq ft</text></g>
-        <g class="callout"><rect x="132" y="190" width="104" height="34" rx="7"/><text x="140" y="204">Sidewalk</text><text class="val" x="140" y="218">300 sq ft · 60 ft</text></g>
-        <g class="callout"><rect x="190" y="8" width="88" height="36" rx="7"/><text x="198" y="23">Trees</text><text class="val" x="198" y="38">2 · 1,450 sq ft</text></g>
-      </svg>
-      <div class="small muted" style="padding:4px 4px 0">Illustration, not a real property. Every row of the sheet has these numbers, plus beds, patios, buildings, parkway grass and lot size.</div>
-    </div>
-  </div>
+        <figure class="soft illus" aria-label="Example of one measured property" style="margin:0">
+          <span class="badge">Illustration</span>
+          <svg viewBox="0 0 380 300" role="img" aria-label="Illustration: a lot with lawn, house, driveway, sidewalk, beds and trees, each with its square footage">
+            <!-- street + sidewalk -->
+            <rect x="0" y="0" width="380" height="300" fill="#cfe9d4"/>
+            <rect x="0" y="262" width="380" height="38" fill="#d6dad7"/>
+            <rect x="0" y="236" width="380" height="8" fill="#ec4899" opacity=".75"/>
+            <rect x="0" y="244" width="380" height="18" fill="#86efac"/>
+            <rect x="0" y="228" width="380" height="8" fill="#86efac"/>
+            <!-- lot -->
+            <rect x="40" y="18" width="300" height="210" fill="#22c55e" opacity=".85" stroke="#fff" stroke-width="2"/>
+            <!-- house + beds -->
+            <rect x="88" y="96" width="132" height="84" fill="#a855f7" opacity=".8" rx="3"/>
+            <rect x="94" y="100" width="120" height="76" fill="#64748b"/>
+            <path d="M94 138 H214" stroke="#94a3b8" stroke-width="2"/>
+            <!-- patio -->
+            <rect x="120" y="58" width="64" height="38" fill="#eab308" opacity=".9"/>
+            <!-- driveway -->
+            <path d="M214 120 H268 V262 H214 Z" fill="#3b82f6" opacity=".9"/>
+            <rect x="222" y="104" width="46" height="72" fill="#64748b"/>
+            <!-- shed -->
+            <rect x="290" y="32" width="30" height="24" fill="#ef4444" opacity=".9"/>
+            <!-- trees -->
+            <circle cx="66" cy="56" r="20" fill="none" stroke="#14532d" stroke-width="3"/><circle cx="66" cy="56" r="4" fill="#14532d"/>
+            <circle cx="300" cy="190" r="16" fill="none" stroke="#14532d" stroke-width="3"/><circle cx="300" cy="190" r="4" fill="#14532d"/>
+            <!-- callouts -->
+            <g class="callout"><rect x="8" y="150" width="96" height="36" rx="9"/><text x="16" y="165">Lawn (grass)</text><text class="val" x="16" y="180">7,480 sq ft</text></g>
+            <g class="callout"><rect x="276" y="96" width="96" height="36" rx="9"/><text x="284" y="111">Driveway</text><text class="val" x="284" y="126">1,020 sq ft</text></g>
+            <g class="callout"><rect x="132" y="190" width="104" height="34" rx="9"/><text x="140" y="204">Sidewalk</text><text class="val" x="140" y="218">300 sq ft · 60 ft</text></g>
+            <g class="callout"><rect x="190" y="8" width="88" height="36" rx="9"/><text x="198" y="23">Trees</text><text class="val" x="198" y="38">2 · 1,450 sq ft</text></g>
+          </svg>
+          <figcaption class="cap">Illustration, not a real property. Every row of the sheet has these numbers, plus beds, patios, buildings, parkway grass and lot size.</figcaption>
+        </figure>
+      </div>
 
-  <!-- ============================================================ results -->
-  <div class="layout hidden" id="result">
-    <div class="stack">
-      <div id="zmap"></div>
-      <div class="cols" id="cols"></div>
-    </div>
-    <div class="stack">
-      <div class="card">
-        <div class="muted small" id="qZip"></div>
-        <div class="stat" id="qCount"></div>
-        <div class="muted" id="qBy"></div>
-        <div style="margin-top:10px" id="qReady"></div>
+      <!-- ============================================================ results -->
+      <div class="layout hidden" id="result">
+        <div class="stack">
+          <div id="zmap"></div>
+          <div class="cols" id="cols"></div>
+        </div>
+        <div class="stack">
+          <div class="card count-card">
+            <div class="muted small" id="qZip"></div>
+            <div class="stat" id="qCount"></div>
+            <div class="muted small" id="qBy"></div>
+            <div id="qReady"></div>
+          </div>
+          <div class="card stack" id="freeCard">
+            <h2>Free sample: 25 properties</h2>
+            <p class="small muted" style="margin:6px 0 0">Picked from across the whole ZIP so you can check them against yards you know. One free sample per email.</p>
+            <div class="formrow"><input type="email" id="sEmail" placeholder="you@company.com" autocomplete="email" aria-label="Email for free sample"><button id="sBtn">Get 25 free</button></div>
+            <div id="sMsg" class="small"></div>
+          </div>
+          <div class="card stack buy-card">
+            <h2>Full sheet</h2>
+            <div><span class="stat" id="qPrice"></span> <span class="muted small" id="qRate"></span></div>
+            <div class="small" id="qPayback"></div>
+            <div class="formrow"><input type="email" id="bEmail" placeholder="you@company.com" autocomplete="email" aria-label="Email for purchase"><button id="bBtn" class="arrow">Buy sheet</button></div>
+            <div id="bMsg" class="small"></div>
+          </div>
+        </div>
       </div>
-      <div class="card stack" id="freeCard">
-        <h2 style="margin:0">Free sample: 25 properties</h2>
-        <p class="small muted" style="margin:0">Picked from across the whole ZIP so you can check them against yards you know. One free sample per email.</p>
-        <div class="row"><input type="email" id="sEmail" placeholder="you@company.com" autocomplete="email"><button id="sBtn" style="flex:0 0 auto">Get 25 free</button></div>
-        <div id="sMsg" class="small"></div>
-      </div>
-      <div class="card stack">
-        <h2 style="margin:0">Full sheet</h2>
-        <div><span class="stat" id="qPrice"></span> <span class="muted" id="qRate"></span></div>
-        <div class="small" id="qPayback"></div>
-        <div class="row"><input type="email" id="bEmail" placeholder="you@company.com" autocomplete="email"><button id="bBtn" style="flex:0 0 auto">Buy sheet</button></div>
-        <div id="bMsg" class="small"></div>
-      </div>
-    </div>
-  </div>
 
-  <div class="card hidden" id="sampleCard" style="margin-top:16px">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-      <h2 style="margin:0">Your free sample</h2>
-      <a class="btn secondary" id="sDl" download="sample.csv" href="#">Download CSV</a>
+      <div class="soft hidden" id="sampleCard">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <h2 style="margin:0;font-size:22px">Your free sample</h2>
+          <a class="btn secondary" id="sDl" download="sample.csv" href="#">Download CSV</a>
+        </div>
+        <div class="tablewrap"><table id="sampleTable"></table></div>
+      </div>
     </div>
-    <div class="tablewrap" style="margin-top:10px"><table id="sampleTable"></table></div>
-  </div>
+  </section>
 
   <!-- ============================================================ who -->
-  <section>
-    <div class="kicker">Who it's for</div>
-    <h2>The numbers you quote from, for every house</h2>
-    <div class="tiles">
-      <div class="card"><b>Lawn care &amp; fertilizer</b><span class="muted small">Grass-only square footage plus the parkway strip owners mow. Your rate &times; lawn size = a price for every home on the list.</span></div>
-      <div class="card"><b>Snow removal</b><span class="muted small">Driveway and public sidewalk square footage, so you can price routes and seasonal contracts before the first snowfall.</span></div>
-      <div class="card"><b>Concrete &amp; sealing</b><span class="muted small">Driveway, patio and walk areas show which streets have the big driveways worth a replacement or sealing offer.</span></div>
+  <section class="sec" style="padding-top:24px">
+    <div class="wrap">
+      <div class="sec-head split">
+        <div>
+          <p class="eyebrow">Who it's for</p>
+          <h2>The numbers you quote from, for every house.</h2>
+        </div>
+        <p>Pick the ZIPs you want to work. Every home comes with the measurements your trade prices from.</p>
+      </div>
+      <div class="tiles">
+        <div class="soft feature">
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20v-8"/><path d="M12 12c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 14c0-3-2.5-5-6-5 0 3 2.5 5 6 5z"/><path d="M5 20h14"/></svg></span><span class="idx">01 / 03</span></div>
+          <h3>Lawn care &amp; fertilizer</h3>
+          <p>Grass-only square footage plus the parkway strip owners mow. Your rate &times; lawn size = a price for every home on the list.</p>
+        </div>
+        <div class="soft feature">
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M4.9 6l14.2 12M4.9 18L19.1 6"/><path d="M9 3.5l3 2 3-2M9 20.5l3-2 3 2"/></svg></span><span class="idx">02 / 03</span></div>
+          <h3>Snow removal</h3>
+          <p>Driveway and public sidewalk square footage, so you can price routes and seasonal contracts before the first snowfall.</p>
+        </div>
+        <div class="soft feature">
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M9 4v8M15 12v8"/></svg></span><span class="idx">03 / 03</span></div>
+          <h3>Concrete &amp; sealing</h3>
+          <p>Driveway, patio and walk areas show which streets have the big driveways worth a replacement or sealing offer.</p>
+        </div>
+      </div>
     </div>
   </section>
 
   <!-- ============================================================ how -->
-  <section>
-    <div class="kicker">How it works</div>
-    <h2>From ZIP code to customers in three steps</h2>
-    <div class="tiles">
-      <div class="card"><span class="step-n">1</span><b>Pick your ZIP</b><span class="muted small">Choose the area you serve and the property type. You see the exact number of homes and the exact price right away.</span></div>
-      <div class="card"><span class="step-n">2</span><b>Check 25 free</b><span class="muted small">A sample from across the ZIP appears on this page in about a minute. No card, no sales call. Compare it with yards you know.</span></div>
-      <div class="card"><span class="step-n">3</span><b>Put the sheet to work</b><span class="muted small" id="rateLine">Pay by card and download a spreadsheet. Quote before you visit, mail postcards with real prices, and plan routes.</span></div>
+  <section class="sec tint">
+    <div class="wrap how">
+      <div class="sec-head">
+        <p class="eyebrow">How it works</p>
+        <h2>From ZIP code to customers in three steps.</h2>
+        <p>No card and no sales call to see what you get.</p>
+      </div>
+      <ol class="steps">
+        <li><span class="n">1</span><div><h3>Pick your ZIP</h3><p>Choose the area you serve and the property type. You see the exact number of homes and the exact price right away.</p></div></li>
+        <li><span class="n">2</span><div><h3>Check 25 free</h3><p>A sample from across the ZIP appears on this page in about a minute. No card, no sales call. Compare it with yards you know.</p></div></li>
+        <li><span class="n">3</span><div><h3>Put the sheet to work</h3><p><span id="rateLine">Pay by card and download a spreadsheet. Quote before you visit, mail postcards with real prices, and plan routes.</span></p></div></li>
+      </ol>
     </div>
   </section>
 
   <!-- ============================================================ rows -->
-  <section>
-    <div class="kicker">What you get</div>
-    <h2>One row per property, ready for Excel or Google Sheets</h2>
-    <p class="sub">Example rows (made up, not real properties). The full sheet has every column, plus county, a quality flag, notes and map coordinates.</p>
-    <div class="card" style="padding:6px 10px">
-      <div class="tablewrap">
-        <table id="exTable">
-          <thead><tr><th>Address</th><th class="num">Lawn</th><th class="num">Parkway</th><th class="num">Driveway</th><th class="num">Sidewalk</th><th class="num">Beds</th><th class="num">Trees</th><th class="num">Lot</th><th>Quality</th></tr></thead>
-          <tbody>
-            <tr><td>1204 Example Ave</td><td class="num">7,480</td><td class="num">410</td><td class="num">1,020</td><td class="num">300</td><td class="num">260</td><td class="num">2</td><td class="num">12,630</td><td>ok</td></tr>
-            <tr><td>1210 Example Ave</td><td class="num">5,960</td><td class="num">380</td><td class="num">860</td><td class="num">290</td><td class="num">140</td><td class="num">1</td><td class="num">10,450</td><td>ok</td></tr>
-            <tr><td>87 Sample Cir</td><td class="num">11,240</td><td class="num">0</td><td class="num">1,540</td><td class="num">0</td><td class="num">520</td><td class="num">6</td><td class="num">21,780</td><td>review</td></tr>
-          </tbody>
-        </table>
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">What you get</p>
+        <h2>One row per property, ready for Excel or Google Sheets.</h2>
+        <p>Example rows (made up, not real properties). The full sheet has every column, plus county, a quality flag, notes and map coordinates.</p>
       </div>
-      <p class="small muted" style="margin:6px 4px 4px">Square feet, except trees (count). "review" flags the few properties worth a second look, such as heavy tree cover.</p>
+      <div class="soft ex-wrap">
+        <div class="tablewrap">
+          <table id="exTable">
+            <thead><tr><th>Address</th><th class="num">Lawn</th><th class="num">Parkway</th><th class="num">Driveway</th><th class="num">Sidewalk</th><th class="num">Beds</th><th class="num">Trees</th><th class="num">Lot</th><th>Quality</th></tr></thead>
+            <tbody>
+              <tr><td>1204 Example Ave</td><td class="num" data-l="Lawn">7,480</td><td class="num" data-l="Parkway">410</td><td class="num" data-l="Driveway">1,020</td><td class="num" data-l="Sidewalk">300</td><td class="num" data-l="Beds">260</td><td class="num" data-l="Trees">2</td><td class="num" data-l="Lot">12,630</td><td data-l="Quality"><span class="q">ok</span></td></tr>
+              <tr><td>1210 Example Ave</td><td class="num" data-l="Lawn">5,960</td><td class="num" data-l="Parkway">380</td><td class="num" data-l="Driveway">860</td><td class="num" data-l="Sidewalk">290</td><td class="num" data-l="Beds">140</td><td class="num" data-l="Trees">1</td><td class="num" data-l="Lot">10,450</td><td data-l="Quality"><span class="q">ok</span></td></tr>
+              <tr><td>87 Sample Cir</td><td class="num" data-l="Lawn">11,240</td><td class="num" data-l="Parkway">0</td><td class="num" data-l="Driveway">1,540</td><td class="num" data-l="Sidewalk">0</td><td class="num" data-l="Beds">520</td><td class="num" data-l="Trees">6</td><td class="num" data-l="Lot">21,780</td><td data-l="Quality"><span class="q rev">review</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="note">Square feet, except trees (count). "review" flags the few properties worth a second look, such as heavy tree cover.</p>
     </div>
   </section>
 
   <!-- ============================================================ price examples -->
-  <section>
-    <div class="kicker">From measurement to price</div>
-    <h2>Turn square feet into quotes in one formula</h2>
-    <div class="grid2">
-      <div class="card">
-        <b>Lawn: priced before you knock</b>
-        <p class="small muted" style="margin:6px 0 0">7,480 sq ft of lawn &times; your $4.00 per 1,000 sq ft = <b>$30 per fertilizer application</b>, or <b>$150 for a 5-step season</b>. Drop the column into a spreadsheet formula and every home on the list has its own price.</p>
+  <section class="sec tint">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">From measurement to price</p>
+        <h2>Turn square feet into quotes in one formula.</h2>
       </div>
-      <div class="card">
-        <b>Snow: routes you can bid on</b>
-        <p class="small muted" style="margin:6px 0 0">1,020 sq ft driveway + 300 sq ft sidewalk = 1,320 sq ft per push. Sort by street, add up a route, and know your season price before the first storm.</p>
+      <div class="grid2">
+        <div class="soft formula">
+          <h3>Lawn: priced before you knock</h3>
+          <div class="eq"><span>7,480 sq ft</span><i>&times;</i><span>$4.00 / 1,000</span><i>=</i><span class="res">$30</span></div>
+          <p>7,480 sq ft of lawn &times; your $4.00 per 1,000 sq ft = <b>$30 per fertilizer application</b>, or <b>$150 for a 5-step season</b>. Drop the column into a spreadsheet formula and every home on the list has its own price.</p>
+        </div>
+        <div class="soft formula">
+          <h3>Snow: routes you can bid on</h3>
+          <div class="eq"><span>1,020</span><i>+</i><span>300</span><i>=</i><span class="res">1,320 sq ft</span></div>
+          <p>1,020 sq ft driveway + 300 sq ft sidewalk = 1,320 sq ft per push. Sort by street, add up a route, and know your season price before the first storm.</p>
+        </div>
       </div>
     </div>
   </section>
 
   <!-- ============================================================ savings -->
-  <section id="savings">
-    <div class="kicker">The math</div>
-    <h2>What it saves you</h2>
-    <p class="sub">Put in your own numbers. After you check a ZIP, the home count and price come from that ZIP.</p>
-    <div class="card stack">
-      <div class="row" style="align-items:flex-end;flex-wrap:wrap">
-        <label style="flex:1 1 130px">Homes<input type="number" id="cN" min="1" value="5000"></label>
-        <label style="flex:1 1 220px">How you measure today
-          <select id="cHow">
-            <option value="online">On a satellite map, at a desk</option>
-            <option value="drive">Driving out to each property</option>
-          </select>
-        </label>
-        <label style="flex:1 1 130px">Minutes per home<input type="number" id="cMin" min="0" step="0.5" value="4"></label>
-        <label style="flex:1 1 130px">Labor $/hour<input type="number" id="cWage" min="0" step="1" value="22"></label>
-        <label style="flex:1 1 130px" id="cMilesBox" class="hidden">Driving $/home<input type="number" id="cMiles" min="0" step="0.5" value="3"></label>
-        <label style="flex:1 1 170px">A new customer is worth $/year<input type="number" id="cVal" min="0" step="10" value="400"></label>
+  <section class="sec" id="savings">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">The math</p>
+        <h2>What it saves you.</h2>
+        <p>Put in your own numbers. After you check a ZIP, the home count and price come from that ZIP.</p>
       </div>
-      <div class="tiles four" style="margin:4px 0 0">
-        <div class="card"><span class="muted small">Measuring it yourself</span><div class="stat" id="cHand"></div><span class="muted small" id="cHandSub"></span></div>
-        <div class="card"><span class="muted small">This sheet</span><div class="stat" id="cOurs"></div><span class="muted small" id="cOursSub"></span></div>
-        <div class="card"><span class="kicker">You save</span><div class="stat" id="cSave"></div><span class="muted small" id="cSaveSub"></span></div>
-        <div class="card"><span class="kicker">Pays for itself after</span><div class="stat" id="cPay"></div><span class="muted small" id="cPaySub"></span></div>
+      <div class="soft calc">
+        <div class="calc-fields">
+          <label>Homes<input type="number" id="cN" min="1" value="5000" inputmode="numeric"></label>
+          <label>Minutes per home<input type="number" id="cMin" min="0" step="0.5" value="4" inputmode="decimal"></label>
+          <label class="wide how">How you measure today
+            <select id="cHow">
+              <option value="online">On a satellite map, at a desk</option>
+              <option value="drive">Driving out to each property</option>
+            </select>
+          </label>
+          <label class="labor">Labor $/hour<input type="number" id="cWage" min="0" step="1" value="22" inputmode="decimal"></label>
+          <label id="cMilesBox" class="hidden">Driving $/home<input type="number" id="cMiles" min="0" step="0.5" value="3" inputmode="decimal"></label>
+          <label class="wide">A new customer is worth $/year<input type="number" id="cVal" min="0" step="10" value="400" inputmode="decimal"></label>
+        </div>
+        <div class="outs">
+          <div class="out"><span class="lbl">Measuring it yourself</span><div class="stat" id="cHand"></div><span class="sub" id="cHandSub"></span></div>
+          <div class="out"><span class="lbl">This sheet</span><div class="stat" id="cOurs"></div><span class="sub" id="cOursSub"></span></div>
+          <div class="out good"><span class="lbl">You save</span><div class="stat" id="cSave"></div><span class="sub" id="cSaveSub"></span></div>
+          <div class="out hl"><span class="lbl">Pays for itself after</span><div class="stat" id="cPay"></div><span class="sub" id="cPaySub"></span></div>
+        </div>
+        <p class="fine">Not counted above: quotes go out the same day a lead calls instead of after a site visit, crews stay on paying work, and every postcard carries a real price instead of "call for a quote".</p>
       </div>
-      <p class="small muted" style="margin:0">Not counted above: quotes go out the same day a lead calls instead of after a site visit, crews stay on paying work, and every postcard carries a real price instead of "call for a quote".</p>
     </div>
   </section>
 
   <!-- ============================================================ pricing -->
-  <section>
-    <div class="kicker">Pricing</div>
-    <h2>Pay per home. No subscription.</h2>
-    <div class="card price-card">
-      <div><span class="muted small">First 25 in any ZIP</span><div class="stat">Free</div><span class="muted small">Instantly, on this page</span></div>
-      <div><span class="muted small" id="pTier1Lbl">First 2,000 homes</span><div class="stat" id="pTier1">10¢</div><span class="muted small">per home</span></div>
-      <div><span class="muted small" id="pTier2Lbl">Every home after that</span><div class="stat" id="pTier2">5¢</div><span class="muted small" id="pMin">per home · $25 minimum order</span></div>
-    </div>
-    <div class="card" style="margin-top:12px;padding:6px 10px">
-      <div class="tablewrap">
-        <table class="vs">
-          <thead><tr><th></th><th>Measuring yourself</th><th>Driving out</th><th>This sheet</th></tr></thead>
-          <tbody>
-            <tr><td>Time for 5,000 homes</td><td>~330 hours</td><td>~2,100 hours</td><td class="us">Minutes</td></tr>
-            <tr><td>Cost per home</td><td>~$1.50</td><td>~$12</td><td class="us" id="vsPer">7¢</td></tr>
-            <tr><td>Grass only (beds, decks, driveways removed)</td><td>Only if you trace it</td><td>Yes</td><td class="us">Yes</td></tr>
-            <tr><td>Same numbers for every home</td><td>Varies by who measures</td><td>Varies</td><td class="us">Yes</td></tr>
-          </tbody>
-        </table>
+  <section class="sec tint" id="pricing">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Pricing</p>
+        <h2>Pay per home. No subscription.</h2>
+      </div>
+      <div class="tiers">
+        <div class="soft tier free"><span class="t-lbl">First 25 in any ZIP</span><div class="stat">Free</div><span class="t-sub">Instantly, on this page</span></div>
+        <div class="soft tier"><span class="t-lbl" id="pTier1Lbl">First 2,000 homes</span><div class="stat" id="pTier1">10¢</div><span class="t-sub">per home</span></div>
+        <div class="soft tier"><span class="t-lbl" id="pTier2Lbl">Every home after that</span><div class="stat" id="pTier2">5¢</div><span class="t-sub" id="pMin">per home · $25 minimum order</span></div>
+      </div>
+      <div class="soft vs-wrap">
+        <div class="tablewrap">
+          <table class="vs">
+            <thead><tr><th></th><th>Measuring yourself</th><th>Driving out</th><th class="us-h">This sheet</th></tr></thead>
+            <tbody>
+              <tr><td>Time for 5,000 homes</td><td data-l="Measuring yourself">~330 hours</td><td data-l="Driving out">~2,100 hours</td><td class="us" data-l="This sheet">Minutes</td></tr>
+              <tr><td>Cost per home</td><td data-l="Measuring yourself">~$1.50</td><td data-l="Driving out">~$12</td><td class="us" id="vsPer" data-l="This sheet">7¢</td></tr>
+              <tr><td>Grass only (beds, decks, driveways removed)</td><td data-l="Measuring yourself">Only if you trace it</td><td data-l="Driving out">Yes</td><td class="us" data-l="This sheet">Yes</td></tr>
+              <tr><td>Same numbers for every home</td><td data-l="Measuring yourself">Varies by who measures</td><td data-l="Driving out">Varies</td><td class="us" data-l="This sheet">Yes</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </section>
 
   <!-- ============================================================ faq -->
-  <section>
-    <div class="kicker">Good to know</div>
-    <h2>Questions</h2>
-    <div class="grid2">
-      <div class="card"><b>Does it replace a site visit?</b><p class="small muted" style="margin:6px 0 0">It replaces the measuring, not your judgement. Measurements are estimates from aerial photos and LiDAR; confirm on the first visit before final billing. Every row has a quality flag so you know which to double-check.</p></div>
-      <div class="card"><b>How accurate is it?</b><p class="small muted" style="margin:6px 0 0">Lawn is traced on recent aerial photos, with LiDAR removing anything raised (decks, sheds, play sets, shrubs) and infrared confirming what's actually growing. Check the free sample against yards you've already measured.</p></div>
-      <div class="card"><b>What's in the free sample?</b><p class="small muted" style="margin:6px 0 0">25 real properties picked from across the ZIP, with every column the full sheet has. One free sample per email.</p></div>
-      <div class="card"><b>Is owner information included?</b><p class="small muted" style="margin:6px 0 0">No. Sheets have addresses and measurements, not owner names or mailing addresses, so they're simple to use for postcards to "Resident".</p></div>
-      <div class="card"><b>Which ZIPs can I pick?</b><p class="small muted" style="margin:6px 0 0">Any ZIP in Douglas, Sarpy, Lancaster and Cass counties, Nebraska today, with more counties coming.</p></div>
-      <div class="card"><b>How do I pay and download?</b><p class="small muted" style="margin:6px 0 0">Pay by card at checkout. You get a private order page that updates on its own and has the download button when the sheet is ready.</p></div>
+  <section class="sec">
+    <div class="wrap faq-grid">
+      <div class="sec-head">
+        <p class="eyebrow">Good to know</p>
+        <h2>Questions, answered.</h2>
+      </div>
+      <div class="faq">
+        <details><summary>Does it replace a site visit?</summary><p>It replaces the measuring, not your judgement. Measurements are estimates from aerial photos and LiDAR; confirm on the first visit before final billing. Every row has a quality flag so you know which to double-check.</p></details>
+        <details><summary>How accurate is it?</summary><p>Lawn is traced on recent aerial photos, with LiDAR removing anything raised (decks, sheds, play sets, shrubs) and infrared confirming what's actually growing. Check the free sample against yards you've already measured.</p></details>
+        <details><summary>What's in the free sample?</summary><p>25 real properties picked from across the ZIP, with every column the full sheet has. One free sample per email.</p></details>
+        <details><summary>Is owner information included?</summary><p>No. Sheets have addresses and measurements, not owner names or mailing addresses, so they're simple to use for postcards to "Resident".</p></details>
+        <details><summary>Which ZIPs can I pick?</summary><p>Any ZIP in Douglas, Sarpy, Lancaster and Cass counties, Nebraska today, with more counties coming.</p></details>
+        <details><summary>How do I pay and download?</summary><p>Pay by card at checkout. You get a private order page that updates on its own and has the download button when the sheet is ready.</p></details>
+      </div>
     </div>
   </section>
 
-  <section class="card cta">
-    <h2>See your ZIP in 10 seconds</h2>
-    <p class="muted" style="margin:0 0 14px">Home count, exact price, and 25 free properties. No card needed.</p>
-    <a class="btn" href="#zipbox" id="ctaBtn">Check my ZIP</a>
+  <!-- ============================================================ closing cta -->
+  <section class="sec cta-sec" id="closing">
+    <div class="wrap">
+      <p class="eyebrow">25 properties free</p>
+      <h2>See your ZIP in 10 seconds.</h2>
+      <p>Home count, exact price, and 25 free properties. No card needed.</p>
+      <a class="btn arrow" href="#zipbox" id="ctaBtn">Check my ZIP</a>
+    </div>
   </section>
 
-  <p class="small muted" style="margin-top:18px">Measurements come from public aerial photos, LiDAR and county parcel data, which can be a few years old. Coverage today: Douglas, Sarpy, Lancaster and Cass counties, Nebraska.</p>
+  <div class="wrap foot">
+    <p style="margin:0">Measurements come from public aerial photos, LiDAR and county parcel data, which can be a few years old. Coverage today: Douglas, Sarpy, Lancaster and Cass counties, Nebraska.</p>
+  </div>
+
+  <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Get 25 free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=11"></script>
-<script src="/static/data.js?v=11"></script>
+<script src="/static/common.js?v=12"></script>
+<script src="/static/data.js?v=12"></script>
+<script>
+// Phone-only sticky "Get 25 free" button: shown once the ZIP box has scrolled
+// away, hidden while the ZIP box or the closing CTA is on screen and once a
+// result is showing. Purely presentational; data.js owns all behavior.
+(function () {
+  var btn = document.getElementById("stickyCta"), box = document.getElementById("zipbox"),
+      res = document.getElementById("result"), closing = document.getElementById("closing");
+  if (!btn || !box || !("IntersectionObserver" in window)) return;
+  var reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var seen = { box: true, closing: false };
+  function update() {
+    var show = !seen.box && !seen.closing && res.classList.contains("hidden");
+    btn.classList.toggle("off", !show);
+    btn.setAttribute("aria-hidden", show ? "false" : "true");
+    btn.tabIndex = show ? 0 : -1;
+  }
+  new IntersectionObserver(function (es) {
+    es.forEach(function (e) { seen[e.target === box ? "box" : "closing"] = e.isIntersecting; });
+    update();
+  }).observe(box);
+  new IntersectionObserver(function (es) { seen.closing = es[0].isIntersecting; update(); }).observe(closing);
+  btn.addEventListener("click", function (e) {
+    e.preventDefault();
+    box.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+    setTimeout(function () { document.getElementById("zip").focus({ preventScroll: true }); }, reduce ? 0 : 400);
+  });
+  // When a ZIP check the visitor started reveals the result, bring it into view on phones.
+  var asked = false;
+  document.getElementById("check").addEventListener("click", function () { asked = true; });
+  document.getElementById("zip").addEventListener("keydown", function (e) { if (e.key === "Enter") asked = true; });
+  new MutationObserver(function () {
+    update();
+    if (asked && !res.classList.contains("hidden") && innerWidth <= 899) {
+      asked = false;
+      var top = res.getBoundingClientRect().top;
+      if (top > innerHeight * 0.6) res.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
+    }
+  }).observe(res, { attributes: true, attributeFilter: ["class"] });
+})();
+</script>
 </body>
 </html>
