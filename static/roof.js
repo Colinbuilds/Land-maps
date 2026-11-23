@@ -11,11 +11,16 @@
     if (!me) { $("credits").textContent = ""; return; }
     $("coName").textContent = me.name;
     document.documentElement.style.setProperty("--accent", me.brand_color || "#1d4ed8");
+    member = !!me.member;
     showCredits(me.credits);
     if (!map) initMap();
     loadReports();
   }
-  const showCredits = (n) => { $("credits").textContent = `${n} credit${n === 1 ? "" : "s"}`; };
+  let member = false;
+  const showCredits = (n) => {
+    $("credits").innerHTML = member ? `Member · unlimited reports`
+      : `${n} credit${n === 1 ? "" : "s"} <a href="/join" style="margin-left:8px;font-weight:600">Get more</a>`;
+  };
 
   $("lBtn").addEventListener("click", async () => {
     try {

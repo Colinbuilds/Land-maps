@@ -68,12 +68,22 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     d = rep["data"]
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
-    c.setTitle(f"Roof Report - {d['address']}")
-    total_pages = 4 if d.get("walls") else 3
+    c.setTitle(f"Property Report - {d['address']}")
+    has_facets = any(st.get("facet_polys") for st in d["structures"])
+    extra = []  # pages after the first three, in order
+    if has_facets:
+        extra += ["pitch", "area"]
+    if d.get("walls"):
+        extra.append("walls")
+        if (d["walls"].get("elevations") or {}):
+            extra.append("elev")
+    if d.get("yard"):
+        extra.append("yard")
+    total_pages = 3 + len(extra)
 
     # ---------------------------------------------------------------- page 1
     _header(c, rep, company, 1, total_pages)
-    _title(c, "Roof Measurement Report", H - 92)
+    _title(c, "Property Measurement Report", H - 92)
     c.setFont("Helvetica", 11)
     c.setFillColor(colors.HexColor("#334155"))
     c.drawString(M, H - 110, f"{d['address']}, {(d.get('city') or '').title()} NE {d.get('zip') or ''}".strip()
@@ -217,8 +227,16 @@ def render_pdf(rep: dict, company: dict) -> bytes:
         c.drawString(M, y, n)
         y -= 13
     c.showPage()
-    if d.get("walls"):
-        _walls_page(c, rep, company, d["walls"], total_pages)
+    for i, kind in enumerate(extra):
+        pg = 4 + i
+        if kind in ("pitch", "area"):
+            _facet_page(c, rep, company, d, kind, pg, total_pages)
+        elif kind == "walls":
+            _walls_page(c, rep, company, d["walls"], total_pages, pg)
+        elif kind == "elev":
+            _elev_page(c, rep, company, d["walls"], pg, total_pages)
+        elif kind == "yard":
+            _yard_page(c, rep, company, d["yard"], pg, total_pages)
     c.save()
     return buf.getvalue()
 
@@ -297,10 +315,10 @@ def _draw_diagram(c, d, box):
     c.drawCentredString(nx, ny + 26, "N")
 
 
-def _walls_page(c, rep, company, w, total_pages):
-    """Page 4: siding / gutter / trim measurements."""
+def _walls_page(c, rep, company, w, total_pages, page=4):
+    """Siding / gutter / trim measurements."""
     import textwrap
-    _header(c, rep, company, 4, total_pages)
+    _header(c, rep, company, page, total_pages)
     _title(c, "Walls & Exterior", H - 92)
     c.setFont("Helvetica", 9)
     c.setFillColor(colors.HexColor("#475569"))
@@ -338,4 +356,196 @@ def _walls_page(c, rep, company, w, total_pages):
     for line in textwrap.wrap(w["note"], 112):
         c.drawString(M, y, line)
         y -= 13
+    c.showPage()
+
+
+_PITCH_FILL = ["#e0f2fe", "#dcfce7", "#fef9c3", "#ffedd5", "#fce7f3", "#ede9fe", "#e2e8f0"]
+
+
+def _facet_page(c, rep, company, d, mode, page, total_pages):
+    _header(c, rep, company, page, total_pages)
+    _title(c, "Pitch Diagram" if mode == "pitch" else "Facet Areas", H - 92)
+    c.setFont("Helvetica", 9)
+    c.setFillColor(colors.HexColor("#475569"))
+    c.drawString(M, H - 108, "Each facet's measured pitch (rise per 12 in.); arrows point downslope. North is up." if mode == "pitch"
+                 else "Facets lettered smallest (A) to largest, with sloped area in sq ft. North is up.")
+    facets = [(st, f) for st in d["structures"] for f in (st.get("facet_polys") or [])]
+    box_h = H - 240 if mode == "pitch" else H - 330
+    bx, by, bw, bh = M, H - 130 - box_h, W - 2 * M, box_h
+    xs = [x for _, f in facets for ring in f["poly"] for x, _ in ring]
+    ys = [y for _, f in facets for ring in f["poly"] for _, y in ring]
+    if not xs:
+        c.showPage()
+        return
+    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+    sc = min(bw / max(maxx - minx, 1), bh / max(maxy - miny, 1)) * 0.9
+    ox = bx + (bw - (maxx - minx) * sc) / 2
+    oy = by + (bh - (maxy - miny) * sc) / 2
+    P = lambda x, y: (ox + (x - minx) * sc, oy + (y - miny) * sc)
+    pitches = sorted({f["pitch"] for _, f in facets})
+    for _, f in facets:
+        fill = _PITCH_FILL[pitches.index(f["pitch"]) % len(_PITCH_FILL)] if mode == "pitch" else "#f1f5f9"
+        for ring in f["poly"]:
+            path = c.beginPath()
+            path.moveTo(*P(*ring[0]))
+            for x, y in ring[1:]:
+                path.lineTo(*P(x, y))
+            path.close()
+            c.setFillColor(colors.HexColor(fill))
+            c.setStrokeColor(colors.HexColor("#334155"))
+            c.setLineWidth(0.8)
+            c.drawPath(path, stroke=1, fill=1)
+    for _, f in facets:
+        cx, cy = P(*f["c"])
+        c.setFillColor(colors.HexColor("#0f172a"))
+        if mode == "pitch":
+            c.setFont("Helvetica-Bold", 9)
+            c.drawCentredString(cx, cy + 2, f"{f['pitch']:g}/12" if f["pitch"] else "Flat")
+            if f.get("down"):
+                L = 9
+                dx, dy = f["down"][0] * L, f["down"][1] * L
+                c.setStrokeColor(colors.HexColor("#0f172a"))
+                c.setLineWidth(1)
+                x0, y0 = cx - dx / 2, cy - 8 - dy / 2
+                x1, y1 = cx + dx / 2, cy - 8 + dy / 2
+                c.line(x0, y0, x1, y1)
+                import math
+                a = math.atan2(y1 - y0, x1 - x0)
+                for s_ in (2.6, -2.6):
+                    c.line(x1, y1, x1 - 3.5 * math.cos(a + s_ / 6), y1 - 3.5 * math.sin(a + s_ / 6))
+        else:
+            c.setFont("Helvetica-Bold", 10)
+            c.drawCentredString(cx, cy + 3, f["label"])
+            c.setFont("Helvetica", 8)
+            c.drawCentredString(cx, cy - 7, f"{round(f['area_sqft']):,}")
+    if mode == "area":
+        y = by - 22
+        c.setFont("Helvetica-Bold", 9.5)
+        c.setFillColor(colors.HexColor("#0f172a"))
+        for i, h in enumerate(("Facet", "Pitch", "Area (sq ft)")):
+            c.drawString(M + i * 110, y, h)
+        c.setFont("Helvetica", 9.5)
+        for st, f in facets:
+            y -= 14
+            if y < 60:
+                break
+            name = f["label"] + (f"  ({st['name']})" if len(d["structures"]) > 1 else "")
+            for i, v in enumerate((name, f"{f['pitch']:g}/12" if f["pitch"] else "Flat", f"{round(f['area_sqft']):,}")):
+                c.drawString(M + i * 110, y, v)
+    else:
+        lx, ly = M, by - 18
+        c.setFont("Helvetica", 9)
+        for i, p_ in enumerate(pitches):
+            c.setFillColor(colors.HexColor(_PITCH_FILL[i % len(_PITCH_FILL)]))
+            c.setStrokeColor(colors.HexColor("#94a3b8"))
+            c.rect(lx, ly - 1, 12, 9, stroke=1, fill=1)
+            c.setFillColor(colors.HexColor("#0f172a"))
+            lab = f"{p_:g}/12" if p_ else "Flat"
+            c.drawString(lx + 16, ly, lab)
+            lx += 30 + c.stringWidth(lab, "Helvetica", 9)
+    c.showPage()
+
+
+def _ftin(v):
+    f = int(v + 1e-6)
+    i = round((v - f) * 12)
+    if i == 12:
+        return f"{f + 1}'"
+    return f"{f}' {i}\"" if i else f"{f}'"
+
+
+def _elev_page(c, rep, company, w, page, total_pages):
+    _header(c, rep, company, page, total_pages)
+    _title(c, "Elevations", H - 92)
+    c.setFont("Helvetica", 9)
+    c.setFillColor(colors.HexColor("#475569"))
+    c.drawString(M, H - 108, "Walls as seen from each side. Lengths along the bottom; eave and peak heights on the walls. Same scale throughout.")
+    E = w["elevations"]
+    sides = [s_ for s_ in ("North", "East", "South", "West") if s_ in E]
+    maxW = max(p_[0] for s_ in sides for wl in E[s_] for p_ in wl["pts"])
+    maxH = max(p_[1] for s_ in sides for wl in E[s_] for p_ in wl["pts"])
+    rowh = (H - 170) / max(1, len(sides))
+    sc = min((W - 2 * M - 10) / max(maxW, 1), (rowh - 46) / max(maxH, 1))
+    for i, side in enumerate(sides):
+        top = H - 130 - i * rowh
+        base = top - rowh + 30
+        c.setFont("Helvetica-Bold", 10.5)
+        c.setFillColor(colors.HexColor("#0f172a"))
+        c.drawString(M, top - 4, side)
+        c.setFont("Helvetica", 9)
+        c.setFillColor(colors.HexColor("#475569"))
+        c.drawString(M + 46, top - 4, f"{round(w['by_side'][side]):,} sq ft of wall")
+        c.setStrokeColor(colors.HexColor("#64748b"))
+        c.setLineWidth(0.8)
+        c.line(M, base, M + maxW * sc + 10, base)
+        X = lambda x: M + 5 + x * sc
+        for wl in E[side]:
+            pts = wl["pts"]
+            path = c.beginPath()
+            path.moveTo(X(pts[0][0]), base)
+            for x, h in pts:
+                path.lineTo(X(x), base + h * sc)
+            path.lineTo(X(pts[-1][0]), base)
+            path.close()
+            c.setFillColor(colors.HexColor("#f1f5f9"))
+            c.setStrokeColor(colors.HexColor("#1e293b"))
+            c.setLineWidth(0.9)
+            c.drawPath(path, stroke=1, fill=1)
+        walls_ = E[side]
+        for wi, wl in enumerate(walls_):
+            pts = wl["pts"]
+            a0, a1 = pts[0][0], pts[-1][0]
+            if any(min(a1, o["pts"][-1][0]) - max(a0, o["pts"][0][0]) > 0.5 * (a1 - a0) for o in walls_[wi + 1:]):
+                continue  # mostly behind a nearer wall
+            x0, x1 = X(pts[0][0]), X(pts[-1][0])
+            span = pts[-1][0] - pts[0][0]
+            if span < 5 or x1 - x0 < 18:  # too narrow to label legibly
+                continue
+            hl, hr = pts[0][1], pts[-1][1]
+            peak = max(pts, key=lambda q: q[1])
+            c.setFillColor(colors.HexColor("#b91c1c"))
+            c.setFont("Helvetica-Bold", 8.5)
+            c.drawCentredString((x0 + x1) / 2, base + min(hl, hr) * sc / 2 - 3, wl.get("label", ""))
+            c.setFillColor(colors.HexColor("#334155"))
+            c.setFont("Helvetica", 7.5)
+            c.drawCentredString((x0 + x1) / 2, base - 10, _ftin(wl.get("length") or (pts[-1][0] - pts[0][0])))
+            if span >= 8:
+                c.drawString(x0 + 2, base + hl * sc - 9, _ftin(hl))
+                if abs(hr - hl) > 0.6:
+                    c.drawRightString(x1 - 2, base + hr * sc - 9, _ftin(hr))
+            if peak[1] - max(hl, hr) > 1.0:
+                c.drawCentredString(X(peak[0]), base + peak[1] * sc + 3, _ftin(peak[1]))
+    c.showPage()
+
+
+def _yard_page(c, rep, company, y, page, total_pages):
+    _header(c, rep, company, page, total_pages)
+    _title(c, "Lot & Yard", H - 92)
+    c.setFont("Helvetica", 9)
+    c.setFillColor(colors.HexColor("#475569"))
+    c.drawString(M, H - 108, "For lawn, snow, concrete and landscape work. Square feet.")
+    top = H - 124
+    if y.get("photo_jpg"):
+        img = ImageReader(io.BytesIO(base64.b64decode(y["photo_jpg"])))
+        iw, ih = img.getSize()
+        side = 300
+        s_ = min(side / iw, side / ih)
+        c.drawImage(img, M, top - ih * s_, iw * s_, ih * s_)
+    n = lambda v: "-" if v is None else f"{round(v):,}"
+    rows = [("#22c55e", "Lawn (grass only)", n(y.get("lawn_sqft"))), ("#86efac", "Parkway grass", n(y.get("parkway_sqft"))),
+            ("#3b82f6", "Driveway", n(y.get("driveway_sqft"))), ("#ec4899", "Public sidewalk", n(y.get("sidewalk_sqft"))),
+            ("#eab308", "Patios & walks", n(y.get("other_hardscape_sqft"))), ("#ef4444", "Decks, sheds, play sets", n(y.get("structures_sqft"))),
+            ("#a855f7", "Landscape beds", n(y.get("beds_sqft"))), ("#64748b", "Buildings", n(y.get("building_sqft"))),
+            (None, "Trees on the lot", str(y.get("tree_count") if y.get("tree_count") is not None else "-")),
+            (None, "Street frontage", n(y.get("frontage_ft")) + " ft"), (None, "Lot", n(y.get("lot_sqft")))]
+    x0, yy = M + 320, top - 12
+    for col, k, v in rows:
+        if col:
+            c.setFillColor(colors.HexColor(col))
+            c.rect(x0, yy - 1, 9, 9, stroke=0, fill=1)
+        c.setFillColor(colors.HexColor("#0f172a"))
+        c.setFont("Helvetica-Bold" if k == "Lot" else "Helvetica", 9.5)
+        c.drawString(x0 + 14, yy, k)
+        c.drawRightString(W - M, yy, v)
+        yy -= 17
     c.showPage()

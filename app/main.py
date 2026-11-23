@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from shapely.geometry import mapping, Point
 
-from . import accounts, bulk, corrections, counties, datastore, render, roofreport
+from . import accounts, billing, bulk, corrections, counties, datastore, render, roofreport
 from .roofpdf import render_pdf
 from .gis import get_json, query_features
 from .imagery import Mosaic
@@ -393,9 +393,15 @@ def leads():
 ROOF_COOKIE = "roof_session"
 
 
-def roof_company(request: Request) -> dict:
+def _session_company(request: Request) -> dict | None:
+    """The logged-in company (membership re-checked with Stripe if it lapsed)."""
     cid = accounts.read_session(request.cookies.get(ROOF_COOKIE))
     c = accounts.get_company(cid) if cid else None
+    return billing.refresh(c) if c else None
+
+
+def roof_company(request: Request) -> dict:
+    c = _session_company(request)
     if not c:
         raise HTTPException(401, "please log in")
     return c
@@ -474,7 +480,16 @@ def roof_order(body: RoofOrder, c: dict = Depends(roof_company)):
         rid = accounts.spend_and_save(c["id"], rep)
     except PermissionError:
         raise HTTPException(402, "You're out of report credits.")
-    return {"id": rid, "credits": accounts.get_company(c["id"])["credits"]}
+    left = accounts.get_company(c["id"])["credits"]
+    from . import mailer
+    mailer.notify_owner(f"Property report {rid} ordered by {c['name']}",
+                        f"{c['name']} ({c['email']}) ordered a property report for {rep.get('address')}.\n"
+                        f"Credits left: {left}.", reply_to=c["email"])
+    if left <= 2:
+        mailer.send(c["email"], f"{left} report credit{'s' if left != 1 else ''} left",
+                    f"Your company has {left} property report credit{'s' if left != 1 else ''} left. "
+                    "Reply to this email to add more.")
+    return {"id": rid, "credits": left}
 
 
 @app.get("/api/roof/reports")
@@ -601,17 +616,125 @@ def page_data_order(oid: str):
     return FileResponse(STATIC / "data-order.html")
 
 
+# ------------------------------------------------------------- membership
+class JoinReq(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    password: str = Field(min_length=8, max_length=200)
+    phone: str = Field(default="", max_length=40)
+
+
+@app.get("/join")
+@app.get("/join/done")
+def page_join():
+    return FileResponse(STATIC / "join.html")
+
+
+@app.get("/api/billing/plans")
+def billing_plans(request: Request):
+    c = _session_company(request)
+    p = billing.plans()
+    return {"member_price_cents": p["member_price_cents"], "credit_price_cents": p["credit_price_cents"],
+            "list_discount": p["list_discount"], "packs": list(billing.CREDIT_PACKS),
+            "stripe": billing.enabled(), "company": c}
+
+
+@app.post("/api/join")
+def join(body: JoinReq, request: Request):
+    if accounts.company_by_email(body.email):
+        raise HTTPException(409, "There's already an account with that email. Log in instead.")
+    c = accounts.create_company(body.name, body.email, body.password, 0, body.phone)
+    from . import mailer
+    mailer.notify_owner(f"New company sign-up: {c['name']}",
+                        f"{c['name']} ({c['email']}, {body.phone or 'no phone'}) created an account.", reply_to=c["email"])
+    r = JSONResponse(c)
+    r.set_cookie(ROOF_COOKIE, accounts.make_session(c["id"]), max_age=30 * 86400, httponly=True,
+                 samesite="lax", secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
+    return r
+
+
+@app.post("/api/billing/member")
+def billing_member(request: Request, c: dict = Depends(roof_company)):
+    if not billing.enabled():
+        raise HTTPException(400, "Card payments aren't set up yet. Contact us to join.")
+    if c["member"]:
+        raise HTTPException(400, "You're already a member.")
+    try:
+        return {"checkout_url": billing.member_checkout(c, _base_url(request))}
+    except Exception as e:
+        raise HTTPException(502, f"Payment provider error: {str(e)[:200]}")
+
+
+class CreditsReq(BaseModel):
+    qty: int
+
+
+@app.post("/api/billing/credits")
+def billing_credits(body: CreditsReq, request: Request, c: dict = Depends(roof_company)):
+    if not billing.enabled():
+        raise HTTPException(400, "Card payments aren't set up yet. Contact us for credits.")
+    try:
+        return {"checkout_url": billing.credits_checkout(c, body.qty, _base_url(request))}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Payment provider error: {str(e)[:200]}")
+
+
+@app.get("/api/billing/confirm")
+def billing_confirm(session_id: str, c: dict = Depends(roof_company)):
+    try:
+        out = billing.confirm_session(session_id)
+    except Exception:
+        raise HTTPException(502, "Couldn't confirm the payment with Stripe yet. Refresh in a minute.")
+    if not out or out["id"] != c["id"]:
+        raise HTTPException(404, "payment not found")
+    from . import mailer
+    if out["member"]:
+        mailer.notify_owner(f"New member: {out['name']}", f"{out['name']} ({out['email']}) started a membership.",
+                            reply_to=out["email"])
+    return out
+
+
+@app.post("/api/billing/portal")
+def billing_portal(request: Request, c: dict = Depends(roof_company)):
+    try:
+        return {"url": billing.portal_url(c, _base_url(request))}
+    except Exception as e:
+        raise HTTPException(400, f"Billing page unavailable: {str(e)[:200]}")
+
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    if not billing.verify_webhook(payload, request.headers.get("stripe-signature")):
+        raise HTTPException(400, "bad signature")
+    try:
+        what = billing.handle_event(json.loads(payload))
+    except Exception as e:
+        raise HTTPException(500, f"webhook error: {str(e)[:200]}")
+    return {"ok": True, "did": what}
+
+
 @app.get("/api/data/pricing")
 def data_pricing():
     """Public per-property rates (for the savings calculator)."""
     return datastore.pricing()
 
 
+@app.get("/api/data/types")
+def data_types():
+    """What a buyer can include in a sheet, and the rates."""
+    return {"types": [{"key": k, "label": l, "columns": cols} for k, l, cols in datastore.MEASURE_TYPES],
+            "pricing": datastore.pricing()}
+
+
 @app.get("/api/data/quote")
-def data_quote(zip: str, classes: str = "R"):
+def data_quote(request: Request, zip: str, classes: str = "R", types: str = "lawn", product: str = "standard"):
     z = _zip5(zip)
+    c = _session_company(request)
     try:
-        q = datastore.quote(z, _classes(classes))
+        q = datastore.quote(z, _classes(classes), types.split(","), product, member=bool(c and c["member"]))
     except LookupError as e:
         raise HTTPException(404, str(e))
     try:
@@ -619,8 +742,11 @@ def data_quote(zip: str, classes: str = "R"):
         q["zip_geojson"] = mapping(zp.simplify(0.0002))
     except Exception:
         q["zip_geojson"] = None
-    q["columns"] = [label for _, label in datastore.COLUMNS]
+    q["columns"] = [label for _, label in datastore.columns_for(q["types"])]
+    q["type_catalog"] = [{"key": k, "label": l} for k, l, _ in datastore.MEASURE_TYPES]
     q["stripe"] = datastore.stripe_enabled()
+    q["member"] = bool(c and c["member"])
+    q["logged_in"] = bool(c)
     return q
 
 
@@ -649,13 +775,17 @@ class OrderReq(BaseModel):
     email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     zip: str
     classes: list[str] = ["R"]
+    types: list[str] = ["lawn"]
+    product: str = "standard"
 
 
 @app.post("/api/data/order")
 def data_order(body: OrderReq, request: Request):
     z = _zip5(body.zip)
     try:
-        o = datastore.create_order(body.email, z, _classes(body.classes))
+        c = _session_company(request)
+        o = datastore.create_order(body.email, z, _classes(body.classes), body.types, site=_base_url(request),
+                                   product=body.product, member=bool(c and c["member"]))
     except LookupError as e:
         raise HTTPException(404, str(e))
     out = {"id": o["id"], "token": o["token"], "amount_cents": o["amount_cents"], "count": o["count"],
@@ -699,10 +829,17 @@ def data_order_checkout(oid: str, request: Request, t: str | None = None):
 def data_order_csv(oid: str, t: str | None = None):
     o = _order_access(oid, t)
     classes = o["classes"].split(",") if o["classes"] else ["R"]
+    if (o.get("product") or "standard") == "premier":
+        from . import premier
+        if not premier.ready(o["zip"], classes) or o["status"] not in ("ready", "processing"):
+            raise HTTPException(409, "Your Premier list isn't ready yet.")
+        return FileResponse(premier.path(o["zip"], classes), media_type="application/zip",
+                            filename=f"premier_{o['zip']}_{o['id']}.zip")
     if o["status"] != "ready" and not (o["status"] == "processing" and datastore.dataset_ready(o["zip"], classes)):
         raise HTTPException(409, "Your sheet isn't ready yet.")
     rows = datastore.read_dataset(o["zip"], classes)
-    return Response(datastore.to_csv(rows), media_type="text/csv",
+    cols = datastore.columns_for(datastore.order_types(o))  # only what they paid for
+    return Response(datastore.to_csv(rows, cols), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="properties_{o["zip"]}_{o["id"]}.csv"'})
 
 
@@ -718,9 +855,9 @@ def admin_data():
 
 
 class DataPricing(BaseModel):
-    rate_cents: float = Field(ge=0.5, le=100)
-    bulk_rate_cents: float = Field(ge=0.5, le=100)
-    bulk_threshold: int = Field(ge=0, le=1_000_000)
+    rate_cents: float = Field(ge=0.5, le=100)          # first measurement type, per property
+    extra_type_cents: float = Field(ge=0, le=100)      # each extra type, per property
+    premier_cents: float = Field(default=25.0, ge=1, le=500)  # Premier list, per property
     min_order_usd: float = Field(ge=0, le=100_000)
 
 
@@ -743,9 +880,13 @@ def admin_data_paid(oid: str):
 class Prebuild(BaseModel):
     zip: str
     classes: list[str] = ["R"]
+    product: str = "standard"
 
 
 @app.post("/api/admin/data/prebuild", dependencies=[Depends(admin)])
 def admin_data_prebuild(body: Prebuild):
     """Measure a ZIP ahead of demand so buyers get it instantly."""
+    if body.product == "premier":
+        from . import premier
+        return {"status": premier.ensure(_zip5(body.zip), _classes(body.classes))}
     return {"status": datastore.ensure_dataset(_zip5(body.zip), _classes(body.classes))}

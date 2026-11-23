@@ -120,7 +120,126 @@ def _step_walls(lidar, env, walls_poly):
     return out
 
 
-def measure_walls(lidar, env, outline, segments=None, overhang: float = 1.0) -> dict | None:
+class RoofModel:
+    """Roof surface from the fitted planes: absolute roof height at any point
+    (the plane covering it, from the facet label grid)."""
+
+    def __init__(self, planes, L, xs, ys):
+        from scipy import ndimage as ndi
+        # real facets only: scrap planes (fascia / wall hits) would bend wall tops
+        big = [p for p in planes if float(p.get("area_sqft", 0)) >= 50] or list(planes)
+        self.coef = {int(p["id"]): (float(p["a"]), float(p["b"]), float(p["c"])) for p in big}
+        self.xs, self.ys = np.asarray(xs, float), np.asarray(ys, float)
+        self.g = float(abs(self.xs[1] - self.xs[0])) if len(self.xs) > 1 else 0.5
+        valid = np.isin(L, list(self.coef))
+        if not valid.any():
+            self.L = None
+            return
+        idx = ndi.distance_transform_edt(~valid, return_distances=False, return_indices=True)
+        self.L = np.where(valid, L, L[tuple(idx)])  # every cell takes its nearest real plane
+
+    def z(self, P):
+        if self.L is None:
+            return np.full(len(P), np.nan)
+        H, W = self.L.shape
+        c = np.clip(np.round((P[:, 0] - self.xs[0]) / self.g).astype(int), 0, W - 1)
+        r = np.clip(np.round((self.ys[0] - P[:, 1]) / self.g).astype(int), 0, H - 1)
+        lab = self.L[r, c]
+        out = np.full(len(P), np.nan)
+        for k, (a, b, cc) in self.coef.items():
+            m = lab == k
+            out[m] = a * P[m, 0] + b * P[m, 1] + cc
+        return out
+
+
+def _trim_end(pts, L, end, reach=2.0, jump=1.5):
+    """Replace a spike / drop in the last ``reach`` ft of a wall (a corner
+    picking up the next roof, or a gap) by continuing the wall top inside
+    it straight out to the corner."""
+    segs = list(zip(pts, pts[1:]))
+    if not segs:
+        return pts
+    order = range(len(segs)) if end == 0 else range(len(segs) - 1, -1, -1)
+    xin = reach if end == 0 else L - reach
+    # first segment reaching past the end zone that isn't itself a cliff
+    pick = None
+    for i in order:
+        (x0, y0), (x1, y1) = segs[i]
+        inside = x1 > xin if end == 0 else x0 < xin
+        if not inside:
+            continue
+        if x1 > x0 and abs(y1 - y0) / (x1 - x0) <= 1.0:
+            pick = i
+            break
+    if pick is None:
+        return pts
+    (x0, y0), (x1, y1) = segs[pick]
+    slope = (y1 - y0) / (x1 - x0)
+    if end == 0:
+        if pick == 0 and x0 <= 0.01:
+            return pts
+        tail = [list(q) for q in pts[pick + 1:]]
+        h0 = y0 - slope * x0
+        if all(abs(q[1] - (y0 + slope * (q[0] - x0))) <= jump for q in pts[:pick + 1]):
+            return pts
+        return [[0.0, h0]] + tail
+    if pick == len(segs) - 1 and x1 >= L - 0.01:
+        return pts
+    head = [list(q) for q in pts[:pick + 1]]
+    h1 = y1 + slope * (L - x1)
+    if all(abs(q[1] - (y1 + slope * (q[0] - x1))) <= jump for q in pts[pick + 1:]):
+        return pts
+    return head + [[L, h1]]
+
+
+def _clean_shape(ts, h, L, tol=0.35):
+    """A wall's top as a few straight pieces: [(t, h), ...] from 0 to L."""
+    from shapely.geometry import LineString
+    t = np.concatenate([[0.0], ts, [L]])
+    hh = np.concatenate([[h[0]], h, [h[-1]]])
+    line = LineString(np.column_stack([t, hh])).simplify(tol, preserve_topology=False)
+    pts = [list(map(float, c)) for c in line.coords]
+    # a corner picking up the next roof (or a gap) shows as a short spike or
+    # drop at a wall end: carry the height from 2 ft in out to the corner
+    if L > 6 and len(pts) > 2:
+        pts = _trim_end(pts, L, 0)
+        pts = _trim_end(pts, L, 1)
+        pts = [[x, max(0.0, y)] for x, y in pts]
+    # a short piece between two longer slopes is the peak (or valley) where
+    # those slopes meet: put the corner at their intersection
+    changed = True
+    while changed and len(pts) >= 4:
+        changed = False
+        for i in range(1, len(pts) - 2):
+            (xa, ya), (xb, yb), (xc, yc), (xd, yd) = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
+            if xc - xb < 2.0 and xb - xa > 3.0 and xd - xc > 3.0:
+                s1 = (yb - ya) / (xb - xa)
+                s2 = (yd - yc) / (xd - xc)
+                if abs(s1 - s2) > 0.05:
+                    xi = (yc - ya + s1 * xa - s2 * xc) / (s1 - s2)
+                    if xb - 2.0 <= xi <= xc + 2.0:
+                        pts = pts[:i] + [[xi, ya + s1 * (xi - xa)]] + pts[i + 2:]
+                        changed = True
+                        break
+    # near-level pieces are level (an eave is level)
+    for i in range(len(pts) - 1):
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        if x1 > x0 and abs(y1 - y0) / (x1 - x0) < 0.06:
+            m = (y0 + y1) / 2
+            pts[i][1] = pts[i + 1][1] = m
+    # drop vertices left on a straight line
+    clean = [pts[0]]
+    for q in pts[1:]:
+        if len(clean) >= 2:
+            (x0, y0), (x1, y1) = clean[-2], clean[-1]
+            if x1 > x0 and q[0] > x1 and abs((y1 - y0) / (x1 - x0) - (q[1] - y1) / (q[0] - x1)) < 0.02:
+                clean[-1] = q
+                continue
+        clean.append(q)
+    return [[round(x, 2), round(y, 2)] for x, y in clean]
+
+
+def measure_walls(lidar, env, outline, segments=None, overhang: float = 1.0, model: "RoofModel | None" = None) -> dict | None:
     """Wall areas per side for one structure.
 
     ``outline``: the roof outline (Polygon, LAS feet). ``segments``: the roof
@@ -162,12 +281,31 @@ def measure_walls(lidar, env, outline, segments=None, overhang: float = 1.0) -> 
             continue
         h = np.where(ok, h, np.nanmedian(h))
         h = np.clip(h, 0, 60)
+        if len(h) >= 5:  # one-foot gaps and spikes along the wall top
+            from scipy.ndimage import median_filter
+            h = median_filter(h, size=5, mode="nearest")
         h[h < MIN_WALL_TOP] = 0.0  # deck / stoop floors and railings aren't walls
+        shape = None
+        if model is not None:
+            # wall top from the roof planes (straight eaves, exact gables);
+            # the LiDAR only sets where the ground is along this wall
+            zr = model.z(P)
+            okm = np.isfinite(zr) & (h > 0)
+            if okm.sum() >= max(2, 0.5 * k):
+                g0 = float(np.median(zr[okm] - h[okm]))
+                hm = np.where(np.isfinite(zr), zr - g0, h)
+                hm = np.clip(hm, 0, 60)
+                hm[h <= 0] = 0.0
+                h = hm
+                shape = _clean_shape(ts, h, L)
         area = float(h.sum() * (L / k))
         side = _side(*out)
         per[side] += area
         facets.append({"side": side, "kind": "wall", "length_ft": round(L, 1),
-                       "height_ft": round(float(np.median(h)), 1), "area_sqft": round(area, 1)})
+                       "height_ft": round(float(np.median(h)), 1), "area_sqft": round(area, 1),
+                       "a": [round(float(a[0]), 2), round(float(a[1]), 2)], "b": [round(float(b[0]), 2), round(float(b[1]), 2)],
+                       "profile": [round(float(x), 1) for x in h],
+                       "shape": shape or _clean_shape(ts, h, L, tol=0.6)})
         edge_h.append((float(h[0]), float(h[-1])))
     # corners: convex = outside corner, concave = inside corner; corner height
     # is the lower of the two walls meeting there (the trim stops at the eave)

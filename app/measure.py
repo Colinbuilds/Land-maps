@@ -250,7 +250,7 @@ class Measurer:
         return struct, bed, canopy, crowns, tops
 
     # --------------------------------------------------------------- measure
-    def measure(self, parcel_feature: dict, want_overlay: bool = False) -> dict:
+    def measure(self, parcel_feature: dict, want_overlay: bool = False, want_photo: bool = False) -> dict:
         attrs = self.parcel_attrs(parcel_feature["attributes"])
         P_wgs = parcel_feature["geometry"]
         P = self.proj.to_local(P_wgs).buffer(0)
@@ -637,7 +637,10 @@ class Measurer:
         if want_overlay:
             result["overlay"] = _overlay_png(mos, parcel_m, lawn_m | parkway_m, drive_m, other_m, struct_m | pool_m, bed_m | canopy_m,
                                              frontage, sw_stations, self, step, sw_w,
-                                             crown_m=crown_m & (parcel_m | parkway_m), tops=lot_tops)
+                                             crown_m=crown_m & (parcel_m | parkway_m), tops=lot_tops,
+                                             photo=want_photo)
+            if want_photo:
+                result["photo_jpg"] = result["overlay"].pop("photo_jpg", "")
             result["parcel_geojson"] = _geojson(P_wgs)
         return result
 
@@ -872,7 +875,7 @@ def _geojson(g):
 
 
 def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, frontage, sw_stations, meas, step, sw_w,
-                 crown_m=None, tops=()):
+                 crown_m=None, tops=(), photo=False):
     h, w = parcel_m.shape
     rgba = np.zeros((h, w, 4), np.uint8)
     rgba[lawn_m] = (34, 197, 94, 110)
@@ -914,10 +917,38 @@ def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, front
     buf = io.BytesIO()
     im.save(buf, "PNG", optimize=True)
     W_, S_, E_, N_ = mos.bounds_wgs
-    return {
+    out = {
         "png": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
         "bounds": [[S_, W_], [N_, E_]],
     }
+    if photo:
+        out["photo_jpg"] = _composite_jpg(mos, im, parcel_m)
+    return out
+
+
+def _composite_jpg(mos, overlay_im, parcel_m, size=900) -> str:
+    """The overlay on the aerial photo, cropped square around the lot."""
+    try:
+        rgb = np.asarray(mos.rgb)
+        if rgb.dtype != np.uint8:
+            rgb = np.clip(rgb * (255 if rgb.max() <= 1.5 else 1), 0, 255).astype(np.uint8)
+        bg = Image.fromarray(rgb).convert("RGBA").resize(overlay_im.size)
+        comp = Image.alpha_composite(bg, overlay_im).convert("RGB")
+        ys, xs = np.nonzero(parcel_m)
+        if not len(xs):
+            return ""
+        sx, sy = overlay_im.size[0] / parcel_m.shape[1], overlay_im.size[1] / parcel_m.shape[0]
+        x0, x1, y0, y1 = xs.min() * sx, xs.max() * sx, ys.min() * sy, ys.max() * sy
+        side = max(x1 - x0, y1 - y0) * 1.3
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        crop = comp.crop((int(max(0, cx - side / 2)), int(max(0, cy - side / 2)),
+                          int(min(comp.size[0], cx + side / 2)), int(min(comp.size[1], cy + side / 2))))
+        crop.thumbnail((size, size))
+        b = io.BytesIO()
+        crop.save(b, "JPEG", quality=80, optimize=True)
+        return base64.b64encode(b.getvalue()).decode()
+    except Exception:
+        return ""
 
 
 _measurers: dict = {}

@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Membership</title>
+<meta name="description" content="Unlimited property reports and half-price ZIP lists for $99 a month, or buy report credits as you go.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
+<link rel="stylesheet" href="/static/styles.css?v=14">
+<style>
+  body.jp {
+    --bg: #f6f7f2; --tint: #ecf1e8; --card: #fff; --ink: #15342b; --muted: #55665c;
+    --line: rgba(21, 52, 43, .10); --field: #f3f5f0;
+    --acc-strong: #15803d; --acc-strong: color-mix(in srgb, var(--accent) 80%, #04140c);
+    --acc-text: #166534; --acc-text: color-mix(in srgb, var(--accent) 62%, #0b2419);
+    --acc-soft: #e4f3e7; --acc-soft: color-mix(in srgb, var(--accent) 13%, #fff);
+    --shadow-sm: 0 1px 2px rgba(16, 40, 30, .05), 0 2px 8px -2px rgba(16, 40, 30, .06);
+    --shadow: 0 1px 2px rgba(16, 40, 30, .04), 0 12px 32px -12px rgba(16, 40, 30, .16);
+    --display: "Manrope", "Inter", system-ui, sans-serif;
+    font: 16px/1.6 "DM Sans", "Inter", system-ui, sans-serif; color: var(--ink); background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  .jp main { max-width: 1100px; margin: 0 auto; padding: 28px 20px 90px; }
+  .jp h1, .jp h2, .jp h3 { font-family: var(--display); letter-spacing: -0.035em; color: var(--ink); }
+  .jp h1 { font-size: clamp(32px, 6vw, 52px); line-height: 1.05; margin: 8px 0 12px; font-weight: 800; }
+  .jp h1 em { font-style: normal; color: var(--acc-text); }
+  .jp .eyebrow { font-size: 12.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--acc-text); margin: 0; }
+  .jp .lead { font-size: 18px; color: var(--muted); max-width: 640px; margin: 0 0 26px; }
+  .jp .plans { display: grid; gap: 18px; grid-template-columns: 1fr; }
+  @media (min-width: 860px) { .jp .plans { grid-template-columns: 1.15fr 1fr; } }
+  .jp .plan { background: var(--card); border-radius: 24px; box-shadow: var(--shadow); padding: 26px; position: relative; }
+  .jp .plan.best { background: linear-gradient(160deg, #0f3d2b 0%, #14532d 100%); color: #eaf6ee; }
+  .jp .plan.best h2, .jp .plan.best .price { color: #fff; }
+  .jp .plan.best .muted, .jp .plan.best li { color: #cfe7d8; }
+  .jp .tag { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 99px; background: rgba(255,255,255,.14); color: #d9f2e2; }
+  .jp .plan h2 { font-size: 24px; margin: 12px 0 2px; }
+  .jp .price { font-family: var(--display); font-weight: 800; font-size: 46px; letter-spacing: -0.04em; line-height: 1.1; }
+  .jp .price small { font-size: 16px; font-weight: 600; letter-spacing: 0; opacity: .8; }
+  .jp ul.ticks { list-style: none; padding: 0; margin: 16px 0 22px; display: grid; gap: 10px; }
+  .jp ul.ticks li { display: flex; gap: 10px; align-items: flex-start; font-size: 15.5px; }
+  .jp ul.ticks li::before { content: ""; width: 20px; height: 20px; border-radius: 50%; flex: 0 0 auto; margin-top: 2px;
+    background: var(--acc-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5.5 10.5l3 3 6-6.5' fill='none' stroke='%23166534' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/20px no-repeat; }
+  .jp .plan.best ul.ticks li::before { background-color: rgba(255,255,255,.16);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5.5 10.5l3 3 6-6.5' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+  .jp .btn, .jp button { border-radius: 99px; padding: 14px 22px; font-weight: 700; font-size: 16px; min-height: 50px; }
+  .jp .plan.best button { background: #fff; color: #14532d; width: 100%; }
+  .jp .packs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
+  .jp .pack { border-radius: 16px; background: var(--field); padding: 12px 14px; cursor: pointer; border: 2px solid transparent; text-align: left; color: var(--ink); min-height: 0; }
+  .jp .pack b { display: block; font-family: var(--display); font-size: 20px; }
+  .jp .pack span { font-size: 13.5px; color: var(--muted); font-weight: 500; }
+  .jp .pack.on { border-color: var(--acc-strong); background: var(--acc-soft); }
+  .jp .plan button.wide { width: 100%; }
+  .jp .card2 { background: var(--card); border-radius: 24px; box-shadow: var(--shadow-sm); padding: 24px; margin-top: 22px; }
+  .jp .form { display: grid; gap: 10px; grid-template-columns: 1fr; }
+  @media (min-width: 640px) { .jp .form { grid-template-columns: 1fr 1fr; } }
+  .jp .form input { font-size: 16px; padding: 13px 14px; border-radius: 14px; border: 1.5px solid transparent; background: var(--field); min-height: 50px; }
+  .jp .form input:focus { outline: none; border-color: var(--acc-strong); background: #fff; }
+  .jp .status { display: flex; flex-wrap: wrap; gap: 10px 26px; align-items: center; }
+  .jp .status .big { font-family: var(--display); font-weight: 800; font-size: 22px; }
+  .jp .faq details { border-top: 1px solid var(--line); padding: 14px 2px; }
+  .jp .faq summary { cursor: pointer; font-weight: 700; font-family: var(--display); font-size: 17px; list-style: none; }
+  .jp .faq summary::-webkit-details-marker { display: none; }
+  .jp .faq p { color: var(--muted); margin: 8px 0 0; }
+  .jp .err { color: #b91c1c; }
+  .jp .ok { color: var(--acc-text); font-weight: 700; }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body class="jp">
+<header class="top">
+  <div class="brand"><span class="dot"></span><span id="bizName">Property Data</span></div>
+  <div class="contact" id="bizContact"></div>
+</header>
+<main>
+  <div id="done" class="card2 hidden" style="margin-top:0"></div>
+
+  <p class="eyebrow">Membership</p>
+  <h1>Every property, measured. <em>One flat price.</em></h1>
+  <p class="lead">Full property reports for any address: roof lengths and pitch, wall areas and elevations for siding and gutters, and the lot and yard for lawn, snow and concrete. Plus ZIP code lists at half price.</p>
+
+  <div id="account" class="card2 hidden" style="margin:0 0 22px"></div>
+
+  <div class="plans">
+    <section class="plan best" aria-labelledby="m-h">
+      <span class="tag">Best for busy crews</span>
+      <h2 id="m-h">Member</h2>
+      <div class="price"><span id="mPrice">$99</span> <small>/ month</small></div>
+      <ul class="ticks">
+        <li>Unlimited single-property reports, any address we cover</li>
+        <li>Half off every ZIP code list: standard sheets and Premier lists</li>
+        <li>Roof, walls &amp; elevations, lot &amp; yard in every report (web + PDF)</li>
+        <li>Cancel any time from your billing page</li>
+      </ul>
+      <button id="mBtn">Become a member</button>
+      <p class="small muted" id="mNote" style="margin:10px 0 0"></p>
+    </section>
+    <section class="plan" aria-labelledby="c-h">
+      <span class="tag" style="background:var(--acc-soft);color:var(--acc-text)">Pay as you go</span>
+      <h2 id="c-h">Report credits</h2>
+      <div class="price"><span id="cPrice">$25</span> <small>/ report</small></div>
+      <p class="muted" style="margin:6px 0 0">One credit = one full property report. Credits never expire.</p>
+      <div class="packs" id="packs" role="radiogroup" aria-label="Credit pack"></div>
+      <button id="cBtn" class="wide">Buy credits</button>
+      <p class="small muted" id="cNote" style="margin:10px 0 0"></p>
+    </section>
+  </div>
+
+  <section class="card2" id="signup" aria-labelledby="s-h">
+    <h2 id="s-h" style="margin:0 0 4px;font-size:22px">Create your company account</h2>
+    <p class="muted" style="margin:0 0 14px">Already have one? <a href="/roof">Log in</a>, then come back here.</p>
+    <div class="form">
+      <input id="jName" placeholder="Company name" autocomplete="organization" aria-label="Company name">
+      <input id="jPhone" placeholder="Phone (optional)" autocomplete="tel" inputmode="tel" aria-label="Phone">
+      <input id="jEmail" type="email" placeholder="Email" autocomplete="email" aria-label="Email">
+      <input id="jPass" type="password" placeholder="Password (8+ characters)" autocomplete="new-password" aria-label="Password">
+    </div>
+    <p class="small" id="jMsg" style="margin:10px 0 0"></p>
+  </section>
+
+  <section class="card2 faq" aria-labelledby="f-h">
+    <h2 id="f-h" style="margin:0 0 6px;font-size:22px">Questions</h2>
+    <details><summary>What's in a property report?</summary><p>Roof area, squares and waste; ridges, hips, valleys, rakes, eaves and flashing; pitch and facet diagrams; wall area by side with elevations, gutters, fascia, soffit and an estimated window count; and the lot and yard: lawn (grass only), driveway, sidewalk, beds, trees and lot size. On the web and as a PDF.</p></details>
+    <details><summary>Is "unlimited" really unlimited?</summary><p>Yes, for single-property reports your company orders for its own estimating. ZIP code lists are bought separately, at half price for members.</p></details>
+    <details><summary>How do I cancel?</summary><p>Log in and open "Billing" to update your card or cancel. Your membership runs to the end of the month you paid for.</p></details>
+    <details><summary>How accurate is it?</summary><p>Measured from county aerial photos and LiDAR. Roof area is typically within a few percent of professional reports. Treat it as an estimate and verify on site before ordering material or final billing.</p></details>
+  </section>
+</main>
+<script src="/static/common.js?v=15"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const usd = (c) => "$" + (c / 100).toLocaleString(undefined, { minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2 });
+  try {
+    const cfg = await api("/api/config");
+    document.documentElement.style.setProperty("--accent", cfg.business.accent || "#16a34a");
+    if (cfg.business.name && cfg.business.name !== "Your Company") $("bizName").textContent = cfg.business.name;
+    $("bizContact").textContent = [cfg.business.phone, cfg.business.email].filter(Boolean).join(" · ");
+  } catch (e) {}
+  let P = await api("/api/billing/plans");
+  let me = P.company;
+  let pack = 5;
+  $("mPrice").textContent = usd(P.member_price_cents);
+  $("cPrice").textContent = usd(P.credit_price_cents);
+  const drawPacks = () => {
+    $("packs").innerHTML = P.packs.map((n) => `<button type="button" class="pack ${n === pack ? "on" : ""}" role="radio" aria-checked="${n === pack}" data-n="${n}"><b>${n} credit${n > 1 ? "s" : ""}</b><span>${usd(n * P.credit_price_cents)}</span></button>`).join("");
+    $("cBtn").textContent = `Buy ${pack} credit${pack > 1 ? "s" : ""} · ${usd(pack * P.credit_price_cents)}`;
+  };
+  $("packs").addEventListener("click", (e) => { const b = e.target.closest(".pack"); if (b) { pack = +b.dataset.n; drawPacks(); } });
+  drawPacks();
+  if (!P.stripe) {
+    $("mNote").textContent = "Card payments are being set up. Create your account and we'll get you started.";
+    $("cNote").textContent = "Card payments are being set up. Contact us for credits.";
+  }
+
+  function drawAccount() {
+    if (!me) { $("account").classList.add("hidden"); $("signup").classList.remove("hidden"); return; }
+    $("signup").classList.add("hidden");
+    $("account").classList.remove("hidden");
+    const until = me.member_until ? new Date(me.member_until * 1000).toLocaleDateString(undefined, { dateStyle: "long" }) : "";
+    $("account").innerHTML = `<div class="status">
+        <div><div class="small muted">Signed in as</div><div class="big">${esc(me.name)}</div></div>
+        <div><div class="small muted">Plan</div><div class="big">${me.member ? `Member${until ? ` <span class="small muted" style="font-weight:500">renews ${esc(until)}</span>` : ""}` : "Pay as you go"}</div></div>
+        <div><div class="small muted">Credits</div><div class="big">${me.member ? "Unlimited" : me.credits}</div></div>
+        <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/roof">Order a report</a>${me.stripe_customer ? `<button class="secondary" id="bill">Billing</button>` : ""}</div>
+      </div>`;
+    if (me.member) { $("mBtn").textContent = "You're a member"; $("mBtn").disabled = true; }
+    const bill = document.getElementById("bill");
+    if (bill) bill.addEventListener("click", async () => {
+      try { location.href = (await api("/api/billing/portal", { method: "POST" })).url; } catch (e) { alert(e.message); }
+    });
+  }
+  drawAccount();
+
+  async function ensureAccount(msgEl) {
+    if (me) return true;
+    const body = { name: $("jName").value.trim(), email: $("jEmail").value.trim(), password: $("jPass").value, phone: $("jPhone").value.trim() };
+    if (body.name.length < 2 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(body.email) || body.password.length < 8) {
+      $("signup").scrollIntoView({ behavior: "smooth", block: "center" });
+      $("jMsg").innerHTML = '<span class="err">Fill in your company name, email and a password of 8+ characters first.</span>';
+      msgEl.textContent = "";
+      return false;
+    }
+    try { me = await api("/api/join", { method: "POST", json: body }); drawAccount(); return true; }
+    catch (e) { $("jMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; $("signup").scrollIntoView({ behavior: "smooth", block: "center" }); return false; }
+  }
+  async function go(btn, note, path, json) {
+    btn.disabled = true;
+    note.innerHTML = '<span class="spinner"></span>One moment…';
+    try {
+      if (!(await ensureAccount(note))) return;
+      if (!P.stripe) { note.innerHTML = '<span class="ok">Your account is ready.</span> We\'ll contact you to start.'; return; }
+      const r = await api(path, { method: "POST", json });
+      location.href = r.checkout_url;
+    } catch (e) { note.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    finally { btn.disabled = !!(me && me.member && btn.id === "mBtn"); }
+  }
+  $("mBtn").addEventListener("click", () => go($("mBtn"), $("mNote"), "/api/billing/member", {}));
+  $("cBtn").addEventListener("click", () => go($("cBtn"), $("cNote"), "/api/billing/credits", { qty: pack }));
+
+  // back from Stripe Checkout
+  const sid = new URLSearchParams(location.search).get("session_id");
+  if (sid && location.pathname.endsWith("/done")) {
+    $("done").classList.remove("hidden");
+    $("done").innerHTML = '<span class="spinner"></span>Confirming your payment…';
+    try {
+      me = await api(`/api/billing/confirm?session_id=${encodeURIComponent(sid)}`);
+      drawAccount();
+      $("done").innerHTML = me.member
+        ? `<h2 style="margin:0 0 6px">Welcome aboard.</h2><p class="muted" style="margin:0 0 14px">Your membership is active: unlimited property reports and half-price ZIP lists.</p><a class="btn" href="/roof">Order your first report</a> <a class="btn secondary" href="/data">Browse ZIP lists</a>`
+        : `<h2 style="margin:0 0 6px">Credits added.</h2><p class="muted" style="margin:0 0 14px">You have ${me.credits} report credit${me.credits === 1 ? "" : "s"}.</p><a class="btn" href="/roof">Order a report</a>`;
+    } catch (e) { $("done").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    history.replaceState(null, "", "/join");
+  }
+})();
+</script>
+</body>
+</html>

@@ -429,6 +429,8 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
                 "segments": segs, "outline": outline,
                 "planes": [{"pitch": q["pitch"], "plan_sqft": round(q["plan_sqft"], 1),
                             "area_sqft": round(q["area_sqft"], 1)} for q in res["planes"]],
+                "facet_polys": _facet_polys(res, used),
+                "_model": (res["planes"], res.get("label_grid"), res.get("grid_x"), res.get("grid_y")),
             })
             tree_total += add_trees(out_structs[-1], tree_cover(s, pts, used), res["roof_area_sqft"], res["plan_area_sqft"])
             for k in LINE_TYPES:
@@ -471,6 +473,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
         facets += res.get("facet_count") or 0
 
     walls = _walls_total(m, env, out_structs)
+    yard = _yard(m, info["parcel"])
     sw = suggested_waste(totals, area)
     waste = [{"pct": w, "area": round(area * (1 + w / 100)),
               "squares": math.ceil(area * (1 + w / 100) / 100 * 3) / 3,  # bundles: 1/3 square
@@ -509,7 +512,210 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
         "aerial_jpg": _aerial(m, chosen),
         "line_labels": LINE_LABELS,
         "walls": walls,
+        "yard": yard,
     }
+
+
+def _facet_polys(res, used) -> list:
+    """Roof facets as polygons (LAS ft), lettered smallest to largest like a
+    measurement report: label, pitch, sloped area, downslope direction."""
+    import numpy as np
+    from shapely.geometry import box as _box
+    L, xs, ys = res.get("label_grid"), res.get("grid_x"), res.get("grid_y")
+    if L is None:
+        return []
+    from scipy import ndimage as ndi
+    g = float(abs(xs[1] - xs[0])) if len(xs) > 1 else 0.5
+    L = L.copy()
+    by_id = {p["id"]: p for p in res["planes"]}
+    # scraps (wall / fascia hits, < 50 sq ft sloped) join the facet next to them
+    keep = [p["id"] for p in res["planes"] if p["area_sqft"] >= 50]
+    if keep:
+        big = np.isin(L, keep)
+        scrap = (L >= 0) & ~big
+        if scrap.any() and big.any():
+            idx = ndi.distance_transform_edt(~big, return_distances=False, return_indices=True)
+            L = np.where(scrap, L[tuple(idx)], L)
+    planes = [by_id[k] for k in keep] or list(res["planes"])
+    cells = {p["id"]: int((L == p["id"]).sum()) for p in planes}
+    raw = {k: c * g * g * (1 + by_id[k]["slope"] ** 2) ** 0.5 for k, c in cells.items()}
+    scale = float(res["roof_area_sqft"]) / max(1e-6, sum(raw.values()))
+    faces = _faces_from_lines(res, used, L, xs, ys)
+    taken = unary_union([f for f, _ in faces]) if faces else None
+    claimed = {lab for _, lab in faces} if faces else set()
+    out = []
+    for p in planes:
+        if not cells.get(p["id"]):
+            continue
+        if faces is not None:
+            polys = [f for f, lab in faces if lab == p["id"]]
+            if polys:
+                poly = unary_union(polys).buffer(0.05).buffer(-0.05)
+                polys = [q for q in getattr(poly, "geoms", [poly]) if q.geom_type == "Polygon" and q.area > 2]
+            if polys:
+                big = max(polys, key=lambda q: q.area)
+                c = big.representative_point()
+                down = p.get("down")
+                out.append({"pitch": float(p["pitch"]), "area_sqft": round(float(raw[p["id"]] * scale), 1),
+                            "plan_sqft": round(float(cells[p["id"]] * g * g * scale), 1),
+                            "poly": [[[round(x, 2), round(y, 2)] for x, y in q.exterior.coords] for q in polys],
+                            "c": [round(c.x, 2), round(c.y, 2)],
+                            "down": [round(float(down[0]), 3), round(float(down[1]), 3)] if down is not None and not p.get("flat") else None})
+                continue
+        mask = L == p["id"]
+        boxes = []
+        for r in np.nonzero(mask.any(1))[0]:
+            row = mask[r]
+            d = np.diff(np.concatenate([[0], row.astype(np.int8), [0]]))
+            for c0, c1 in zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]):
+                boxes.append(_box(xs[c0] - g / 2, ys[r] - g / 2, xs[c1 - 1] + g / 2, ys[r] + g / 2))
+        if not boxes:
+            continue
+        poly = unary_union(boxes).buffer(0.35).buffer(-0.35).simplify(0.6).intersection(used)
+        if taken is not None and claimed:
+            # the line-built facets own their area: this one only fills gaps
+            poly = poly.difference(unary_union([f for f, lab in faces if lab != p["id"]]))
+        polys = [q for q in getattr(poly, "geoms", [poly]) if q.geom_type == "Polygon" and q.area > 2]
+        if not polys:
+            continue
+        big = max(polys, key=lambda q: q.area)
+        c = big.representative_point()
+        down = p.get("down")
+        out.append({"pitch": float(p["pitch"]), "area_sqft": round(float(raw[p["id"]] * scale), 1),
+                    "plan_sqft": round(float(cells[p["id"]] * g * g * scale), 1),
+                    "poly": [[[round(x, 2), round(y, 2)] for x, y in q.exterior.coords] for q in polys],
+                    "c": [round(c.x, 2), round(c.y, 2)],
+                    "down": [round(float(down[0]), 3), round(float(down[1]), 3)] if down is not None and not p.get("flat") else None})
+    out.sort(key=lambda f: f["area_sqft"])
+    for i, f in enumerate(out):
+        f["label"] = (chr(65 + i) if i < 26 else chr(65 + i // 26 - 1) + chr(65 + i % 26))
+    return out
+
+
+def _faces_from_lines(res, used, L, xs, ys):
+    """Split the outline along the drawn roof lines (ridges, hips, valleys,
+    step lines) so facet borders are the same straight lines as the length
+    diagram. Each face gets the facet the LiDAR says covers it; a face the
+    lines don't separate is split along the LiDAR facet border instead."""
+    import numpy as np
+    import shapely
+    from shapely.geometry import LineString, box as _box
+    from shapely.ops import polygonize
+    try:
+        lines = [used.exterior]
+        for sg in res.get("segments") or []:
+            if sg.get("edge"):  # outline edges are already in the ring
+                continue
+            a, b = np.array(sg["a"], float), np.array(sg["b"], float)
+            d = b - a
+            Ln = float(np.hypot(*d))
+            if Ln < 1.0:
+                continue
+            u = d / Ln
+            lines.append(LineString([a - u * 0.8, b + u * 0.8]))  # reach the line it meets
+        faces = [f.intersection(used) for f in polygonize(unary_union(lines))]
+        faces = [f for f in faces if not f.is_empty and f.area > 4]
+        if not faces:
+            return None
+        g = float(abs(xs[1] - xs[0])) if len(xs) > 1 else 0.5
+        X, Y = np.meshgrid(xs, ys)
+        out = []
+        for f in faces:
+            fs = [q for q in getattr(f, "geoms", [f]) if q.geom_type == "Polygon"]
+            for q in fs:
+                inside = shapely.contains_xy(q, X, Y) & (L >= 0)
+                labs = L[inside]
+                if not len(labs):
+                    continue
+                vals, cnt = np.unique(labs, return_counts=True)
+                share = cnt / cnt.sum()
+                if share.max() >= 0.6 or q.area < 40:  # trust the drawn lines
+                    out.append((q, int(vals[share.argmax()])))
+                    continue
+                # two facets in one face: cut it with one straight line fitted to
+                # the LiDAR border between them, squared to the house
+                main2 = vals[np.argsort(-share)[:2]]
+                if len(vals) >= 2 and share[np.argsort(-share)[:2]].sum() >= 0.9:
+                    cut = _straight_cut(q, L, X, Y, inside, int(main2[0]), int(main2[1]), used)
+                    if cut:
+                        out.extend(cut)
+                        continue
+                # otherwise: cut it along the LiDAR borders
+                for v, sh in zip(vals, share):
+                    if sh < 0.08:
+                        continue
+                    m = inside & (L == v)
+                    boxes = []
+                    for r in np.nonzero(m.any(1))[0]:
+                        row = m[r]
+                        dd = np.diff(np.concatenate([[0], row.astype(np.int8), [0]]))
+                        for c0, c1 in zip(np.nonzero(dd == 1)[0], np.nonzero(dd == -1)[0]):
+                            boxes.append(_box(xs[c0] - g / 2, ys[r] - g / 2, xs[c1 - 1] + g / 2, ys[r] + g / 2))
+                    piece = unary_union(boxes).buffer(0.6).buffer(-0.6).simplify(0.8).intersection(q)
+                    if not piece.is_empty:
+                        out.append((piece, int(v)))
+        return out or None
+    except Exception:
+        return None
+
+
+def _straight_cut(q, L, X, Y, inside, la, lb, used):
+    """Split polygon q between facets la and lb with one straight line."""
+    import math
+    import numpy as np
+    from shapely.geometry import LineString
+    from shapely.ops import split
+    from .roofclean import main_axis
+    ma, mb = inside & (L == la), inside & (L == lb)
+    # border cells: a-cells with a b-cell next to them
+    from scipy import ndimage as ndi
+    near_b = ndi.binary_dilation(mb, iterations=1)
+    bd = ma & near_b
+    if bd.sum() < 6:
+        return None
+    P = np.column_stack([X[bd], Y[bd]])
+    c = P.mean(0)
+    _, _, vt = np.linalg.svd(P - c, full_matrices=False)
+    u = vt[0]
+    ax = main_axis(used)
+    for k in range(4):  # square it to the house when it's close
+        t = ax + k * math.pi / 2
+        v = np.array([math.cos(t), math.sin(t)])
+        if abs(u @ v) > math.cos(math.radians(12)):
+            u = v
+            break
+    big = max(q.bounds[2] - q.bounds[0], q.bounds[3] - q.bounds[1]) * 3
+    line = LineString([c - u * big, c + u * big])
+    try:
+        parts = [g for g in split(q, line).geoms if g.area > 1]
+    except Exception:
+        return None
+    if len(parts) != 2:
+        return None
+    out = []
+    import shapely
+    for g in parts:
+        m = shapely.contains_xy(g, X, Y) & (L >= 0)
+        labs = L[m]
+        if not len(labs):
+            return None
+        va, cn = np.unique(labs, return_counts=True)
+        out.append((g, int(va[cn.argmax()])))
+    if out[0][1] == out[1][1]:
+        return None
+    return out
+
+
+def _yard(m, parcel) -> dict | None:
+    """The lot page: yard measurements and the shaded aerial."""
+    try:
+        r = m.measure(parcel, want_overlay=True, want_photo=True)
+    except Exception:
+        return None
+    keys = ["lot_sqft", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft", "other_hardscape_sqft",
+            "structures_sqft", "beds_sqft", "building_sqft", "tree_count", "tree_canopy_sqft", "frontage_ft"]
+    return {**{k: r.get(k) for k in keys}, "photo_jpg": r.get("photo_jpg") or "",
+            "quality": (r.get("sources") or {}).get("quality"), "note": (r.get("sources") or {}).get("note")}
 
 
 def _walls_total(m, env, structs) -> dict | None:
@@ -520,14 +726,20 @@ def _walls_total(m, env, structs) -> dict | None:
     for st in structs:
         try:
             poly = Polygon(st["outline"][0])
-            w = measure_walls(m.lidar, env, poly, st.get("segments"))
+            mdl = st.pop("_model", None)
+            model = None
+            if mdl is not None and mdl[1] is not None:
+                from .walls import RoofModel
+                model = RoofModel(*mdl)
+            w = measure_walls(m.lidar, env, poly, st.get("segments"), model=model)
         except Exception:
             w = None
-        st["walls"] = None if w is None else {k: v for k, v in w.items() if k != "facets"}
+        st["walls"] = w
         if w is None:
             continue
         if tot is None:
             tot = {k: (dict(v) if isinstance(v, dict) else v) for k, v in w.items() if k != "facets"}
+            tot["elevations"] = {}
             continue
         for k, v in w.items():
             if k == "by_side":
@@ -536,6 +748,7 @@ def _walls_total(m, env, structs) -> dict | None:
             elif isinstance(v, (int, float)) and k != "overhang_ft":
                 tot[k] = round(tot[k] + v, 1)
     if tot:
+        tot["elevations"] = _elevations(structs)
         g = tot["gross_wall_sqft"]
         net = tot["est_net_wall_sqft"]
         tot["siding_squares"] = [{"pct": p, "sqft": round(net * (1 + p / 100)),
@@ -545,6 +758,51 @@ def _walls_total(m, env, structs) -> dict | None:
                        "are estimates. Siding vs brick/stone is not separated.")
         tot["gross_wall_sqft"] = round(g)
     return tot
+
+
+_RIGHT = {"North": (-1.0, 0.0), "East": (0.0, 1.0), "South": (1.0, 0.0), "West": (0.0, -1.0)}
+
+
+def _elevations(structs) -> dict:
+    """Each side's outer walls as seen standing in front of it: wall
+    silhouettes (x along the side, measured height every foot)."""
+    import numpy as np
+    out = {}
+    for st in structs:
+        w = st.get("walls") or {}
+        for f in w.get("facets") or []:
+            if f.get("kind") != "wall" or not f.get("profile"):
+                continue
+            if f["length_ft"] < 2.5:  # corner returns: counted in the areas, not drawn
+                continue
+            side = f["side"]
+            r = np.array(_RIGHT[side])
+            a, b = np.array(f["a"]), np.array(f["b"])
+            L = float(np.hypot(*(b - a)))
+            k = len(f["profile"])
+            ts = (np.arange(k) + 0.5) * (L / k)
+            u = (b - a) / L
+            xs = [float((a + u * t) @ r) for t in ts]
+            # the wall's ends, so the silhouette starts and stops at its corners
+            x_a, x_b = float(a @ r), float(b @ r)
+            if f.get("shape"):
+                pts = [(float((a + u * t) @ r), h) for t, h in f["shape"]]
+            else:
+                prof = list(f["profile"])
+                pts = [(x_a, prof[0])] + list(zip(xs, prof)) + [(x_b, prof[-1])]
+            pts.sort()
+            out.setdefault(side, []).append({"pts": [[round(x, 2), round(h, 2)] for x, h in pts],
+                                             "area": f["area_sqft"], "length": f["length_ft"],
+                                             "depth": round(float(((a + b) / 2) @ np.array([-r[1], r[0]])), 2)})
+    for side, walls in out.items():
+        x0 = min(p[0] for wl in walls for p in wl["pts"])
+        for wl in walls:
+            wl["pts"] = [[round(x - x0, 2), h] for x, h in wl["pts"]]
+        # far walls first, so nearer walls are drawn in front of them
+        walls.sort(key=lambda wl: -wl["depth"])
+        for i, wl in enumerate(sorted(walls, key=lambda wl: wl["pts"][0][0])):
+            wl["label"] = side[0] + str(i + 1)
+    return out
 
 
 def _aerial(m, chosen) -> str:
