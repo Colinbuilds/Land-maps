@@ -136,6 +136,7 @@ def orthogonalize(poly, tol_deg: float = 12.0, min_edge: float = 1.0):
             w = L + M
             merged[0] = ((p * L + q * M) / w, u if L >= M else v, w)
             merged.pop()
+    merged = _drop_stubs(merged)
     m = len(merged)
     if m < 3:
         return poly
@@ -153,10 +154,40 @@ def orthogonalize(poly, tol_deg: float = 12.0, min_edge: float = 1.0):
     new = Polygon(out)
     if not new.is_valid:
         new = new.buffer(0)
+    # zero-width spikes (a wall that doubles back on itself)
+    new = new.buffer(0.05, join_style=2).buffer(-0.05, join_style=2)
     if new.geom_type != "Polygon" or abs(new.area - poly.area) > 0.05 * poly.area \
             or new.hausdorff_distance(poly) > 4.0:
         return poly
     return new
+
+
+def _drop_stubs(lines, stub=6.0, jog=4.0):
+    """Remove a short wall stuck out (or in) from a long wall by a small jog:
+    long wall - jog - stub  becomes one straight wall (trim leftovers)."""
+    def par(u, v):
+        return abs(u[0] * v[1] - u[1] * v[0]) < math.sin(math.radians(3))
+    changed = True
+    while changed and len(lines) > 4:
+        changed = False
+        n = len(lines)
+        for i in range(n):
+            for d in (1, -1):
+                s_, j_, w_ = lines[i], lines[(i + d) % n], lines[(i + 2 * d) % n]
+                if s_[2] <= stub and j_[2] <= jog and par(s_[1], w_[1]) and not par(s_[1], j_[1]) \
+                        and w_[2] >= 3 * s_[2]:
+                    # stub onto the long wall's line; then it is the same wall
+                    p, u, L = w_
+                    q = s_[0]
+                    q2 = p + u * ((q - p) @ u)
+                    new_w = ((p * L + q2 * s_[2]) / (L + s_[2]), u, L + s_[2] + j_[2])
+                    keep = [k for k in range(n) if k not in (i, (i + d) % n)]
+                    lines = [new_w if k == (i + 2 * d) % n else lines[k] for k in keep]
+                    changed = True
+                    break
+            if changed:
+                break
+    return lines
 
 
 # --------------------------------------------------------------------- lines
@@ -426,7 +457,8 @@ def regularize_lines(segs: list, outline, axis: float | None = None, snap_r: flo
             for p in (a, b):
                 dv = np.hypot(*(C - p).T)
                 k = int(dv.argmin())
-                new.append(C[k] if dv[k] <= 1.5 else p)
+                # slide the end along the line to the corner (keeps it straight)
+                new.append(a + u * ((C[k] - a) @ u) if dv[k] <= 1.5 else p)
             if np.hypot(*(new[1] - new[0])) > 0.5:
                 _set(s, new[0], new[1])
     for s in segs:
@@ -444,15 +476,22 @@ def regularize_lines(segs: list, outline, axis: float | None = None, snap_r: flo
                 return True
         return False
     drop = set()
-    for s in segs:
+    stray = set()
+    for i, s in enumerate(segs):
+        if s["type"] in ("hip", "valley") and s.get("plan_len", 0) < 4.0 \
+                and min(np.hypot(*(ring - np.asarray(s[e], float)).T).min() for e in ("a", "b")) > 0.5:
+            stray.add(i)  # a hip/valley stub hanging off scrap planes
+            continue
         if s.get("step") is None or s.get("plan_len", 0) >= 10.0:
             continue
         if not attached(s["a"], s) and not attached(s["b"], s):
             drop.add(s["step"])
-    return [s for s in segs if s.get("step") is None or s["step"] not in drop]
+    return [s for i, s in enumerate(segs)
+            if i not in stray and (s.get("step") is None or s["step"] not in drop)]
 
 
-def fit_hidden_edges(poly, pts: np.ndarray, is_hidden, margin: float = 0.75, max_move: float = 4.0):
+def fit_hidden_edges(poly, pts: np.ndarray, is_hidden, margin: float = 0.75, max_move: float = 4.0,
+                     inward_only: bool = False):
     """Place walls the photo can't see (under trees) from the LiDAR.
 
     For each side mostly under canopy, the roof edge is the outermost roof
@@ -473,7 +512,7 @@ def fit_hidden_edges(poly, pts: np.ndarray, is_hidden, margin: float = 0.75, max
         u = d / L if L else np.array([1.0, 0.0])
         out = np.array([u[1], -u[0]])  # outward for a CCW ring
         shift = 0.0
-        if L >= 4.0:
+        if L >= (1.5 if inward_only else 4.0):
             ts = np.linspace(0.1, 0.9, max(5, int(L)))
             S = a + np.outer(ts * L, u)
             band = np.vstack([S + o * out for o in (-1.5, 0.0, 1.5)])
@@ -481,10 +520,13 @@ def fit_hidden_edges(poly, pts: np.ndarray, is_hidden, margin: float = 0.75, max
                 rel = P - a
                 along = rel @ u
                 perp = rel @ out
-                m = (along > 0.15 * L) & (along < 0.85 * L) & (perp > -6.0) & (perp < max_move + 1.0)
-                if m.sum() >= max(8, int(L)):
+                lo, hi = (0.15 * L, 0.85 * L) if L >= 4.0 else (0.0, L)
+                m = (along > lo) & (along < hi) & (perp > -6.0) & (perp < max_move + 1.0)
+                if m.sum() >= max(4 if L < 4.0 else 8, int(L)):
                     edge_d = float(np.percentile(perp[m], 97)) + margin
-                    if abs(edge_d) <= max_move:
+                    if inward_only:
+                        edge_d = min(0.0, edge_d)
+                    if abs(edge_d) <= max_move and edge_d != 0.0:
                         shift = edge_d
                         moved += 1
         lines.append((a + out * shift, u))
