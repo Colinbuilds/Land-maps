@@ -470,6 +470,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
         plan += res["plan_area_sqft"]
         facets += res.get("facet_count") or 0
 
+    walls = _walls_total(m, env, out_structs)
     sw = suggested_waste(totals, area)
     waste = [{"pct": w, "area": round(area * (1 + w / 100)),
               "squares": math.ceil(area * (1 + w / 100) / 100 * 3) / 3,  # bundles: 1/3 square
@@ -507,7 +508,43 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
                     "lidar_year": (m.c.get("lidar") or {}).get("year")},
         "aerial_jpg": _aerial(m, chosen),
         "line_labels": LINE_LABELS,
+        "walls": walls,
     }
+
+
+def _walls_total(m, env, structs) -> dict | None:
+    """Siding / exterior measurements for the chosen structures, summed."""
+    from shapely.geometry import Polygon
+    from .walls import SIDES, measure_walls
+    tot = None
+    for st in structs:
+        try:
+            poly = Polygon(st["outline"][0])
+            w = measure_walls(m.lidar, env, poly, st.get("segments"))
+        except Exception:
+            w = None
+        st["walls"] = None if w is None else {k: v for k, v in w.items() if k != "facets"}
+        if w is None:
+            continue
+        if tot is None:
+            tot = {k: (dict(v) if isinstance(v, dict) else v) for k, v in w.items() if k != "facets"}
+            continue
+        for k, v in w.items():
+            if k == "by_side":
+                for sd in SIDES:
+                    tot["by_side"][sd] += v[sd]
+            elif isinstance(v, (int, float)) and k != "overhang_ft":
+                tot[k] = round(tot[k] + v, 1)
+    if tot:
+        g = tot["gross_wall_sqft"]
+        net = tot["est_net_wall_sqft"]
+        tot["siding_squares"] = [{"pct": p, "sqft": round(net * (1 + p / 100)),
+                                  "squares": round(net * (1 + p / 100) / 100, 1)} for p in (0, 10, 15, 20)]
+        tot["note"] = ("Wall areas are measured from the LiDAR roof heights along each wall (gables included). "
+                       "Windows and doors can't be seen from above: openings, net wall area and the window count "
+                       "are estimates. Siding vs brick/stone is not separated.")
+        tot["gross_wall_sqft"] = round(g)
+    return tot
 
 
 def _aerial(m, chosen) -> str:

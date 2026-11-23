@@ -38,6 +38,7 @@ const MEASURE_COLORS = {
   other_hardscape_sqft: "var(--other)", structures_sqft: "var(--struct)", beds_sqft: "var(--beds)",
   parkway_sqft: "var(--lawn)", grass_total: "var(--lawn)", building_sqft: "var(--bldg)", lot_sqft: "#cbd5e1", frontage_ft: "#94a3b8",
   tree_count: "var(--tree)", tree_canopy_sqft: "var(--tree)", lawn_under_trees_sqft: "var(--tree)",
+  wall_sqft: "var(--bldg)", est_windows: "#0ea5e9",
 };
 
 function makeMap(el, cfg) {
@@ -151,7 +152,7 @@ function showOverlay(map, holder, r) {
 function measurementCards(r, keys, labels) {
   return keys.map((k) => `
     <div class="m"><div class="k"><i class="sw" style="background:${MEASURE_COLORS[k] || "#999"}"></i>${esc(labels[k] || k)}</div>
-    <div class="v">${fmt(r[k])} <span class="small muted">${k.endsWith("_ft") ? "ft" : k.endsWith("_count") ? "" : "sq ft"}</span></div></div>`).join("");
+    <div class="v">${fmt(r[k])} <span class="small muted">${k.endsWith("_ft") ? "ft" : (k.endsWith("_count") || k.startsWith("est_")) ? "" : "sq ft"}</span></div></div>`).join("");
 }
 
 // ---------------------------------------------------------------- site menu

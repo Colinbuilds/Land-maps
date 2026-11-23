@@ -29,7 +29,7 @@
   <div class="contact" id="coContact"></div>
 </header>
 <main class="stack" id="main"><p class="muted"><span class="spinner"></span>Loading report…</p></main>
-<script src="/static/common.js?v=9"></script>
+<script src="/static/common.js?v=13"></script>
 <script>
 const COLORS = { ridge: "#dc2626", hip: "#ea580c", valley: "#2563eb", rake: "#16a34a", eave: "#a16207", step_flashing: "#9333ea", flashing: "#0891b2" };
 const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flashing"];
@@ -100,12 +100,49 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
         </tbody></table></div>
         <p class="small muted">Pitch measured per roof plane from LiDAR, rounded to the nearest 1/12. Roof outlines: ${esc(d.sources?.outlines || "county building footprints")}. Roof planes and lines: ${esc(d.sources?.lidar || "LiDAR")}. Photo: ${esc(d.sources?.imagery || "aerial imagery")}. Changes after the ${esc(d.sources?.lidar_year || "LiDAR")} scan are not reflected. Verify on site before ordering material.</p>
       </div>
-    </div>`;
+    </div>${wallsCard(d)}`;
   document.getElementById("copy").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(share); document.getElementById("copied").textContent = "Link copied. Anyone with it can view this report."; }
     catch (e) { prompt("Share link:", share); }
   });
 })();
+
+function wallsCard(d) {
+  const w = d.walls;
+  if (!w) return "";
+  const n = (v) => Math.round(v).toLocaleString();
+  const sides = ["North", "East", "South", "West"];
+  return `
+    <div class="card">
+      <h2>Walls &amp; exterior</h2>
+      <p class="small muted" style="margin-top:-8px">For siding, gutter, trim and window work. Square feet unless noted.</p>
+      <div class="grid2">
+        <div>
+          <table class="kv">
+            <tr><td><b>Total wall area</b> (gross)</td><td>${n(w.gross_wall_sqft)} sq ft</td></tr>
+            ${sides.map((s) => `<tr><td>${s} walls</td><td>${n(w.by_side[s])}</td></tr>`).join("")}
+            <tr><td>Windows &amp; doors (estimate)</td><td>~${w.est_openings} · ~${n(w.est_opening_sqft)} sq ft</td></tr>
+            <tr><td>Net wall area (estimate)</td><td>${n(w.est_net_wall_sqft)}</td></tr>
+          </table>
+        </div>
+        <div>
+          <table class="kv">
+            <tr><td>Gutters (eaves)</td><td>${n(w.gutter_ft)} ft</td></tr>
+            <tr><td>Downspouts (estimate)</td><td>${w.downspouts}</td></tr>
+            <tr><td>Fascia (eaves + rakes)</td><td>${n(w.fascia_ft)} ft</td></tr>
+            <tr><td>Soffit (at ${w.overhang_ft} ft overhang)</td><td>${n(w.soffit_sqft)}</td></tr>
+            <tr><td>Outside corners</td><td>${n(w.outside_corners_ft)} ft</td></tr>
+            <tr><td>Inside corners</td><td>${n(w.inside_corners_ft)} ft</td></tr>
+          </table>
+        </div>
+      </div>
+      <h2 style="margin-top:14px">Siding waste</h2>
+      <table><thead><tr><th>Waste</th><th class="num">Area (sq ft)</th><th class="num">Squares</th></tr></thead><tbody>
+      ${w.siding_squares.map((x) => `<tr><td>${x.pct}%</td><td class="num">${n(x.sqft)}</td><td class="num">${x.squares.toFixed(1)}</td></tr>`).join("")}
+      </tbody></table>
+      <p class="small muted">${esc(w.note)}</p>
+    </div>`;
+}
 
 function diagram(d) {
   const xs = [], ys = [];
