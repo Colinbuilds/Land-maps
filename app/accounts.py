@@ -36,6 +36,11 @@ def init():
             id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, delta INTEGER NOT NULL,
             reason TEXT, ts REAL NOT NULL);
         """)
+        have = {r[1] for r in con.execute("PRAGMA table_info(companies)")}
+        for col, typ in (("plan", "TEXT"), ("member_until", "REAL"), ("stripe_customer", "TEXT"),
+                         ("stripe_sub", "TEXT")):
+            if col not in have:
+                con.execute(f"ALTER TABLE companies ADD COLUMN {col} {typ}")
 
 
 # ---------------------------------------------------------------- passwords
@@ -82,10 +87,39 @@ def read_session(tok: str | None) -> int | None:
 
 
 # ---------------------------------------------------------------- companies
+MEMBER_GRACE = 3 * 86400  # a renewal payment can take a day or two to land
+
+
 def _public(row) -> dict:
     d = dict(row)
     d.pop("pw_hash", None)
+    d["member"] = is_member(d)
     return d
+
+
+def is_member(c: dict | None) -> bool:
+    return bool(c and c.get("plan") == "member" and (c.get("member_until") or 0) + MEMBER_GRACE > time.time())
+
+
+def set_membership(cid: int, until: float | None, customer: str | None = None, sub: str | None = None,
+                   active: bool = True) -> dict | None:
+    with _lock, _db() as con:
+        con.execute("UPDATE companies SET plan=?, member_until=?, stripe_customer=COALESCE(?, stripe_customer), "
+                    "stripe_sub=COALESCE(?, stripe_sub) WHERE id=?",
+                    ("member" if active else None, until, customer, sub, cid))
+    return get_company(cid)
+
+
+def company_by_email(email: str) -> dict | None:
+    with _db() as con:
+        r = con.execute("SELECT * FROM companies WHERE email=?", (email.strip().lower(),)).fetchone()
+    return _public(r) if r else None
+
+
+def company_by_sub(sub: str) -> dict | None:
+    with _db() as con:
+        r = con.execute("SELECT * FROM companies WHERE stripe_sub=?", (sub,)).fetchone()
+    return _public(r) if r else None
 
 
 def create_company(name: str, email: str, password: str, credits: int = 0, phone: str = "") -> dict:
@@ -139,15 +173,23 @@ def add_credits(cid: int, delta: int, reason: str) -> int:
 
 # ------------------------------------------------------------------ reports
 def spend_and_save(cid: int, report: dict) -> str:
-    """Atomically take one credit and store the report. Raises if out of credits."""
+    """Atomically take one credit (none for members) and store the report.
+    Raises if out of credits."""
     rid = secrets.token_hex(5).upper()
+    member = is_member(get_company(cid))
     with _lock, _db() as con:
         left = con.execute("SELECT credits FROM companies WHERE id=?", (cid,)).fetchone()
-        if not left or left["credits"] < 1:
-            raise PermissionError("no credits left")
-        con.execute("UPDATE companies SET credits = credits - 1 WHERE id=?", (cid,))
-        con.execute("INSERT INTO ledger(company_id,delta,reason,ts) VALUES(?,?,?,?)",
-                    (cid, -1, f"report {rid}", time.time()))
+        if not left:
+            raise PermissionError("no such company")
+        if member:
+            con.execute("INSERT INTO ledger(company_id,delta,reason,ts) VALUES(?,?,?,?)",
+                        (cid, 0, f"report {rid} (member)", time.time()))
+        else:
+            if left["credits"] < 1:
+                raise PermissionError("no credits left")
+            con.execute("UPDATE companies SET credits = credits - 1 WHERE id=?", (cid,))
+            con.execute("INSERT INTO ledger(company_id,delta,reason,ts) VALUES(?,?,?,?)",
+                        (cid, -1, f"report {rid}", time.time()))
         con.execute("INSERT INTO reports(id,company_id,pin,address,created,share_token,data) VALUES(?,?,?,?,?,?,?)",
                     (rid, cid, report.get("pin"), report.get("address"), time.time(),
                      secrets.token_urlsafe(16), json.dumps(report)))
@@ -156,7 +198,7 @@ def spend_and_save(cid: int, report: dict) -> str:
 
 def has_credit(cid: int) -> bool:
     c = get_company(cid)
-    return bool(c and c["credits"] >= 1)
+    return bool(c and (c["member"] or c["credits"] >= 1))
 
 
 def get_report(rid: str) -> dict | None:

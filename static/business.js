@@ -234,8 +234,8 @@
   async function loadData() {
     let d;
     try { d = await api("/api/admin/data"); } catch (e) { $("dOrders").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; return; }
-    $("dRate").value = d.pricing.rate_cents; $("dBulk").value = d.pricing.bulk_rate_cents;
-    $("dThr").value = d.pricing.bulk_threshold; $("dMin").value = d.pricing.min_order_usd;
+    $("dRate").value = d.pricing.rate_cents; $("dExtra").value = d.pricing.extra_type_cents;
+    $("dMin").value = d.pricing.min_order_usd; $("dPremier").value = d.pricing.premier_cents;
     $("dStripe").innerHTML = d.stripe ? "Card payments: <b>on</b> (Stripe)."
       : "Card payments: <b>off</b>. Set STRIPE_SECRET_KEY in Railway to take cards. Until then, orders wait for you to invoice and click <i>Mark paid</i>.";
     const usd = (c) => "$" + (c / 100).toFixed(2);
@@ -252,8 +252,8 @@
   }
   $("dSave").addEventListener("click", async () => {
     try {
-      await api("/api/admin/data/pricing", { method: "PUT", json: { rate_cents: +$("dRate").value, bulk_rate_cents: +$("dBulk").value,
-        bulk_threshold: +$("dThr").value, min_order_usd: +$("dMin").value } });
+      await api("/api/admin/data/pricing", { method: "PUT", json: { rate_cents: +$("dRate").value, extra_type_cents: +$("dExtra").value,
+        premier_cents: +$("dPremier").value, min_order_usd: +$("dMin").value } });
       $("dMsg").innerHTML = '<span class="ok">Saved.</span>';
     } catch (e) { $("dMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   });

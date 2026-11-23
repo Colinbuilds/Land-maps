@@ -161,8 +161,9 @@ function measurementCards(r, keys, labels) {
   const links = [
     { href: "/", label: "Estimate", icon: "🏡" },
     { href: "/business", label: "Business", icon: "📊" },
-    { href: "/roof", label: "Roof reports", icon: "📐" },
+    { href: "/roof", label: "Reports", icon: "📐" },
     { href: "/data", label: "Buy data", icon: "📄" },
+    { href: "/join", label: "Membership", icon: "⭐" },
   ];
   const here = location.pathname.replace(/\/+$/, "") || "/";
   const isActive = (h) => (h === "/" ? here === "/" : here === h || here.startsWith(h + "/") || (h === "/roof" && here.startsWith("/r/")));
