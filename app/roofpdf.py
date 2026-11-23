@@ -69,7 +69,7 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     c.setTitle(f"Roof Report - {d['address']}")
-    total_pages = 3
+    total_pages = 4 if d.get("walls") else 3
 
     # ---------------------------------------------------------------- page 1
     _header(c, rep, company, 1, total_pages)
@@ -217,6 +217,8 @@ def render_pdf(rep: dict, company: dict) -> bytes:
         c.drawString(M, y, n)
         y -= 13
     c.showPage()
+    if d.get("walls"):
+        _walls_page(c, rep, company, d["walls"], total_pages)
     c.save()
     return buf.getvalue()
 
@@ -293,3 +295,47 @@ def _draw_diagram(c, d, box):
     nx, ny = bx + bw - 8, by + bh + 2  # above the drawing, clear of the roof
     c.line(nx, ny, nx, ny + 22)
     c.drawCentredString(nx, ny + 26, "N")
+
+
+def _walls_page(c, rep, company, w, total_pages):
+    """Page 4: siding / gutter / trim measurements."""
+    import textwrap
+    _header(c, rep, company, 4, total_pages)
+    _title(c, "Walls & Exterior", H - 92)
+    c.setFont("Helvetica", 9)
+    c.setFillColor(colors.HexColor("#475569"))
+    c.drawString(M, H - 108, "For siding, gutter, trim and window work. Square feet unless noted.")
+    y = H - 140
+    n = lambda v: f"{round(v):,}"
+    sides = [(f"{s} walls", n(w["by_side"][s])) for s in ("North", "East", "South", "West")]
+    _kv_table(c, [("Total wall area (gross)", f"{n(w['gross_wall_sqft'])} sq ft")] + sides + [
+        ("Windows & doors (estimate)", f"~{w['est_openings']} / ~{n(w['est_opening_sqft'])} sq ft"),
+        ("Net wall area (estimate)", n(w["est_net_wall_sqft"])),
+    ], M, y, col_w=(170, 80))
+    _kv_table(c, [
+        ("Gutters (eaves)", f"{n(w['gutter_ft'])} ft"),
+        ("Downspouts (estimate)", str(w["downspouts"])),
+        ("Fascia (eaves + rakes)", f"{n(w['fascia_ft'])} ft"),
+        (f"Soffit (at {w['overhang_ft']:g} ft overhang)", n(w["soffit_sqft"])),
+        ("Outside corners", f"{n(w['outside_corners_ft'])} ft"),
+        ("Inside corners", f"{n(w['inside_corners_ft'])} ft"),
+    ], W / 2 + 10, y, col_w=(170, 70))
+    y -= 7 * 17 + 34
+    _title(c, "Siding Waste", y)
+    y -= 22
+    c.setFont("Helvetica-Bold", 9.5)
+    c.setFillColor(colors.HexColor("#0f172a"))
+    for i, h in enumerate(("Waste", "Area (sq ft)", "Squares")):
+        c.drawString(M + i * 120, y, h)
+    c.setFont("Helvetica", 9.5)
+    for row in w["siding_squares"]:
+        y -= 16
+        for i, v in enumerate((f"{row['pct']}%", n(row["sqft"]), f"{row['squares']:.1f}")):
+            c.drawString(M + i * 120, y, v)
+    y -= 30
+    c.setFont("Helvetica", 9)
+    c.setFillColor(colors.HexColor("#334155"))
+    for line in textwrap.wrap(w["note"], 112):
+        c.drawString(M, y, line)
+        y -= 13
+    c.showPage()

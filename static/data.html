@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=12">
+<link rel="stylesheet" href="/static/styles.css?v=13">
 <style>
   /* ------------------------------------------------------------------
      Page-scoped design for /data. Everything is under body.dp so the
@@ -176,6 +176,8 @@
   /* ---------------------------------------------------------- who */
   .dp .tiles { display: grid; grid-template-columns: 1fr; gap: 14px; }
   @media (min-width: 760px) { .dp .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; } }
+  @media (min-width: 760px) { .dp .tiles:has(> .feature:nth-child(4)) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (min-width: 1100px) { .dp .tiles:has(> .feature:nth-child(4)) { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   .dp .feature { padding: 26px; border-radius: var(--r-lg); }
   .dp .feature .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; }
   .dp .feature .ico { width: 48px; height: 48px; border-radius: 14px; background: var(--acc-soft); color: var(--acc-text); display: grid; place-items: center; }
@@ -344,7 +346,7 @@
     <div class="wrap">
       <div class="hero">
         <div>
-          <p class="eyebrow">For lawn, snow &amp; concrete companies</p>
+          <p class="eyebrow">For lawn, snow, concrete &amp; siding companies</p>
           <h1>Price every lawn in a ZIP code <span class="soft-t">before you drive anywhere.</span></h1>
           <p class="lead">Stop measuring yards on satellite maps one at a time, or driving out just to write a quote. Every home in your ZIP, already measured. One spreadsheet, ready in minutes.</p>
           <div class="soft" id="zipbox">
@@ -436,19 +438,24 @@
       </div>
       <div class="tiles">
         <div class="soft feature">
-          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20v-8"/><path d="M12 12c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 14c0-3-2.5-5-6-5 0 3 2.5 5 6 5z"/><path d="M5 20h14"/></svg></span><span class="idx">01 / 03</span></div>
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20v-8"/><path d="M12 12c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 14c0-3-2.5-5-6-5 0 3 2.5 5 6 5z"/><path d="M5 20h14"/></svg></span><span class="idx">01 / 04</span></div>
           <h3>Lawn care &amp; fertilizer</h3>
           <p>Grass-only square footage plus the parkway strip owners mow. Your rate &times; lawn size = a price for every home on the list.</p>
         </div>
         <div class="soft feature">
-          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M4.9 6l14.2 12M4.9 18L19.1 6"/><path d="M9 3.5l3 2 3-2M9 20.5l3-2 3 2"/></svg></span><span class="idx">02 / 03</span></div>
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M4.9 6l14.2 12M4.9 18L19.1 6"/><path d="M9 3.5l3 2 3-2M9 20.5l3-2 3 2"/></svg></span><span class="idx">02 / 04</span></div>
           <h3>Snow removal</h3>
           <p>Driveway and public sidewalk square footage, so you can price routes and seasonal contracts before the first snowfall.</p>
         </div>
         <div class="soft feature">
-          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M9 4v8M15 12v8"/></svg></span><span class="idx">03 / 03</span></div>
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M9 4v8M15 12v8"/></svg></span><span class="idx">03 / 04</span></div>
           <h3>Concrete &amp; sealing</h3>
           <p>Driveway, patio and walk areas show which streets have the big driveways worth a replacement or sealing offer.</p>
+        </div>
+        <div class="soft feature">
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><rect x="8" y="12" width="3" height="3"/><rect x="13" y="12" width="3" height="3"/><path d="M8 17h8"/></svg></span><span class="idx">04 / 04</span></div>
+          <h3>Siding &amp; windows</h3>
+          <p>Wall area of every house, gables included, plus an estimated window and door count. Quote siding, painting and window washing from your desk.</p>
         </div>
       </div>
     </div>
@@ -612,8 +619,8 @@
   <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Get 25 free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=12"></script>
-<script src="/static/data.js?v=12"></script>
+<script src="/static/common.js?v=13"></script>
+<script src="/static/data.js?v=13"></script>
 <script>
 // Phone-only sticky "Get 25 free" button: shown once the ZIP box has scrolled
 // away, hidden while the ZIP box or the closing CTA is on screen and once a

@@ -40,6 +40,8 @@ MEASUREMENTS = {
     "other_hardscape_sqft": "Patios, walks & other paving",
     "structures_sqft": "Decks, sheds, play sets & other structures",
     "beds_sqft": "Landscape beds & shrubs",
+    "wall_sqft": "House wall area (siding, gross)",
+    "est_windows": "Windows & doors (estimate)",
     "tree_count": "Trees on the lot (count)",
     "tree_canopy_sqft": "Tree canopy over the lot",
     "lawn_under_trees_sqft": "Lawn under tree canopy",
@@ -179,6 +181,32 @@ class Measurer:
         pin = "".join(ch for ch in str(pin) if ch.isalnum() or ch in "-.")
         feats = query_features(self.c["parcels"]["url"], where=f"{self.pf['pin']}='{pin}'")
         return feats[0] if feats else None
+
+    def _house_walls(self, P_wgs, env, have_lidar) -> dict:
+        """Siding-area estimate for the main house: gross wall area and an
+        estimated window/door count, from the county footprint (drawn at the
+        roof edge) and LiDAR roof heights."""
+        out = {"wall_sqft": None, "est_windows": None}
+        if not have_lidar or self.lidar is None:
+            return out
+        try:
+            from shapely.ops import transform as _tf
+            from .walls import measure_walls
+            cands = [f["geometry"] for f in self.buildings.query(P_wgs.bounds)
+                     if f["geometry"] is not None and not f["geometry"].is_empty]
+            cands = [g for g in cands if g.intersection(P_wgs).area > 0.5 * g.area]
+            if not cands:
+                return out
+            main = max(cands, key=lambda g: g.area)
+            las = _tf(lambda x, y, z=None: self.lidar.to_las.transform(x, y), main).buffer(0)
+            if las.area < 400:  # sheds and garages alone aren't a house
+                return out
+            w = measure_walls(self.lidar, env, las)
+            if w:
+                out = {"wall_sqft": w["gross_wall_sqft"], "est_windows": w["est_openings"]}
+        except Exception:
+            pass
+        return out
 
     def _lidar_layers(self, mos, env, ft_px, bldg_m=None):
         """LiDAR obj/veg/ground rasters resampled onto the imagery pixel grid."""
@@ -584,6 +612,7 @@ class Measurer:
                       for la, lo, hh in ((mos.px_to_lonlat(c + 0.5, r + 0.5)[1], mos.px_to_lonlat(c + 0.5, r + 0.5)[0], h_)
                                          for r, c, h_ in lot_tops)],
             "frontage_ft": round(frontage_ft),
+            **self._house_walls(P_wgs, env, lid is not None),
             "assessor": {
                 "lot_sqft": attrs.get("lot_sqft"),
                 "living_sqft": attrs.get("bldg_sqft"),

@@ -45,6 +45,7 @@ COLUMNS = [
     ("beds_sqft", "Landscape beds sq ft"), ("frontage_ft", "Street frontage ft"),
     ("tree_count", "Trees on lot"), ("tree_canopy_sqft", "Tree canopy sq ft"),
     ("lawn_under_trees_sqft", "Lawn under trees sq ft"),
+    ("wall_sqft", "House wall area sq ft (siding)"), ("est_windows", "Windows & doors (estimate)"),
     ("quality", "Quality (ok / review)"), ("notes", "Notes"),
     ("lat", "Latitude"), ("lon", "Longitude"), ("pin", "Property id"),
 ]
