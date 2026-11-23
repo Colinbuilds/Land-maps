@@ -445,7 +445,9 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
         if trimmed.geom_type == "MultiPolygon":
             trimmed = max(trimmed.geoms, key=lambda g: g.area)
         if trimmed.geom_type == "Polygon" and trimmed.area > 0.7 * outline.area:
-            res2 = analyze_roof_points(trimmed.simplify(0.3), pts, round_pitch, _pass=1)
+            from .roofclean import orthogonalize
+            trimmed = orthogonalize(trimmed.simplify(0.3))
+            res2 = analyze_roof_points(trimmed, pts, round_pitch, _pass=1)
             if res2.get("method") == "lidar_planes":
                 res2["trimmed_sqft"] = round(outline.area - trimmed.area)
                 return res2
@@ -467,15 +469,17 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
 
     segs = []
 
-    def add(kind, a_xy, b_xy, plane_list):
+    def add(kind, a_xy, b_xy, plane_list, **tags):
         d = np.asarray(b_xy) - np.asarray(a_xy)
         Lp = float(np.hypot(*d))
         if Lp < 1.0:
             return
         u = d / Lp
         s = np.mean([abs(along(by_id[k], u)) for k in plane_list]) if plane_list else 0.0
+        za = float(np.mean([z_at(by_id[k], *a_xy) for k in plane_list])) if plane_list else None
+        zb = float(np.mean([z_at(by_id[k], *b_xy) for k in plane_list])) if plane_list else None
         segs.append({"type": kind, "a": [float(a_xy[0]), float(a_xy[1])], "b": [float(b_xy[0]), float(b_xy[1])],
-                     "plan_len": Lp, "len": Lp * math.sqrt(1 + s * s)})
+                     "plan_len": Lp, "len": Lp * math.sqrt(1 + s * s), "za": za, "zb": zb, **tags})
 
     def level_or_sloped(p, u):
         if p["flat"]:
@@ -509,9 +513,10 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
             if abs(zi - zj) > 1.2:
                 up, lo = (pi, pj) if zi > zj else (pj, pi)
                 # upper roof: its free edge over the lower roof
-                add("eave" if _is_level(up, u) else "rake", a_xy, b_xy, [up["id"]])
+                pair = len(segs)
+                add("eave" if _is_level(up, u) else "rake", a_xy, b_xy, [up["id"]], step=pair)
                 # lower roof meets the wall below it
-                add("flashing" if _is_level(lo, u) else "step_flashing", a_xy, b_xy, [lo["id"]])
+                add("flashing" if _is_level(lo, u) else "step_flashing", a_xy, b_xy, [lo["id"]], step=pair)
                 continue
             if pi["flat"] and pj["flat"]:
                 continue
@@ -551,6 +556,7 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
         # fill unknowns, then fold runs shorter than 2.5 ft into neighbours
         kinds = _fill_runs([k if k >= 0 else None for k in kinds], int(2.5 / GRID))
         step = Le / n_st
+        runs = []
         s = 0
         while s < len(kinds):
             e = s
@@ -558,13 +564,25 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
                 e += 1
             k = kinds[s]
             p = by_id.get(k)
+            runs.append([s, e, k, "eave" if (p is None or _is_level(p, u)) else "rake"])
+            s = e + 1
+        # one straight wall is one kind of edge (all eave or all rake) unless
+        # the split is real: a minority under 30% is plane-edge noise
+        tot = sum(r[1] - r[0] + 1 for r in runs)
+        for kind_ in ("eave", "rake"):
+            share = sum(r[1] - r[0] + 1 for r in runs if r[3] == kind_) / max(1, tot)
+            if share >= 0.7:
+                for r in runs:
+                    r[3] = kind_
+        for s, e, k, kind in runs:
+            p = by_id.get(k)
             a_xy = np.array([x0, y0]) + u * (s * step)
             b_xy = np.array([x0, y0]) + u * ((e + 1) * step)
-            kind = "eave" if (p is None or _is_level(p, u)) else "rake"
-            add(kind, a_xy, b_xy, [k] if p is not None else [])
-            s = e + 1
+            add(kind, a_xy, b_xy, [k] if p is not None else [], edge=True)
 
     _extend_interior_ends(segs, outline, by_id)
+    from .roofclean import regularize_lines
+    segs = regularize_lines(segs, outline)
     lines = {k: 0.0 for k in LINE_TYPES}
     for sgm in segs:
         lines[sgm["type"]] += sgm["len"]
@@ -574,6 +592,7 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
         pitch_areas[int(p["pitch"])] = pitch_areas.get(int(p["pitch"]), 0) + p["area_sqft"]
     predominant = max(pitch_areas, key=pitch_areas.get) if pitch_areas else None
     res.update({
+        "outline": outline,
         "plan_area_sqft": plan_area,
         "roof_area_sqft": area,
         "lines": lines,

@@ -103,6 +103,7 @@ def render_pdf(rep: dict, company: dict) -> bytes:
         ("Roof facets", d["facets"] or "—"),
         ("Structures", len(d["structures"])),
         ("Suggested waste", f"{d['suggested_waste']}%"),
+        ("Under tree canopy", f"{d.get('tree_overhang_sqft', 0):,} sq ft"),
         ("Squares w/ suggested waste", next(f"{w['squares']:.2f}" for w in d["waste"] if w["suggested"])),
     ], M, y, col_w=(160, 80))
     _kv_table(c, [
@@ -132,6 +133,11 @@ def render_pdf(rep: dict, company: dict) -> bytes:
         lab = f"{d['line_labels'][k]} {L.get(k, 0):,.0f}'"
         c.drawString(lx + 22, ly, lab)
         lx += 30 + c.stringWidth(lab, "Helvetica", 9) + 8
+    if d.get("tree_overhang_sqft"):
+        c.setFillColor(colors.HexColor("#15803d"))
+        c.setFont("Helvetica", 9)
+        c.drawString(M, ly - 18, f"Green hatch: roof under tree canopy ({d['tree_overhang_sqft']:,} sq ft). "
+                                 "Dashed lines run under trees: verify on site.")
     c.showPage()
 
     # ---------------------------------------------------------------- page 3
@@ -202,6 +208,9 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     ]
     if d.get("method") != "lidar":
         notes.append("Part of this roof had no usable LiDAR; its edges are counted as eaves from the outline.")
+    if d.get("tree_note"):
+        import textwrap
+        notes += textwrap.wrap(d["tree_note"], 112)
     c.setFont("Helvetica", 9)
     c.setFillColor(colors.HexColor("#334155"))
     for n in notes:
@@ -238,12 +247,33 @@ def _draw_diagram(c, d, box):
             c.setStrokeColor(colors.HexColor("#cbd5e1"))
             c.setLineWidth(0.6)
             c.drawPath(path, stroke=1, fill=1)
+    # tree canopy over the roof: green, hatched
+    for s in d["structures"]:
+        for ring in s.get("tree_cover") or []:
+            path = c.beginPath()
+            path.moveTo(*P(ring[0]))
+            for p in ring[1:]:
+                path.lineTo(*P(p))
+            path.close()
+            c.saveState()
+            c.setFillColor(colors.HexColor("#16a34a"))
+            c.setFillAlpha(0.15)
+            c.setStrokeColor(colors.HexColor("#15803d"))
+            c.setLineWidth(0.5)
+            c.drawPath(path, stroke=1, fill=1)
+            c.clipPath(path, stroke=0, fill=0)
+            c.setStrokeAlpha(0.6)
+            for k in range(-int(bh), int(bw), 5):
+                c.line(bx + k, by, bx + k + bh, by + bh)
+            c.restoreState()
     for s in d["structures"]:
         for seg in s["segments"]:
             a, b = P(seg["a"]), P(seg["b"])
             c.setStrokeColor(_hex(LINE_COLORS[seg["type"]]))
             c.setLineWidth(2.2)
+            c.setDash(4, 2) if seg.get("tree") else c.setDash()
             c.line(*a, *b)
+    c.setDash()
     # length labels on longer lines
     c.setFont("Helvetica-Bold", 7.5)
     for s in d["structures"]:
