@@ -430,6 +430,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
                 "planes": [{"pitch": q["pitch"], "plan_sqft": round(q["plan_sqft"], 1),
                             "area_sqft": round(q["area_sqft"], 1)} for q in res["planes"]],
                 "facet_polys": _facet_polys(res, used),
+                "_model": (res["planes"], res.get("label_grid"), res.get("grid_x"), res.get("grid_y")),
             })
             tree_total += add_trees(out_structs[-1], tree_cover(s, pts, used), res["roof_area_sqft"], res["plan_area_sqft"])
             for k in LINE_TYPES:
@@ -725,7 +726,12 @@ def _walls_total(m, env, structs) -> dict | None:
     for st in structs:
         try:
             poly = Polygon(st["outline"][0])
-            w = measure_walls(m.lidar, env, poly, st.get("segments"))
+            mdl = st.pop("_model", None)
+            model = None
+            if mdl is not None and mdl[1] is not None:
+                from .walls import RoofModel
+                model = RoofModel(*mdl)
+            w = measure_walls(m.lidar, env, poly, st.get("segments"), model=model)
         except Exception:
             w = None
         st["walls"] = w
@@ -767,6 +773,8 @@ def _elevations(structs) -> dict:
         for f in w.get("facets") or []:
             if f.get("kind") != "wall" or not f.get("profile"):
                 continue
+            if f["length_ft"] < 2.5:  # corner returns: counted in the areas, not drawn
+                continue
             side = f["side"]
             r = np.array(_RIGHT[side])
             a, b = np.array(f["a"]), np.array(f["b"])
@@ -777,15 +785,23 @@ def _elevations(structs) -> dict:
             xs = [float((a + u * t) @ r) for t in ts]
             # the wall's ends, so the silhouette starts and stops at its corners
             x_a, x_b = float(a @ r), float(b @ r)
-            prof = list(f["profile"])
-            pts = [(x_a, prof[0])] + list(zip(xs, prof)) + [(x_b, prof[-1])]
+            if f.get("shape"):
+                pts = [(float((a + u * t) @ r), h) for t, h in f["shape"]]
+            else:
+                prof = list(f["profile"])
+                pts = [(x_a, prof[0])] + list(zip(xs, prof)) + [(x_b, prof[-1])]
             pts.sort()
             out.setdefault(side, []).append({"pts": [[round(x, 2), round(h, 2)] for x, h in pts],
-                                             "area": f["area_sqft"]})
+                                             "area": f["area_sqft"], "length": f["length_ft"],
+                                             "depth": round(float(((a + b) / 2) @ np.array([-r[1], r[0]])), 2)})
     for side, walls in out.items():
         x0 = min(p[0] for wl in walls for p in wl["pts"])
         for wl in walls:
             wl["pts"] = [[round(x - x0, 2), h] for x, h in wl["pts"]]
+        # far walls first, so nearer walls are drawn in front of them
+        walls.sort(key=lambda wl: -wl["depth"])
+        for i, wl in enumerate(sorted(walls, key=lambda wl: wl["pts"][0][0])):
+            wl["label"] = side[0] + str(i + 1)
     return out
 
 

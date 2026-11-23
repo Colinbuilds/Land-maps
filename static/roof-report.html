@@ -167,21 +167,44 @@ function elevationsCard(d) {
   const sides = ["North", "East", "South", "West"].filter((s) => E[s]);
   const maxW = Math.max(...sides.flatMap((s) => E[s].flatMap((w) => w.pts.map((p) => p[0]))));
   const maxH = Math.max(...sides.flatMap((s) => E[s].flatMap((w) => w.pts.map((p) => p[1]))));
+  const ftin = (v) => { const f = Math.floor(v + 1e-6), i = Math.round((v - f) * 12); return i === 12 ? `${f + 1}'` : i ? `${f}' ${i}"` : `${f}'`; };
   const svgFor = (side) => {
-    const pad = 3, W = maxW + pad * 2, H = maxH + pad * 2 + 4;
-    let s = `<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" style="width:100%" role="img" aria-label="${side} elevation">`;
-    s += `<line x1="0" y1="${(H - pad).toFixed(2)}" x2="${W.toFixed(2)}" y2="${(H - pad).toFixed(2)}" stroke="#94a3b8" stroke-width="0.4"/>`;
-    E[side].forEach((w) => {
-      const pts = w.pts.map(([x, h]) => `${(x + pad).toFixed(2)},${(H - pad - h).toFixed(2)}`);
-      const x0 = w.pts[0][0] + pad, x1 = w.pts[w.pts.length - 1][0] + pad;
-      s += `<polygon points="${x0.toFixed(2)},${(H - pad).toFixed(2)} ${pts.join(" ")} ${x1.toFixed(2)},${(H - pad).toFixed(2)}" fill="#e2e8f0" fill-opacity="0.85" stroke="#334155" stroke-width="0.35" stroke-linejoin="round"/>`;
+    const padX = 4, top = 4, bottom = 6, W = maxW + padX * 2, H = maxH + top + bottom, G = H - bottom;
+    const fs = Math.max(1.1, W / 70);
+    const T = (x, y, txt, o = {}) => `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="${o.a || "middle"}" style="font-size:${(o.s || fs).toFixed(2)}px;font-weight:${o.w || 600};stroke-width:${(fs * 0.28).toFixed(2)}px" fill="${o.c || "#334155"}">${txt}</text>`;
+    let g = `<line x1="0" y1="${G}" x2="${W}" y2="${G}" stroke="#64748b" stroke-width="${(fs * 0.12).toFixed(2)}"/>`;
+    let labels = "";
+    const hidden = (i) => {  // mostly behind a nearer wall (drawn later)?
+      const w = E[side][i], a0 = w.pts[0][0], a1 = w.pts[w.pts.length - 1][0];
+      return E[side].slice(i + 1).some((o) => {
+        const b0 = o.pts[0][0], b1 = o.pts[o.pts.length - 1][0];
+        return Math.min(a1, b1) - Math.max(a0, b0) > 0.5 * (a1 - a0);
+      });
+    };
+    E[side].forEach((w, wi) => {
+      const pts = w.pts, x0 = pts[0][0] + padX, x1 = pts[pts.length - 1][0] + padX;
+      const poly = [`${x0.toFixed(2)},${G}`, ...pts.map(([x, h]) => `${(x + padX).toFixed(2)},${(G - h).toFixed(2)}`), `${x1.toFixed(2)},${G}`].join(" ");
+      g += `<polygon points="${poly}" fill="#f1f5f9" stroke="#1e293b" stroke-width="${(fs * 0.11).toFixed(2)}" stroke-linejoin="miter"/>`;
+      const len = x1 - x0;
+      if (len < 5 || hidden(wi)) return;  // too narrow, or behind another wall
+      const hl = pts[0][1], hr = pts[pts.length - 1][1];
+      const peak = pts.reduce((m, p) => (p[1] > m[1] ? p : m), pts[0]);
+      // wall label in the middle, length under the ground line
+      labels += T((x0 + x1) / 2, G - Math.min(hl, hr) / 2 + fs * 0.4, w.label, { c: "#b91c1c", w: 700 });
+      labels += T((x0 + x1) / 2, G + fs * 1.5, ftin(w.length || len), { s: fs * 0.85, w: 500 });
+      // eave heights at the corners; the peak if it's a gable
+      if (len >= 8) {
+        labels += T(x0 + fs * 0.4, G - hl + fs * 1.2, ftin(hl), { a: "start", s: fs * 0.8, w: 500, c: "#475569" });
+        if (Math.abs(hr - hl) > 0.6) labels += T(x1 - fs * 0.4, G - hr + fs * 1.2, ftin(hr), { a: "end", s: fs * 0.8, w: 500, c: "#475569" });
+      }
+      if (peak[1] - Math.max(hl, hr) > 1.0) labels += T(peak[0] + padX, G - peak[1] - fs * 0.5, ftin(peak[1]), { s: fs * 0.8, w: 500, c: "#475569" });
     });
-    return s + "</svg>";
+    return `<div class="tablewrap"><svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" style="width:100%;min-width:620px;max-height:260px" role="img" aria-label="${side} elevation">${g}${labels}</svg></div>`;
   };
   return `<div class="card">
       <h2>Elevations</h2>
-      <p class="small muted" style="margin-top:-8px">Each side's walls as seen standing in front of it, drawn from heights measured every foot (gables included). Same scale for all four.</p>
-      <div class="grid2">${sides.map((sd) => `<div><b>${sd}</b> <span class="muted small">${Math.round(d.walls.by_side[sd]).toLocaleString()} sq ft</span>${svgFor(sd)}</div>`).join("")}</div>
+      <p class="small muted" style="margin-top:-8px">Each side's walls as seen standing in front of it. Wall tops follow the measured roof planes; heights from the ground at that wall. Lengths along the bottom, eave and peak heights on the walls. Same scale for all sides.</p>
+      ${sides.map((sd) => `<div style="margin-top:12px"><b>${sd}</b> <span class="muted small">${Math.round(d.walls.by_side[sd]).toLocaleString()} sq ft of wall</span>${svgFor(sd)}</div>`).join("")}
     </div>`;
 }
 

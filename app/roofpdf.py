@@ -446,44 +446,75 @@ def _facet_page(c, rep, company, d, mode, page, total_pages):
     c.showPage()
 
 
+def _ftin(v):
+    f = int(v + 1e-6)
+    i = round((v - f) * 12)
+    if i == 12:
+        return f"{f + 1}'"
+    return f"{f}' {i}\"" if i else f"{f}'"
+
+
 def _elev_page(c, rep, company, w, page, total_pages):
     _header(c, rep, company, page, total_pages)
     _title(c, "Elevations", H - 92)
     c.setFont("Helvetica", 9)
     c.setFillColor(colors.HexColor("#475569"))
-    c.drawString(M, H - 108, "Each side's walls as seen standing in front of it, from heights measured every foot. Same scale for all sides.")
+    c.drawString(M, H - 108, "Walls as seen from each side. Lengths along the bottom; eave and peak heights on the walls. Same scale throughout.")
     E = w["elevations"]
     sides = [s_ for s_ in ("North", "East", "South", "West") if s_ in E]
     maxW = max(p_[0] for s_ in sides for wl in E[s_] for p_ in wl["pts"])
     maxH = max(p_[1] for s_ in sides for wl in E[s_] for p_ in wl["pts"])
-    cellw, cellh = (W - 2 * M - 20) / 2, (H - 200) / 2
-    sc = min((cellw - 10) / max(maxW, 1), (cellh - 40) / max(maxH, 1))
+    rowh = (H - 170) / max(1, len(sides))
+    sc = min((W - 2 * M - 10) / max(maxW, 1), (rowh - 46) / max(maxH, 1))
     for i, side in enumerate(sides):
-        cx0 = M + (i % 2) * (cellw + 20)
-        cy0 = H - 140 - (i // 2 + 1) * cellh
-        base = cy0 + 14
-        label_y = base + maxH * sc + 12  # just above the tallest wall
+        top = H - 130 - i * rowh
+        base = top - rowh + 30
         c.setFont("Helvetica-Bold", 10.5)
         c.setFillColor(colors.HexColor("#0f172a"))
-        c.drawString(cx0, label_y, f"{side}")
+        c.drawString(M, top - 4, side)
         c.setFont("Helvetica", 9)
         c.setFillColor(colors.HexColor("#475569"))
-        c.drawString(cx0 + 46, label_y, f"{round(w['by_side'][side]):,} sq ft")
-        c.setStrokeColor(colors.HexColor("#94a3b8"))
-        c.setLineWidth(0.6)
-        c.line(cx0, base, cx0 + cellw - 10, base)
+        c.drawString(M + 46, top - 4, f"{round(w['by_side'][side]):,} sq ft of wall")
+        c.setStrokeColor(colors.HexColor("#64748b"))
+        c.setLineWidth(0.8)
+        c.line(M, base, M + maxW * sc + 10, base)
+        X = lambda x: M + 5 + x * sc
         for wl in E[side]:
             pts = wl["pts"]
             path = c.beginPath()
-            path.moveTo(cx0 + pts[0][0] * sc, base)
+            path.moveTo(X(pts[0][0]), base)
             for x, h in pts:
-                path.lineTo(cx0 + x * sc, base + h * sc)
-            path.lineTo(cx0 + pts[-1][0] * sc, base)
+                path.lineTo(X(x), base + h * sc)
+            path.lineTo(X(pts[-1][0]), base)
             path.close()
-            c.setFillColor(colors.HexColor("#e2e8f0"))
-            c.setStrokeColor(colors.HexColor("#334155"))
-            c.setLineWidth(0.7)
+            c.setFillColor(colors.HexColor("#f1f5f9"))
+            c.setStrokeColor(colors.HexColor("#1e293b"))
+            c.setLineWidth(0.9)
             c.drawPath(path, stroke=1, fill=1)
+        walls_ = E[side]
+        for wi, wl in enumerate(walls_):
+            pts = wl["pts"]
+            a0, a1 = pts[0][0], pts[-1][0]
+            if any(min(a1, o["pts"][-1][0]) - max(a0, o["pts"][0][0]) > 0.5 * (a1 - a0) for o in walls_[wi + 1:]):
+                continue  # mostly behind a nearer wall
+            x0, x1 = X(pts[0][0]), X(pts[-1][0])
+            span = pts[-1][0] - pts[0][0]
+            if span < 5 or x1 - x0 < 18:  # too narrow to label legibly
+                continue
+            hl, hr = pts[0][1], pts[-1][1]
+            peak = max(pts, key=lambda q: q[1])
+            c.setFillColor(colors.HexColor("#b91c1c"))
+            c.setFont("Helvetica-Bold", 8.5)
+            c.drawCentredString((x0 + x1) / 2, base + min(hl, hr) * sc / 2 - 3, wl.get("label", ""))
+            c.setFillColor(colors.HexColor("#334155"))
+            c.setFont("Helvetica", 7.5)
+            c.drawCentredString((x0 + x1) / 2, base - 10, _ftin(wl.get("length") or (pts[-1][0] - pts[0][0])))
+            if span >= 8:
+                c.drawString(x0 + 2, base + hl * sc - 9, _ftin(hl))
+                if abs(hr - hl) > 0.6:
+                    c.drawRightString(x1 - 2, base + hr * sc - 9, _ftin(hr))
+            if peak[1] - max(hl, hr) > 1.0:
+                c.drawCentredString(X(peak[0]), base + peak[1] * sc + 3, _ftin(peak[1]))
     c.showPage()
 
 
