@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Property Measurement Data</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=9">
+<link rel="stylesheet" href="/static/styles.css?v=10">
 <style>
   .hero { max-width: 760px; }
   .stat { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -26,17 +26,27 @@
 </header>
 <main>
   <div class="hero">
-    <h1>Lawn and property measurements for every home in a ZIP code</h1>
-    <p class="lead">Skip measuring by hand. Every row is one property: lawn (grass only), driveway, sidewalk, building, beds and lot size, measured from aerial photos and LiDAR. Try 25 properties free.</p>
+    <h1>Price every lawn in a ZIP code before you drive anywhere</h1>
+    <p class="lead">Still measuring yards on satellite maps one at a time, or driving out just to write a quote? Get every home in a ZIP already measured: lawn (grass only), driveway, sidewalk, building, beds, trees and lot size. One spreadsheet. Try 25 properties free, instantly.</p>
+    <p><a class="btn" href="#zipbox">Get 25 free properties</a> <a class="btn secondary" href="#savings">See what it saves you</a></p>
   </div>
 
+  <h2 style="margin-top:22px">Built for the way you quote</h2>
   <div class="steps">
-    <div class="card"><b>1. Pick a ZIP</b><span class="muted small">See how many properties and the exact price.</span></div>
-    <div class="card"><b>2. Get 25 free</b><span class="muted small">A sample from across the ZIP, shown right here. No card needed.</span></div>
-    <div class="card"><b>3. Buy the full sheet</b><span class="muted small" id="rateLine">Pay by card and download a spreadsheet (CSV).</span></div>
+    <div class="card"><b>Lawn care &amp; fertilizer</b><span class="muted small">Grass-only square footage (no driveways, beds, decks or sheds) plus the parkway strip. Multiply by your rate and every home has a price.</span></div>
+    <div class="card"><b>Snow removal</b><span class="muted small">Driveway and public sidewalk square footage for every address, so you can price routes and seasonal contracts in one sitting.</span></div>
+    <div class="card"><b>Concrete &amp; sealing</b><span class="muted small">Driveway, patio and walkway areas show you which streets have big driveways worth a replacement or sealing offer.</span></div>
   </div>
 
-  <div class="card stack">
+  <h2>From ZIP code to customers in three steps</h2>
+  <div class="steps">
+    <div class="card"><b>1. Pick your ZIP</b><span class="muted small">Choose the area you serve and the property type. You see the exact number of properties and the exact price right away.</span></div>
+    <div class="card"><b>2. Check 25 free</b><span class="muted small">A sample spread across the whole ZIP appears on this page in about a minute. No card, no waiting for a call back. Compare it with yards you already know.</span></div>
+    <div class="card"><b>3. Put the sheet to work</b><span class="muted small" id="rateLine">Buy the full sheet by card and download a spreadsheet (CSV). Use it to quote before you visit, send priced postcards and plan routes.</span></div>
+  </div>
+
+  <div class="card stack" id="zipbox">
+    <h2 style="margin:0">Check your ZIP</h2>
     <div class="row" style="align-items:flex-end">
       <label style="flex:0 1 180px">ZIP code<input type="text" id="zip" inputmode="numeric" maxlength="5" placeholder="68135"></label>
       <label style="flex:0 1 240px">Property type
@@ -87,10 +97,53 @@
     <div class="tablewrap" style="margin-top:10px"><table id="sampleTable"></table></div>
   </div>
 
+  <h2 style="margin-top:26px">From measurement to price</h2>
+  <div class="grid2">
+    <div class="card">
+      <b>Lawn: priced before you knock</b>
+      <p class="small muted" style="margin:6px 0 0">Example (not a real property): 7,500 sq ft of lawn &times; your $4.00 per 1,000 sq ft per fertilizer application = <b>$30 per application</b>, or <b>$150 for a 5-step season</b>. Put that exact price on a postcard for each house.</p>
+    </div>
+    <div class="card">
+      <b>Snow: routes you can bid on</b>
+      <p class="small muted" style="margin:6px 0 0">Example: 900 sq ft driveway + 300 sq ft of sidewalk = 1,200 sq ft per push. Sort the sheet by street, add up a route, and price the season before the first snowfall.</p>
+    </div>
+  </div>
+
+  <div class="card stack" id="savings" style="margin-top:16px">
+    <h2 style="margin:0">What it saves you</h2>
+    <p class="small muted" style="margin:0">Change the numbers to match your business. After you check a ZIP, the property count and price come from that ZIP.</p>
+    <div class="row" style="align-items:flex-end;flex-wrap:wrap">
+      <label style="flex:1 1 140px">Properties<input type="number" id="cN" min="1" value="5000"></label>
+      <label style="flex:1 1 200px">How you measure today
+        <select id="cHow">
+          <option value="online">On a satellite map, at a desk</option>
+          <option value="drive">Driving out to each property</option>
+        </select>
+      </label>
+      <label style="flex:1 1 140px">Minutes per property<input type="number" id="cMin" min="0" step="0.5" value="4"></label>
+      <label style="flex:1 1 140px">Labor cost $/hour<input type="number" id="cWage" min="0" step="1" value="22"></label>
+      <label style="flex:1 1 140px" id="cMilesBox" class="hidden">Driving cost $/property<input type="number" id="cMiles" min="0" step="0.5" value="3"></label>
+    </div>
+    <div class="steps" style="margin:6px 0 0">
+      <div class="card"><span class="muted small">Measuring it yourself</span><div class="stat" id="cHand"></div><span class="muted small" id="cHandSub"></span></div>
+      <div class="card"><span class="muted small">This sheet</span><div class="stat" id="cOurs"></div><span class="muted small" id="cOursSub"></span></div>
+      <div class="card"><span class="muted small">You save</span><div class="stat" id="cSave" style="color:var(--accent)"></div><span class="muted small" id="cSaveSub"></span></div>
+    </div>
+    <p class="small muted" style="margin:0">Plus what the calculator leaves out: quotes go out the same day a lead calls instead of after a site visit, crews stay on paying work, and every postcard carries a real price instead of "call for a quote".</p>
+  </div>
+
+  <h2 style="margin-top:26px">Good to know</h2>
+  <div class="grid2">
+    <div class="card"><b>Does it replace a site visit?</b><p class="small muted" style="margin:6px 0 0">It replaces the measuring, not your judgement. Measurements are estimates from aerial photos and LiDAR; confirm on the first visit before final billing. Every row has a quality flag so you know which ones to double-check.</p></div>
+    <div class="card"><b>What's in the free sample?</b><p class="small muted" style="margin:6px 0 0">25 real properties picked from across the ZIP, with every column the full sheet has. One free sample per email.</p></div>
+    <div class="card"><b>Can I pick any ZIP?</b><p class="small muted" style="margin:6px 0 0">Any ZIP in Douglas, Sarpy, Lancaster and Cass counties, Nebraska today, with more counties coming.</p></div>
+    <div class="card"><b>Is owner information included?</b><p class="small muted" style="margin:6px 0 0">No. Sheets contain addresses and measurements, not owner names or mailing addresses, so they're simple to use for postcards addressed to "Resident".</p></div>
+  </div>
+
   <p class="small muted" style="margin-top:18px">Measurements come from public aerial photos, LiDAR and county parcel data, which can be a few years old. Sheets contain no owner names or mailing addresses. Coverage today: Douglas, Sarpy, Lancaster and Cass counties, Nebraska.</p>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=9"></script>
-<script src="/static/data.js?v=9"></script>
+<script src="/static/common.js?v=10"></script>
+<script src="/static/data.js?v=10"></script>
 </body>
 </html>

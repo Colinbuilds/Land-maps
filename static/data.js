@@ -35,6 +35,9 @@
     $("qPrice").textContent = usd(q.price_cents);
     $("qRate").textContent = `(${p.rate_cents}¢ per property${q.count > p.bulk_threshold ? `, ${p.bulk_rate_cents}¢ after the first ${p.bulk_threshold.toLocaleString()}` : ""}${q.price_cents <= p.min_order_usd * 100 ? `, $${p.min_order_usd} minimum` : ""})`;
     $("rateLine").textContent = `${p.rate_cents}¢ per property, ${p.bulk_rate_cents}¢ each after ${p.bulk_threshold.toLocaleString()}. Download a spreadsheet (CSV).`;
+    pricing = q.pricing || pricing;
+    $("cN").value = q.count;
+    calc();
     $("cols").innerHTML = "Columns: " + q.columns.map((c) => `<span>${esc(c)}</span>`).join("");
     if (!map) {
       map = makeMap("zmap", cfg);
@@ -46,6 +49,36 @@
       map.fitBounds(zl.getBounds(), { padding: [10, 10] });
     }
   }
+  // ------------------------------------------------ savings calculator
+  let pricing = { rate_cents: 10, bulk_rate_cents: 5, bulk_threshold: 2000, min_order_usd: 25 };
+  try { const cp = await api("/api/data/pricing"); if (cp && cp.rate_cents) pricing = cp; } catch (e) {}
+  const money = (d) => "$" + Math.round(d).toLocaleString();
+  function sheetPrice(n) {
+    const p = pricing, t = p.bulk_threshold;
+    const c = Math.min(n, t) * p.rate_cents + Math.max(0, n - t) * p.bulk_rate_cents;
+    return Math.max(c / 100, p.min_order_usd);
+  }
+  function calc() {
+    const n = Math.max(1, +$("cN").value || 0);
+    const drive = $("cHow").value === "drive";
+    $("cMilesBox").classList.toggle("hidden", !drive);
+    const mins = Math.max(0, +$("cMin").value || 0), wage = Math.max(0, +$("cWage").value || 0);
+    const hours = n * mins / 60;
+    const hand = hours * wage + (drive ? n * Math.max(0, +$("cMiles").value || 0) : 0);
+    const ours = (q && q.count === n) ? q.price_cents / 100 : sheetPrice(n);
+    $("cHand").textContent = money(hand);
+    $("cHandSub").textContent = `${Math.round(hours).toLocaleString()} hours of work · $${(hand / n).toFixed(2)} per property`;
+    $("cOurs").textContent = money(ours);
+    $("cOursSub").textContent = `ready in minutes · $${(ours / n).toFixed(3)} per property`;
+    const save = hand - ours;
+    $("cSave").textContent = save > 0 ? money(save) : "$0";
+    $("cSaveSub").textContent = save > 0 ? `${Math.round(100 * save / hand)}% less, and ${Math.round(hours).toLocaleString()} hours back`
+      : "Measuring yourself is cheaper at these numbers";
+  }
+  $("cHow").addEventListener("change", () => { $("cMin").value = $("cHow").value === "drive" ? 25 : 4; calc(); });
+  ["cN", "cMin", "cWage", "cMiles"].forEach((id) => $(id).addEventListener("input", calc));
+  calc();
+
   $("check").addEventListener("click", check);
   $("zip").addEventListener("keydown", (e) => { if (e.key === "Enter") check(); });
 
