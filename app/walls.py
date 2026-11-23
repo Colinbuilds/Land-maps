@@ -162,12 +162,17 @@ def measure_walls(lidar, env, outline, segments=None, overhang: float = 1.0) -> 
             continue
         h = np.where(ok, h, np.nanmedian(h))
         h = np.clip(h, 0, 60)
+        if len(h) >= 5:  # one-foot gaps and spikes along the wall top
+            from scipy.ndimage import median_filter
+            h = median_filter(h, size=5, mode="nearest")
         h[h < MIN_WALL_TOP] = 0.0  # deck / stoop floors and railings aren't walls
         area = float(h.sum() * (L / k))
         side = _side(*out)
         per[side] += area
         facets.append({"side": side, "kind": "wall", "length_ft": round(L, 1),
-                       "height_ft": round(float(np.median(h)), 1), "area_sqft": round(area, 1)})
+                       "height_ft": round(float(np.median(h)), 1), "area_sqft": round(area, 1),
+                       "a": [round(float(a[0]), 2), round(float(a[1]), 2)], "b": [round(float(b[0]), 2), round(float(b[1]), 2)],
+                       "profile": [round(float(x), 1) for x in h]})
         edge_h.append((float(h[0]), float(h[-1])))
     # corners: convex = outside corner, concave = inside corner; corner height
     # is the lower of the two walls meeting there (the trim stops at the eave)

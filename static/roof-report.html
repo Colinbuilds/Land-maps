@@ -43,7 +43,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
   document.documentElement.style.setProperty("--accent", c.brand_color || "#1d4ed8");
   document.getElementById("co").textContent = c.name || "Roof Report";
   document.getElementById("coContact").textContent = [c.phone, c.email].filter(Boolean).join(" · ");
-  document.title = `Roof Report – ${d.address}`;
+  document.title = `Property Report – ${d.address}`;
   const ft = (v) => `${Math.round(v).toLocaleString()} ft`;
   const share = `${location.origin}/r/${r.id}?t=${r.share_token}`;
   const sug = d.waste.find((w) => w.suggested);
@@ -54,7 +54,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
       <span class="small muted" id="copied"></span>
     </div>
     <div>
-      <h1 style="margin-bottom:2px">Roof Measurement Report</h1>
+      <h1 style="margin-bottom:2px">Property Measurement Report</h1>
       <div class="muted">${esc(d.address)}, ${esc((d.city || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()))} NE ${esc(d.zip || "")} · Parcel ${esc(String(d.pin).split(':').pop())}${d.county_name ? ` · ${esc(d.county_name)}` : ''} · Report ${esc(r.id)} · ${new Date(r.created * 1000).toLocaleDateString(undefined, { dateStyle: "long" })}</div>
     </div>
     <div class="cover">
@@ -100,12 +100,114 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
         </tbody></table></div>
         <p class="small muted">Pitch measured per roof plane from LiDAR, rounded to the nearest 1/12. Roof outlines: ${esc(d.sources?.outlines || "county building footprints")}. Roof planes and lines: ${esc(d.sources?.lidar || "LiDAR")}. Photo: ${esc(d.sources?.imagery || "aerial imagery")}. Changes after the ${esc(d.sources?.lidar_year || "LiDAR")} scan are not reflected. Verify on site before ordering material.</p>
       </div>
-    </div>${wallsCard(d)}`;
+    </div>
+    ${facetCard(d, "pitch")}
+    ${facetCard(d, "area")}
+    ${wallsCard(d)}
+    ${elevationsCard(d)}
+    ${yardCard(d)}`;
   document.getElementById("copy").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(share); document.getElementById("copied").textContent = "Link copied. Anyone with it can view this report."; }
     catch (e) { prompt("Share link:", share); }
   });
 })();
+
+// ---------------------------------------------------------- facet diagrams
+function frame(d, pad) {
+  const xs = [], ys = [];
+  d.structures.forEach((s) => s.outline.forEach((ring) => ring.forEach(([x, y]) => { xs.push(x); ys.push(y); })));
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const w = maxx - minx + pad * 2, h = maxy - miny + pad * 2;
+  return { w, h, X: (x) => (x - minx + pad).toFixed(2), Y: (y) => (maxy - y + pad).toFixed(2), sc: Math.max(w, h) / 600 };
+}
+const PITCH_FILL = ["#e0f2fe", "#dcfce7", "#fef9c3", "#ffedd5", "#fce7f3", "#ede9fe", "#e2e8f0"];
+function facetCard(d, mode) {
+  const has = d.structures.some((s) => (s.facet_polys || []).length);
+  if (!has) return "";
+  const F = frame(d, 10), sc = F.sc;
+  const pitches = [...new Set(d.structures.flatMap((s) => (s.facet_polys || []).map((f) => f.pitch)))].sort((a, b) => a - b);
+  let svg = `<svg viewBox="0 0 ${F.w.toFixed(1)} ${F.h.toFixed(1)}" style="width:100%;max-height:560px" role="img" aria-label="Roof facets, ${mode === "pitch" ? "pitch" : "area"} of each">`;
+  d.structures.forEach((st) => (st.facet_polys || []).forEach((f) => {
+    const fill = mode === "pitch" ? PITCH_FILL[pitches.indexOf(f.pitch) % PITCH_FILL.length] : "#f1f5f9";
+    f.poly.forEach((ring) => {
+      svg += `<polygon points="${ring.map(([x, y]) => `${F.X(x)},${F.Y(y)}`).join(" ")}" fill="${fill}" stroke="#334155" stroke-width="${(0.9 * sc).toFixed(2)}" stroke-linejoin="round"/>`;
+    });
+  }));
+  d.structures.forEach((st) => (st.facet_polys || []).forEach((f) => {
+    const cx = +F.X(f.c[0]), cy = +F.Y(f.c[1]);
+    const fs = (12 * sc).toFixed(2);
+    if (mode === "pitch") {
+      const label = f.pitch ? `${f.pitch}/12` : "Flat";
+      svg += `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" style="font-size:${fs}px;stroke-width:${(3 * sc).toFixed(2)}px" fill="#0f172a">${label}</text>`;
+      if (f.down) {
+        const L = 9 * sc, dx = f.down[0] * L, dy = -f.down[1] * L, y0 = cy + 9 * sc;
+        svg += `<line x1="${(cx - dx / 2).toFixed(2)}" y1="${(y0 - dy / 2).toFixed(2)}" x2="${(cx + dx / 2).toFixed(2)}" y2="${(y0 + dy / 2).toFixed(2)}" stroke="#0f172a" stroke-width="${(1.2 * sc).toFixed(2)}" marker-end="url(#ah)"/>`;
+      }
+    } else {
+      svg += `<text x="${cx}" y="${(cy - 6 * sc).toFixed(2)}" text-anchor="middle" dominant-baseline="middle" style="font-size:${(13 * sc).toFixed(2)}px;stroke-width:${(3 * sc).toFixed(2)}px" fill="#0f172a">${f.label}</text>`;
+      svg += `<text x="${cx}" y="${(cy + 8 * sc).toFixed(2)}" text-anchor="middle" dominant-baseline="middle" style="font-size:${(10.5 * sc).toFixed(2)}px;stroke-width:${(3 * sc).toFixed(2)}px;font-weight:600" fill="#334155">${Math.round(f.area_sqft).toLocaleString()}</text>`;
+    }
+  }));
+  svg = svg.replace(">", `><defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0f172a"/></marker></defs>`);
+  svg += "</svg>";
+  const table = mode === "area" ? `<div class="tablewrap"><table><thead><tr><th>Facet</th><th class="num">Pitch</th><th class="num">Area (sq ft)</th></tr></thead><tbody>
+      ${d.structures.flatMap((st) => (st.facet_polys || []).map((f) => `<tr><td>${f.label}${d.structures.length > 1 ? ` <span class="muted small">${esc(st.name)}</span>` : ""}</td><td class="num">${f.pitch ? `${f.pitch}/12` : "Flat"}</td><td class="num">${Math.round(f.area_sqft).toLocaleString()}</td></tr>`)).join("")}
+    </tbody></table></div>` : `<div class="legend">${pitches.map((p, i) => `<span><i class="sw2" style="background:${PITCH_FILL[i % PITCH_FILL.length]};height:12px;border:1px solid #94a3b8"></i>${p ? `${p}/12` : "Flat"}</span>`).join("")}<span>Arrows point downslope</span></div>`;
+  return `<div class="card">
+      <h2>${mode === "pitch" ? "Pitch diagram" : "Facet areas"}</h2>
+      <p class="small muted" style="margin-top:-8px">${mode === "pitch" ? "Each roof facet's measured pitch (rise per 12 in.). North is up." : "Facets lettered smallest (A) to largest, with sloped area in sq ft. North is up."}</p>
+      ${svg}${table}
+    </div>`;
+}
+
+// ---------------------------------------------------------- elevations
+function elevationsCard(d) {
+  const E = d.walls && d.walls.elevations;
+  if (!E || !Object.keys(E).length) return "";
+  const sides = ["North", "East", "South", "West"].filter((s) => E[s]);
+  const maxW = Math.max(...sides.flatMap((s) => E[s].flatMap((w) => w.pts.map((p) => p[0]))));
+  const maxH = Math.max(...sides.flatMap((s) => E[s].flatMap((w) => w.pts.map((p) => p[1]))));
+  const svgFor = (side) => {
+    const pad = 3, W = maxW + pad * 2, H = maxH + pad * 2 + 4;
+    let s = `<svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" style="width:100%" role="img" aria-label="${side} elevation">`;
+    s += `<line x1="0" y1="${(H - pad).toFixed(2)}" x2="${W.toFixed(2)}" y2="${(H - pad).toFixed(2)}" stroke="#94a3b8" stroke-width="0.4"/>`;
+    E[side].forEach((w) => {
+      const pts = w.pts.map(([x, h]) => `${(x + pad).toFixed(2)},${(H - pad - h).toFixed(2)}`);
+      const x0 = w.pts[0][0] + pad, x1 = w.pts[w.pts.length - 1][0] + pad;
+      s += `<polygon points="${x0.toFixed(2)},${(H - pad).toFixed(2)} ${pts.join(" ")} ${x1.toFixed(2)},${(H - pad).toFixed(2)}" fill="#e2e8f0" fill-opacity="0.85" stroke="#334155" stroke-width="0.35" stroke-linejoin="round"/>`;
+    });
+    return s + "</svg>";
+  };
+  return `<div class="card">
+      <h2>Elevations</h2>
+      <p class="small muted" style="margin-top:-8px">Each side's walls as seen standing in front of it, drawn from heights measured every foot (gables included). Same scale for all four.</p>
+      <div class="grid2">${sides.map((sd) => `<div><b>${sd}</b> <span class="muted small">${Math.round(d.walls.by_side[sd]).toLocaleString()} sq ft</span>${svgFor(sd)}</div>`).join("")}</div>
+    </div>`;
+}
+
+// ---------------------------------------------------------- lot & yard
+function yardCard(d) {
+  const y = d.yard;
+  if (!y) return "";
+  const n = (v) => (v == null ? "–" : Math.round(v).toLocaleString());
+  const rows = [["#22c55e", "Lawn (grass only)", y.lawn_sqft], ["#86efac", "Parkway grass", y.parkway_sqft], ["#3b82f6", "Driveway", y.driveway_sqft],
+    ["#ec4899", "Public sidewalk", y.sidewalk_sqft], ["#eab308", "Patios & walks", y.other_hardscape_sqft], ["#ef4444", "Decks, sheds, play sets", y.structures_sqft],
+    ["#a855f7", "Landscape beds", y.beds_sqft], ["#64748b", "Buildings", y.building_sqft]];
+  return `<div class="card">
+      <h2>Lot &amp; yard</h2>
+      <p class="small muted" style="margin-top:-8px">For lawn, snow, concrete and landscape work. Square feet.</p>
+      <div class="cover">
+        <div>${y.photo_jpg ? `<img alt="Aerial photo of the lot with lawn, driveway, sidewalk and beds shaded" src="data:image/jpeg;base64,${y.photo_jpg}">` : ""}</div>
+        <div><table class="kv">
+          ${rows.map(([c, k, v]) => `<tr><td><span class="sw2" style="background:${c};height:10px"></span>${k}</td><td>${n(v)}</td></tr>`).join("")}
+          <tr><td>Trees on the lot</td><td>${y.tree_count ?? "–"}${y.tree_canopy_sqft ? ` · ${n(y.tree_canopy_sqft)} sq ft canopy` : ""}</td></tr>
+          <tr><td>Street frontage</td><td>${n(y.frontage_ft)} ft</td></tr>
+          <tr><td><b>Lot</b></td><td>${n(y.lot_sqft)}</td></tr>
+        </table>
+        ${y.quality === "review" ? `<p class="small" style="color:#8a5300">Some yard areas on this lot may need a quick check on site${y.note ? `: ${esc(y.note)}` : ""}.</p>` : ""}</div>
+      </div>
+    </div>`;
+}
 
 function wallsCard(d) {
   const w = d.walls;
