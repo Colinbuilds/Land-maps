@@ -34,7 +34,11 @@
     const p = q.pricing;
     $("qPrice").textContent = usd(q.price_cents);
     $("qRate").textContent = `(${p.rate_cents}¢ per property${q.count > p.bulk_threshold ? `, ${p.bulk_rate_cents}¢ after the first ${p.bulk_threshold.toLocaleString()}` : ""}${q.price_cents <= p.min_order_usd * 100 ? `, $${p.min_order_usd} minimum` : ""})`;
-    $("rateLine").textContent = `${p.rate_cents}¢ per property, ${p.bulk_rate_cents}¢ each after ${p.bulk_threshold.toLocaleString()}. Download a spreadsheet (CSV).`;
+    $("rateLine").textContent = `${p.rate_cents}¢ a home, ${p.bulk_rate_cents}¢ after the first ${p.bulk_threshold.toLocaleString()}. Pay by card, download a spreadsheet, and quote before you visit.`;
+    pricing = q.pricing || pricing;
+    pricingCard();
+    $("cN").value = q.count;
+    calc();
     $("cols").innerHTML = "Columns: " + q.columns.map((c) => `<span>${esc(c)}</span>`).join("");
     if (!map) {
       map = makeMap("zmap", cfg);
@@ -46,6 +50,65 @@
       map.fitBounds(zl.getBounds(), { padding: [10, 10] });
     }
   }
+  // ------------------------------------------------ savings calculator
+  let pricing = { rate_cents: 10, bulk_rate_cents: 5, bulk_threshold: 2000, min_order_usd: 25 };
+  try { const cp = await api("/api/data/pricing"); if (cp && cp.rate_cents) pricing = cp; } catch (e) {}
+  const money = (d) => "$" + Math.round(d).toLocaleString();
+  function sheetPrice(n) {
+    const p = pricing, t = p.bulk_threshold;
+    const c = Math.min(n, t) * p.rate_cents + Math.max(0, n - t) * p.bulk_rate_cents;
+    return Math.max(c / 100, p.min_order_usd);
+  }
+  const cents = (c) => (c >= 1 ? `${+c.toFixed(1)}¢` : `${+c.toFixed(2)}¢`);
+  function pricingCard() {
+    const p = pricing;
+    $("pTier1Lbl").textContent = `First ${p.bulk_threshold.toLocaleString()} homes`;
+    $("pTier1").textContent = cents(p.rate_cents);
+    $("pTier2").textContent = cents(p.bulk_rate_cents);
+    $("pMin").textContent = `per home · $${p.min_order_usd} minimum order`;
+    $("vsPer").textContent = cents(100 * sheetPrice(5000) / 5000);
+  }
+  function payback(price) {
+    const v = Math.max(0, +$("cVal").value || 0);
+    if (!v) return null;
+    return Math.max(1, Math.ceil(price / v));
+  }
+  function calc() {
+    const n = Math.max(1, +$("cN").value || 0);
+    const drive = $("cHow").value === "drive";
+    $("cMilesBox").classList.toggle("hidden", !drive);
+    const mins = Math.max(0, +$("cMin").value || 0), wage = Math.max(0, +$("cWage").value || 0);
+    const hours = n * mins / 60;
+    const hand = hours * wage + (drive ? n * Math.max(0, +$("cMiles").value || 0) : 0);
+    const ours = (q && q.count === n) ? q.price_cents / 100 : sheetPrice(n);
+    $("cHand").textContent = money(hand);
+    $("cHandSub").textContent = `${Math.round(hours).toLocaleString()} hours of work · $${(hand / n).toFixed(2)} a home`;
+    $("cOurs").textContent = money(ours);
+    $("cOursSub").textContent = `ready in minutes · ${cents(100 * ours / n)} a home`;
+    const save = hand - ours;
+    $("cSave").textContent = save > 0 ? money(save) : "$0";
+    $("cSaveSub").textContent = save > 0 ? `${Math.round(100 * save / hand)}% less, and ${Math.round(hours).toLocaleString()} hours back`
+      : "Measuring yourself is cheaper at these numbers";
+    const k = payback(ours);
+    $("cPay").textContent = k == null ? "–" : `${k} customer${k === 1 ? "" : "s"}`;
+    $("cPaySub").textContent = k == null ? "Enter what a customer is worth"
+      : `out of ${n.toLocaleString()} homes on the sheet`;
+    if (q && q.count) {
+      const kq = payback(q.price_cents / 100);
+      $("qPayback").innerHTML = kq == null ? "" :
+        `<span class="ok">Pays for itself with ${kq} new customer${kq === 1 ? "" : "s"}</span> <span class="muted">at $${(+$("cVal").value).toLocaleString()} a year each</span>`;
+    }
+  }
+  $("cHow").addEventListener("change", () => { $("cMin").value = $("cHow").value === "drive" ? 25 : 4; calc(); });
+  ["cN", "cMin", "cWage", "cMiles", "cVal"].forEach((id) => $(id).addEventListener("input", calc));
+  pricingCard();
+  calc();
+  $("ctaBtn").addEventListener("click", (e) => {
+    e.preventDefault();
+    $("zipbox").scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(() => $("zip").focus({ preventScroll: true }), 400);
+  });
+
   $("check").addEventListener("click", check);
   $("zip").addEventListener("keydown", (e) => { if (e.key === "Enter") check(); });
 

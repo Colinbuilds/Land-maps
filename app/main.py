@@ -601,6 +601,12 @@ def page_data_order(oid: str):
     return FileResponse(STATIC / "data-order.html")
 
 
+@app.get("/api/data/pricing")
+def data_pricing():
+    """Public per-property rates (for the savings calculator)."""
+    return datastore.pricing()
+
+
 @app.get("/api/data/quote")
 def data_quote(zip: str, classes: str = "R"):
     z = _zip5(zip)

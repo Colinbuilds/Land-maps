@@ -853,14 +853,22 @@ def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, front
     rgba[drive_m] = (59, 130, 246, 170)
     # sidewalk band (drawn along detected stations)
     if sw_stations:
-        sw = np.zeros((h, w), bool)
+        # a smooth band: one quad per station, from its curb-side to its
+        # house-side edge, half a station wide on either side
+        from PIL import ImageDraw
+        band = Image.new("L", (w, h), 0)
+        dr = ImageDraw.Draw(band)
+
+        def px(xf, yf):
+            lon, lat = meas.proj.inv.transform(xf, yf)
+            return mos.to_px(lon, lat)
+        half = step * 0.55
         for p, (nx, ny), _, rs, re in sw_stations:
-            for o in np.arange(rs, re + 0.01, 0.5):
-                lon, lat = meas.proj.inv.transform(p.x + nx * o, p.y + ny * o)
-                x, y = mos.to_px(lon, lat)
-                xi, yi = int(x), int(y)
-                if 0 <= xi < w and 0 <= yi < h:
-                    sw[max(0, yi - 2):yi + 3, max(0, xi - 2):xi + 3] = True
+            tx, ty = -ny, nx  # along the street
+            quad = [px(p.x + nx * o + tx * t, p.y + ny * o + ty * t)
+                    for o, t in ((rs, -half), (re, -half), (re, half), (rs, half))]
+            dr.polygon(quad, fill=255)
+        sw = ndi.binary_closing(np.asarray(band) > 0, iterations=2)
         rgba[sw & ~drive_m] = (236, 72, 153, 170)
     if crown_m is not None and crown_m.any():
         # tree crowns: dark green outline over whatever is underneath
