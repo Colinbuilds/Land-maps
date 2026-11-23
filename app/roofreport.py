@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import io
 import math
+import os
 import time
 
 from shapely.geometry import mapping, shape
@@ -113,6 +114,14 @@ def list_structures(pin: str) -> dict:
                 bp = m.lidar.building_points(env, traced.buffer(8).bounds)
                 traced, n_hidden = fit_hidden_edges(traced, bp, trees.at)
                 stats["lidar_edges"] = n_hidden
+            if os.environ.get("ROOF_CLAMP", "1") == "1":
+                # no wall further out than the roof the scan sees (+ drip edge)
+                bp = m.lidar.building_points(env, traced.buffer(8).bounds)
+                traced, n_clamp = fit_hidden_edges(traced, bp, lambda xs, ys: np.ones(np.shape(xs), bool),
+                                                   inward_only=True)
+                stats["clamped_edges"] = n_clamp
+                if n_clamp:
+                    traced = orthogonalize(traced)  # re-join walls that now line up
         except Exception:
             pass
         out.append({
@@ -358,11 +367,12 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
 
     from .trees import tree_grid
 
-    def tree_cover(s, pts=None):
+    def tree_cover(s, pts=None, used=None):
         """Roof hidden under tree canopy: plan polygon (LAS ft) or None."""
         try:
-            tg = tree_grid(m.lidar, env, s["geometry_las"].buffer(2), roof_pts=pts)
-            g = tg.polygon(clip=s["geometry_las"]) if tg is not None else None
+            roof = used if used is not None else s["geometry_las"]
+            tg = tree_grid(m.lidar, env, roof.buffer(2), roof_pts=pts)
+            g = tg.polygon(clip=roof) if tg is not None else None
             return g if g is not None and g.area >= 15 else None
         except Exception:
             return None
@@ -420,7 +430,7 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
                 "planes": [{"pitch": q["pitch"], "plan_sqft": round(q["plan_sqft"], 1),
                             "area_sqft": round(q["area_sqft"], 1)} for q in res["planes"]],
             })
-            tree_total += add_trees(out_structs[-1], tree_cover(s, pts), res["roof_area_sqft"], res["plan_area_sqft"])
+            tree_total += add_trees(out_structs[-1], tree_cover(s, pts, used), res["roof_area_sqft"], res["plan_area_sqft"])
             for k in LINE_TYPES:
                 totals[k] += res["lines"].get(k, 0.0)
             area += res["roof_area_sqft"]

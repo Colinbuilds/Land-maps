@@ -82,3 +82,27 @@ def test_fit_hidden_edges_uses_lidar_extent():
     Q, n = fit_hidden_edges(P, pts, lambda xs, ys: np.asarray(xs) > 38)  # east wall under a tree
     assert n == 1
     assert abs(Q.bounds[2] - 36.75) < 0.4 and abs(Q.bounds[0]) < 1e-6
+
+
+def test_short_notch_removed_real_wing_kept():
+    from app.roofclean import orthogonalize
+    notch = Polygon([(0, 0), (40, 0), (40, 25), (37.5, 25), (37.5, 30), (0, 30)])  # 2.5 ft x 5 ft trim leftover
+    Q = orthogonalize(notch)
+    assert len(Q.exterior.coords) == 5
+    wing = Polygon([(0, 0), (40, 0), (40, 20), (25, 20), (25, 30), (0, 30)])  # a real 15 x 10 ft step
+    assert len(orthogonalize(wing).exterior.coords) == 7
+
+
+def test_deck_with_railing_is_not_roof():
+    from app.roofplanes import GRID, _decks
+    xs = np.arange(0.25, 20, GRID)
+    ys = np.arange(19.75, 0, -GRID)
+    L = np.zeros((len(ys), len(xs)), int)
+    rng = np.random.default_rng(2)
+    floor = np.column_stack([rng.uniform(0, 20, 600), rng.uniform(0, 20, 600), np.full(600, 100.0)])
+    t = rng.uniform(0, 20, 120)
+    rail = np.column_stack([np.r_[t, np.full(60, 19.8)], np.r_[np.full(120, 0.2), rng.uniform(0, 20, 60)],
+                            np.full(180, 103.3)])
+    plane = {"id": 0, "a": 0.0, "b": 0.0, "c": 100.0, "flat": True}
+    assert _decks(L, xs, ys, np.vstack([floor, rail]), [plane]) == [0]
+    assert _decks(L, xs, ys, floor, [plane]) == []  # flat roof: no railing

@@ -431,6 +431,7 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
                 L[m] = np.bincount(L[ring]).argmax()
     drop = []
     L = _absorb_edge_slivers(L, xs, ys, outline, coefs, nlab, pts=pts, labels=labels, drop=drop)
+    drop += _decks(L, xs, ys, pts, planes)
     if drop and _pass == 0:
         # small pieces well below the roof (stoops, canopies, AC units, wall
         # tops) aren't part of the roof system: cut them out and re-measure
@@ -548,10 +549,17 @@ def analyze_roof_points(outline: Polygon, pts: np.ndarray, round_pitch: bool = T
         kinds = []
         for s in range(n_st):
             tpos = (s + 0.5) * Le / n_st
-            q = np.array([x0, y0]) + u * tpos + inward * 1.25
-            c = int((q[0] - xs[0]) / GRID + 0.5)
-            r = int((ys[0] - q[1]) / GRID + 0.5)
-            k = L[r, c] if 0 <= r < H and 0 <= c < W else -1
+            k = -1
+            # the first real roof plane in from the edge decides it (scrap
+            # planes of wall / fascia hits along the edge don't)
+            for depth in (1.25, 2.5, 4.0, 6.0):
+                q = np.array([x0, y0]) + u * tpos + inward * depth
+                c = int((q[0] - xs[0]) / GRID + 0.5)
+                r = int((ys[0] - q[1]) / GRID + 0.5)
+                kk = int(L[r, c]) if 0 <= r < H and 0 <= c < W else -1
+                if kk >= 0 and by_id.get(kk) is not None and by_id[kk]["plan_sqft"] >= 30:
+                    k = kk
+                    break
             kinds.append(int(k))
         # fill unknowns, then fold runs shorter than 2.5 ft into neighbours
         kinds = _fill_runs([k if k >= 0 else None for k in kinds], int(2.5 / GRID))
@@ -639,6 +647,8 @@ def _absorb_edge_slivers(L, xs, ys, outline, coefs, nlab, band=4.0, max_area=120
                 a2, b2, c2 = coefs[nb]
                 xx, yy = xs[cc], ys[rr]
                 dz = np.median(np.abs((a1 * xx + b1 * yy + c1) - (a2 * xx + b2 * yy + c2)))
+            if dz >= 3.0 and pts is not None and _plane_covers(m, xs, ys, pts, coefs[nb]):
+                dz = 0.0  # the neighbour's roof runs right across it: its overhang
             if dz < 3.0:  # overhang / wall-top hits read up to ~3 ft off
                 L[m] = nb
                 changed = True
@@ -657,6 +667,60 @@ def _absorb_edge_slivers(L, xs, ys, outline, coefs, nlab, band=4.0, max_area=120
         if not changed:
             break
     return L
+
+
+def _plane_covers(m, xs, ys, pts, coef, tol=0.7, need=0.5):
+    """Do points lying on plane ``coef`` cover most of the cells in mask m?"""
+    rr, cc = np.nonzero(m)
+    if not len(rr):
+        return False
+    x_lo, x_hi = xs[cc].min() - 1, xs[cc].max() + 1
+    y_lo, y_hi = ys[rr].min() - 1, ys[rr].max() + 1
+    P = pts[(pts[:, 0] > x_lo) & (pts[:, 0] < x_hi) & (pts[:, 1] > y_lo) & (pts[:, 1] < y_hi)]
+    if not len(P):
+        return False
+    a, b, c = coef
+    on = P[np.abs(P[:, 2] - (a * P[:, 0] + b * P[:, 1] + c)) < tol]
+    if not len(on):
+        return False
+    H, W = m.shape
+    ci = np.floor((on[:, 0] - (xs[0] - GRID / 2)) / GRID).astype(int)
+    ri = np.floor(((ys[0] + GRID / 2) - on[:, 1]) / GRID).astype(int)
+    ok = (ci >= 0) & (ci < W) & (ri >= 0) & (ri < H)
+    hit = np.zeros(m.shape, bool)
+    hit[ri[ok], ci[ok]] = True
+    hit = ndi.binary_dilation(hit, iterations=2)  # ~1 ft around each point
+    return float(hit[m].mean()) >= need
+
+
+def _decks(L, xs, ys, pts, planes, min_sqft=40.0):
+    """Flat planes that are decks, not roofs.
+
+    County footprints often include raised decks, which scan as a flat
+    surface at about eave height. A deck has a railing: a line of points
+    2.5-4.5 ft above the floor around its edge. A flat roof never does."""
+    out = []
+    H, W = L.shape
+    c = np.floor((pts[:, 0] - (xs[0] - GRID / 2)) / GRID).astype(int)
+    r = np.floor(((ys[0] + GRID / 2) - pts[:, 1]) / GRID).astype(int)
+    ok = (c >= 0) & (c < W) & (r >= 0) & (r < H)
+    lab = np.full(len(pts), -1)
+    lab[ok] = L[r[ok], c[ok]]
+    for p in planes:
+        if not p["flat"]:
+            continue
+        k = p["id"]
+        if (L == k).sum() * GRID * GRID < min_sqft:
+            continue
+        P = pts[lab == k]
+        if len(P) < 30:
+            continue
+        dz = P[:, 2] - (p["a"] * P[:, 0] + p["b"] * P[:, 1] + p["c"])
+        floor = int((np.abs(dz) < 0.6).sum())
+        rail = int(((dz > 2.3) & (dz < 4.8)).sum())
+        if floor and rail >= max(10, 0.10 * floor):
+            out.append(k)
+    return out
 
 
 def _extend_interior_ends(segs, outline, by_id, reach=3.0):

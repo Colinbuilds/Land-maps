@@ -231,7 +231,7 @@ def _draw_diagram(c, d, box):
     if not xs:
         return
     minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
-    sc = min(bw / max(maxx - minx, 1), bh / max(maxy - miny, 1)) * 0.92
+    sc = min((bw - 30) / max(maxx - minx, 1), bh / max(maxy - miny, 1)) * 0.92
     ox = bx + (bw - (maxx - minx) * sc) / 2
     oy = by + (bh - (maxy - miny) * sc) / 2
     P = lambda p: (ox + (p[0] - minx) * sc, oy + (p[1] - miny) * sc)
@@ -290,6 +290,6 @@ def _draw_diagram(c, d, box):
             c.drawCentredString(mx, my - 1, txt)
     # north arrow
     c.setFillColor(colors.HexColor("#0f172a"))
-    nx, ny = bx + bw - 20, by + bh - 30
+    nx, ny = bx + bw - 8, by + bh + 2  # above the drawing, clear of the roof
     c.line(nx, ny, nx, ny + 22)
     c.drawCentredString(nx, ny + 26, "N")
