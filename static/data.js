@@ -35,11 +35,12 @@
       : `<span class="small muted">Measured after purchase. About ${Math.max(5, Math.round(q.count * 0.5 / 60))} minutes; we'll have your download page update itself.</span>`;
     const p = q.pricing;
     buildTypePicker(q.type_catalog || []);
+    buildValuePicker(q.value_bands || { bands: [], labels: [] });
     updatePrice();
     $("rateLine").textContent = `${p.rate_cents}¢ a home for your first measurement, +${p.extra_type_cents}¢ for each extra one. Pay by card, download a spreadsheet, and quote before you visit.`;
     pricing = q.pricing || pricing;
     pricingCard();
-    $("cN").value = q.count;
+    $("cN").value = selCount();
     calc();
     $("cols").innerHTML = "Columns: " + q.columns.map((c) => `<span>${esc(c)}</span>`).join("");
     if (!map) {
@@ -126,6 +127,33 @@
       calc();
     });
   }
+  // ------------------------------------------------ home-value range
+  let vLo = 0, vHi = 8;
+  function buildValuePicker(vb) {
+    const n = vb.bands.length;
+    if (!n) return;
+    vHi = Math.min(vHi, n - 1);
+    vLo = Math.min(vLo, vHi);
+    const from = vb.labels.map((l, i) => i === 0 ? "Any value" : (l.split("-")[0].replace("+", "")) + "+");
+    const to = vb.labels.map((l, i) => i === n - 1 ? "No limit" : "up to " + (l.split("-")[1] || l.replace("Under ", "")));
+    $("vLo").innerHTML = from.map((t, i) => `<option value="${i}" ${i === vLo ? "selected" : ""}>${esc(t)}</option>`).join("");
+    $("vHi").innerHTML = to.map((t, i) => `<option value="${i}" ${i === vHi ? "selected" : ""}>${esc(t)}</option>`).join("");
+    const max = Math.max(1, ...vb.bands);
+    const draw = () => {
+      $("vBars").innerHTML = vb.bands.map((c, i) => `<div class="vbar ${i >= vLo && i <= vHi ? "in" : ""}" data-i="${i}" title="Click to start the range here">
+          <span class="l">${esc(vb.labels[i])}</span><span class="t"><i style="width:${(100 * c / max).toFixed(1)}%"></i></span><span class="n">${c.toLocaleString()}</span></div>`).join("");
+    };
+    const onChange = () => {
+      vLo = +$("vLo").value; vHi = Math.max(vLo, +$("vHi").value); $("vHi").value = vHi;
+      draw(); updatePrice(); calc();
+    };
+    $("vLo").onchange = onChange; $("vHi").onchange = onChange;
+    $("vBars").onclick = (e) => { const r = e.target.closest(".vbar"); if (!r) return; $("vLo").value = r.dataset.i; if (+$("vHi").value < +r.dataset.i) $("vHi").value = n - 1; onChange(); };
+    draw();
+  }
+  const selCount = () => (q && q.value_bands && q.value_bands.bands.length)
+    ? q.value_bands.bands.slice(vLo, vHi + 1).reduce((a, b) => a + b, 0) : (q ? q.count : 0);
+
   let product = "standard";
   document.querySelectorAll(".prodswitch button").forEach((btn) => btn.addEventListener("click", () => {
     product = btn.dataset.prod;
@@ -139,14 +167,25 @@
   const perHome = () => product === "premier" ? (pricing.premier_cents || 25)
     : pricing.rate_cents + pricing.extra_type_cents * (Math.max(1, picked.length) - 1);
   function updatePrice() {
-    if (!q || !q.count) return;
-    const full = Math.max(Math.ceil(q.count * perHome() - 1e-9), Math.round(pricing.min_order_usd * 100));
+    if (!q || !q.zip_total) return;
+    const vb = q.value_bands || { bands: [] };
+    const mult = pricing.value_multipliers || [1];
+    const n = selCount();
+    let raw = 0;
+    if (vb.bands.length) for (let i = vLo; i <= vHi; i++) raw += vb.bands[i] * perHome() * (mult[Math.min(i, mult.length - 1)] || 1);
+    else raw = n * perHome();
+    const full = n ? Math.max(Math.ceil(raw - 1e-9), Math.round(pricing.min_order_usd * 100)) : 0;
+    q.count = n;
+    $("qCount").textContent = `${n.toLocaleString()} properties`;
+    $("vSel").textContent = n === q.zip_total ? `all ${n.toLocaleString()} homes` : `${n.toLocaleString()} of ${q.zip_total.toLocaleString()} homes`;
     const cents = q.member ? Math.round(full / 2) : full;
     q.price_cents = cents;
     $("qPrice").innerHTML = q.member ? `${usd(cents)} <s class="muted" style="font-size:.5em;font-weight:500">${usd(full)}</s>` : usd(cents);
     const atMin = full <= pricing.min_order_usd * 100;
     const what = product === "premier" ? "Premier report" : `${picked.length} measurement${picked.length === 1 ? "" : "s"}`;
-    $("qRate").textContent = `(${what} × ${q.count.toLocaleString()} homes at ${+(perHome() / (q.member ? 2 : 1)).toFixed(2)}¢ each${atMin ? `, $${pricing.min_order_usd} minimum` : ""})`;
+    const avg = n ? raw / n : perHome();
+    const banded = vb.bands.length && Math.abs(avg - perHome()) > 0.01;
+    $("qRate").textContent = `(${what} × ${n.toLocaleString()} homes at ${banded ? "about " : ""}${+(avg / (q.member ? 2 : 1)).toFixed(2)}¢ each${banded ? ", priced by home value" : ""}${atMin ? `, $${pricing.min_order_usd} minimum` : ""})`;
     $("memberLine").innerHTML = q.member ? '<span class="ok">Member price: half off.</span>'
       : `<span class="muted">Members pay half. <a href="/join">$99/month</a> includes unlimited single-property reports.</span>`;
     // what each unticked option would add
@@ -190,7 +229,7 @@
     $("bBtn").disabled = true;
     $("bMsg").innerHTML = '<span class="spinner"></span>Creating your order…';
     try {
-      const r = await api("/api/data/order", { method: "POST", json: { email, zip: q.zip, classes: $("cls").value.split(","), types: picked, product } });
+      const r = await api("/api/data/order", { method: "POST", json: { email, zip: q.zip, classes: $("cls").value.split(","), types: picked, product, value_lo: vLo, value_hi: vHi } });
       location.href = r.checkout_url || r.order_url;
     } catch (e) {
       $("bMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;

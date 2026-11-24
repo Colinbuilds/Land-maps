@@ -236,6 +236,9 @@
     try { d = await api("/api/admin/data"); } catch (e) { $("dOrders").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; return; }
     $("dRate").value = d.pricing.rate_cents; $("dExtra").value = d.pricing.extra_type_cents;
     $("dMin").value = d.pricing.min_order_usd; $("dPremier").value = d.pricing.premier_cents;
+    const BANDS = ["<$250k", "$250-500k", "$500-750k", "$750k-1M", "$1-1.25M", "$1.25-1.5M", "$1.5-1.75M", "$1.75-2M", "$2M+"];
+    const mult = d.pricing.value_multipliers || [1, 1.25, 1.5, 2, 2.5, 3, 3.5, 4, 5];
+    $("dMult").innerHTML = BANDS.map((b, i) => `<label class="small" style="flex:1 1 90px">${b}<input type="number" step="0.05" min="0.1" data-m="${i}" value="${mult[i] ?? 1}"></label>`).join("");
     $("dStripe").innerHTML = d.stripe ? "Card payments: <b>on</b> (Stripe)."
       : "Card payments: <b>off</b>. Set STRIPE_SECRET_KEY in Railway to take cards. Until then, orders wait for you to invoice and click <i>Mark paid</i>.";
     const usd = (c) => "$" + (c / 100).toFixed(2);
@@ -253,7 +256,8 @@
   $("dSave").addEventListener("click", async () => {
     try {
       await api("/api/admin/data/pricing", { method: "PUT", json: { rate_cents: +$("dRate").value, extra_type_cents: +$("dExtra").value,
-        premier_cents: +$("dPremier").value, min_order_usd: +$("dMin").value } });
+        premier_cents: +$("dPremier").value, min_order_usd: +$("dMin").value,
+        value_multipliers: [...document.querySelectorAll("#dMult input")].map((x) => +x.value || 1) } });
       $("dMsg").innerHTML = '<span class="ok">Saved.</span>';
     } catch (e) { $("dMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   });

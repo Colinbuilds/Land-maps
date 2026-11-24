@@ -38,7 +38,8 @@ DATASET_MAX_AGE_DAYS = 365
 # their use for solicitation).
 COLUMNS = [
     ("address", "Address"), ("city", "City"), ("zip", "ZIP"), ("county", "County"),
-    ("lot_sqft", "Lot sq ft"), ("lawn_sqft", "Lawn sq ft (grass only)"),
+    ("lot_sqft", "Lot sq ft"), ("home_value", "Assessed value $"), ("year_built", "Year built"),
+    ("living_sqft", "House sq ft"), ("lawn_sqft", "Lawn sq ft (grass only)"),
     ("parkway_sqft", "Parkway grass sq ft"), ("building_sqft", "Building footprint sq ft"),
     ("driveway_sqft", "Driveway sq ft"), ("sidewalk_sqft", "Public sidewalk sq ft"),
     ("other_hardscape_sqft", "Patios & walks sq ft"), ("structures_sqft", "Decks/sheds/play sets sq ft"),
@@ -64,7 +65,7 @@ MEASURE_TYPES = [
     ("walls", "House walls & windows (siding)", ["wall_sqft", "est_windows"]),
 ]
 TYPE_KEYS = [k for k, _, _ in MEASURE_TYPES]
-BASE_HEAD = ["address", "city", "zip", "county", "lot_sqft"]
+BASE_HEAD = ["address", "city", "zip", "county", "lot_sqft", "home_value", "year_built", "living_sqft"]
 BASE_TAIL = ["quality", "notes", "lat", "lon", "pin"]
 
 DEFAULT_PRICING = {
@@ -72,7 +73,35 @@ DEFAULT_PRICING = {
     "extra_type_cents": 5.0,     # per property, for each additional type
     "premier_cents": 25.0,       # per property, Premier list (full report PDF per home)
     "min_order_usd": 25.0,
+    # price multiplier per assessed-value band (every $250k: <250k ... 1.75-2M, 2M+)
+    "value_multipliers": [1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0],
 }
+
+
+def band_range(lo, hi) -> tuple[int, int]:
+    """Clamp a buyer's value-band range (inclusive band indexes)."""
+    from .bulk import VALUE_EDGES
+    top = len(VALUE_EDGES)
+    lo = 0 if lo is None else max(0, min(top, int(lo)))
+    hi = top if hi is None else max(lo, min(top, int(hi)))
+    return lo, hi
+
+
+def range_label(lo: int, hi: int) -> str:
+    """'All home values', 'Homes valued $500k+', 'Homes valued $250k-$750k', 'Homes valued under $250k'."""
+    from .bulk import VALUE_EDGES
+    top = len(VALUE_EDGES)
+    lo, hi = band_range(lo, hi)
+
+    def k(v):
+        return f"${v / 1e6:g}M" if v >= 1_000_000 else f"${v // 1000:g}k"
+    if lo == 0 and hi == top:
+        return "All home values"
+    if hi == top:
+        return f"Homes valued {k(VALUE_EDGES[lo - 1])}+"
+    if lo == 0:
+        return f"Homes valued under {k(VALUE_EDGES[hi])}"
+    return f"Homes valued {k(VALUE_EDGES[lo - 1])}-{k(VALUE_EDGES[hi])}"
 
 
 def normalize_types(types) -> list[str]:
@@ -122,6 +151,9 @@ def init():
             con.execute("ALTER TABLE orders ADD COLUMN site TEXT")
         if "product" not in have:  # standard sheet or premier (report PDF per home)
             con.execute("ALTER TABLE orders ADD COLUMN product TEXT")
+        for col in ("value_lo", "value_hi"):  # home-value band range bought
+            if col not in have:
+                con.execute(f"ALTER TABLE orders ADD COLUMN {col} INTEGER")
 
 
 def pricing() -> dict:
@@ -161,33 +193,44 @@ def dataset_ready(zip_code: str, classes: list[str]) -> bool:
 PREMIER_CENTS_DEFAULT = 25.0
 
 
-def list_price(count: int, types=None, product: str = "standard", member: bool = False, p: dict | None = None) -> dict:
+def list_price(count: int, types=None, product: str = "standard", member: bool = False, p: dict | None = None,
+               bands: list[int] | None = None, lo: int = 0, hi: int | None = None) -> dict:
     """Price of a ZIP list. Standard: per-measurement pricing. Premier: a full
-    property report PDF for every home. Members pay half."""
+    property report PDF for every home. With value bands, each home is
+    priced at its band's multiplier and only the chosen bands are counted.
+    Members pay half."""
     p = p or pricing()
-    if product == "premier":
-        per = float(p.get("premier_cents", PREMIER_CENTS_DEFAULT))
-        cents = int(max(math.ceil(count * per - 1e-9), round(float(p["min_order_usd"]) * 100)))
+    per = float(p.get("premier_cents", PREMIER_CENTS_DEFAULT)) if product == "premier" else per_property_cents(types, p)
+    if bands is not None:
+        lo, hi = band_range(lo, hi)
+        mult = list(p.get("value_multipliers") or DEFAULT_PRICING["value_multipliers"])
+        mult += [mult[-1]] * (len(bands) - len(mult))
+        count = sum(bands[lo:hi + 1])
+        raw = sum(bands[i] * per * float(mult[i]) for i in range(lo, hi + 1))
     else:
-        per = per_property_cents(types, p)
-        cents = price_cents(count, types, p)
+        raw = count * per
+    cents = int(max(math.ceil(raw - 1e-9), round(float(p["min_order_usd"]) * 100))) if count else 0
     full = cents
     if member:
         from .billing import plans
         cents = int(round(cents * (1 - float(plans()["list_discount"]))))
     return {"per_property_cents": per * (0.5 if member else 1), "price_cents": cents, "full_price_cents": full,
-            "member_discount": member}
+            "member_discount": member, "count": count}
 
 
-def quote(zip_code: str, classes: list[str], types=None, product: str = "standard", member: bool = False) -> dict:
+def quote(zip_code: str, classes: list[str], types=None, product: str = "standard", member: bool = False,
+          lo: int | None = None, hi: int | None = None) -> dict:
     pv = bulk.preview(zip_code, classes)
-    n = pv["count"]
     meta = dataset_meta(zip_code, classes)
     p = pricing()
     types = normalize_types(types)
-    lp = list_price(n, types, product, member, p) if n else {"per_property_cents": 0, "price_cents": 0,
-                                                              "full_price_cents": 0, "member_discount": member}
-    return {"zip": zip_code, "classes": classes, "count": n, "by_county": pv["by_county"],
+    vb = bulk.value_bands(zip_code, classes) if pv["count"] else {"bands": [], "labels": [], "total": 0}
+    lo, hi = band_range(lo, hi)
+    lp = list_price(0, types, product, member, p, bands=vb["bands"] or [0], lo=lo, hi=hi)
+    n = lp.pop("count")
+    return {"zip": zip_code, "classes": classes, "count": n, "zip_total": vb.get("total", pv["count"]),
+            "by_county": pv["by_county"], "value_bands": vb, "value_lo": lo, "value_hi": hi,
+            "value_label": range_label(lo, hi),
             "types": types, "product": product, **lp, "pricing": p,
             "ready": dataset_ready(zip_code, classes),
             "measured": meta.get("finished") if meta and meta.get("status") == "ready" else None}
@@ -344,22 +387,35 @@ def dataset_progress(zip_code: str, classes: list[str]) -> dict:
 
 # ------------------------------------------------------------------- orders
 def create_order(email: str, zip_code: str, classes: list[str], types=None, site: str = "",
-                 product: str = "standard", member: bool = False) -> dict:
+                 product: str = "standard", member: bool = False, lo: int | None = None, hi: int | None = None) -> dict:
     types = normalize_types(types)
     product = "premier" if product == "premier" else "standard"
-    q = quote(zip_code, classes, types, product, member)
+    q = quote(zip_code, classes, types, product, member, lo, hi)
     if not q["count"]:
         raise LookupError("No matching properties in that ZIP code in our service area.")
     oid = secrets.token_hex(4).upper()
     tok = secrets.token_urlsafe(16)
     with _lock, _db() as con:
-        con.execute("INSERT INTO orders(id,email,zip,classes,count,amount_cents,status,token,created,types,site,product) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        con.execute("INSERT INTO orders(id,email,zip,classes,count,amount_cents,status,token,created,types,site,product,"
+                    "value_lo,value_hi) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (oid, email.lower(), zip_code, ",".join(classes), q["count"], q["price_cents"],
-                     "awaiting_payment", tok, time.time(), ",".join(types), site, product))
+                     "awaiting_payment", tok, time.time(), ",".join(types), site, product, q["value_lo"], q["value_hi"]))
     o = get_order(oid)
     _email_new_order(o)
     return o
+
+
+def order_bands(o: dict) -> tuple[int, int]:
+    return band_range(o.get("value_lo"), o.get("value_hi"))
+
+
+def rows_in_bands(rows: list[dict], lo: int, hi: int) -> list[dict]:
+    """Rows whose assessed value falls in the bought band range."""
+    lo, hi = band_range(lo, hi)
+    from .bulk import VALUE_EDGES, band_of
+    if lo == 0 and hi == len(VALUE_EDGES):
+        return rows
+    return [r for r in rows if lo <= band_of(r.get("home_value")) <= hi]
 
 
 def order_types(o: dict) -> list[str]:
@@ -381,6 +437,7 @@ def _email_new_order(o: dict):
     usd = f"${o['amount_cents'] / 100:,.2f}"
     what = ("Premier list: full property report PDF for every home" if (o.get("product") or "") == "premier"
             else ", ".join(type_labels(order_types(o))))
+    what += f"\nHomes: {range_label(*order_bands(o))}"
     mailer.notify_owner(f"New data order {o['id']}: ZIP {o['zip']}, {usd}",
                         f"Order {o['id']}\nBuyer: {o['email']}\nZIP {o['zip']}: {o['count']:,} properties\n"
                         f"Measurements: {what}\nAmount: {usd}\nStatus: waiting for payment\n\n{order_link(o)}",
@@ -434,7 +491,7 @@ def mark_paid(oid: str, note: str = "") -> dict:
             _email_ready(oid)
         if (o.get("product") or "standard") == "premier":
             from . import premier
-            state = premier.ensure(o["zip"], classes, on_ready=ready)
+            state = premier.ensure(o["zip"], classes, on_ready=ready, bands=order_bands(o))
         else:
             state = ensure_dataset(o["zip"], classes, on_ready=ready)
         if state == "ready":
@@ -448,13 +505,15 @@ def order_view(o: dict) -> dict:
     v = {k: o[k] for k in ("id", "zip", "classes", "count", "amount_cents", "status", "created", "paid")}
     v["email"] = o["email"]
     v["product"] = o.get("product") or "standard"
+    v["value_label"] = range_label(*order_bands(o))
     v["types"] = order_types(o)
     v["type_labels"] = (["Full property report PDF for every home (roof, walls & elevations, lot & yard)"]
                         if v["product"] == "premier" else type_labels(v["types"]))
     if o["status"] == "processing":
         if v["product"] == "premier":
             from . import premier
-            is_ready, prog = premier.ready(o["zip"], classes), premier.progress(o["zip"], classes)
+            bands = order_bands(o)
+            is_ready, prog = premier.ready(o["zip"], classes, bands), premier.progress(o["zip"], classes, bands)
         else:
             is_ready, prog = dataset_ready(o["zip"], classes), dataset_progress(o["zip"], classes)
         if is_ready:

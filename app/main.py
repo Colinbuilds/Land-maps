@@ -730,11 +730,13 @@ def data_types():
 
 
 @app.get("/api/data/quote")
-def data_quote(request: Request, zip: str, classes: str = "R", types: str = "lawn", product: str = "standard"):
+def data_quote(request: Request, zip: str, classes: str = "R", types: str = "lawn", product: str = "standard",
+               vlo: int | None = None, vhi: int | None = None):
     z = _zip5(zip)
     c = _session_company(request)
     try:
-        q = datastore.quote(z, _classes(classes), types.split(","), product, member=bool(c and c["member"]))
+        q = datastore.quote(z, _classes(classes), types.split(","), product, member=bool(c and c["member"]),
+                            lo=vlo, hi=vhi)
     except LookupError as e:
         raise HTTPException(404, str(e))
     try:
@@ -777,6 +779,8 @@ class OrderReq(BaseModel):
     classes: list[str] = ["R"]
     types: list[str] = ["lawn"]
     product: str = "standard"
+    value_lo: int | None = None   # home-value band range (every $250k), inclusive
+    value_hi: int | None = None
 
 
 @app.post("/api/data/order")
@@ -785,7 +789,8 @@ def data_order(body: OrderReq, request: Request):
     try:
         c = _session_company(request)
         o = datastore.create_order(body.email, z, _classes(body.classes), body.types, site=_base_url(request),
-                                   product=body.product, member=bool(c and c["member"]))
+                                   product=body.product, member=bool(c and c["member"]),
+                                   lo=body.value_lo, hi=body.value_hi)
     except LookupError as e:
         raise HTTPException(404, str(e))
     out = {"id": o["id"], "token": o["token"], "amount_cents": o["amount_cents"], "count": o["count"],
@@ -831,13 +836,14 @@ def data_order_csv(oid: str, t: str | None = None):
     classes = o["classes"].split(",") if o["classes"] else ["R"]
     if (o.get("product") or "standard") == "premier":
         from . import premier
-        if not premier.ready(o["zip"], classes) or o["status"] not in ("ready", "processing"):
+        bands = datastore.order_bands(o)
+        if not premier.ready(o["zip"], classes, bands) or o["status"] not in ("ready", "processing"):
             raise HTTPException(409, "Your Premier list isn't ready yet.")
-        return FileResponse(premier.path(o["zip"], classes), media_type="application/zip",
+        return FileResponse(premier.path(o["zip"], classes, bands), media_type="application/zip",
                             filename=f"premier_{o['zip']}_{o['id']}.zip")
     if o["status"] != "ready" and not (o["status"] == "processing" and datastore.dataset_ready(o["zip"], classes)):
         raise HTTPException(409, "Your sheet isn't ready yet.")
-    rows = datastore.read_dataset(o["zip"], classes)
+    rows = datastore.rows_in_bands(datastore.read_dataset(o["zip"], classes), *datastore.order_bands(o))
     cols = datastore.columns_for(datastore.order_types(o))  # only what they paid for
     return Response(datastore.to_csv(rows, cols), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="properties_{o["zip"]}_{o["id"]}.csv"'})
@@ -859,6 +865,8 @@ class DataPricing(BaseModel):
     extra_type_cents: float = Field(ge=0, le=100)      # each extra type, per property
     premier_cents: float = Field(default=25.0, ge=1, le=500)  # Premier list, per property
     min_order_usd: float = Field(ge=0, le=100_000)
+    value_multipliers: list[float] = Field(default=[1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0],
+                                           min_length=9, max_length=9)
 
 
 @app.put("/api/admin/data/pricing", dependencies=[Depends(admin)])

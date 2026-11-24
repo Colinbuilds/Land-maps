@@ -26,6 +26,8 @@ COUNTY = {
             "bldg_sqft": "BLDG_SF",
             "bldg_desc": "BLDG_DESC",
             "year_built": "BLDG_YRBLT",
+            "home_value": "TOTAL_VALU",     # assessed (actual) value, land + improvements
+            "land_value": "LAND_VALUE",
         },
         "max_records": 2000,
         "oid": "OBJECTID",

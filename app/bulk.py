@@ -83,6 +83,60 @@ def preview(zip_code: str, classes: list[str]) -> dict:
     return {"count": total, "by_county": by}
 
 
+# Assessed-value bands, every $250k: <250k, 250-500k, ..., 1.75-2M, 2M+
+VALUE_STEP = 250_000
+VALUE_TOP = 2_000_000
+VALUE_EDGES = tuple(range(VALUE_STEP, VALUE_TOP + 1, VALUE_STEP))
+_band_cache: dict = {}
+
+
+def band_of(value) -> int:
+    try:
+        v = float(value or 0)
+    except (TypeError, ValueError):
+        v = 0.0
+    return sum(1 for e in VALUE_EDGES if v >= e)
+
+
+def band_label(i: int) -> str:
+    def k(v):
+        return f"${v / 1e6:g}M" if v >= 1_000_000 else f"${v // 1000:g}k"
+    lo = VALUE_EDGES[i - 1] if i > 0 else 0
+    if i == 0:
+        return f"Under {k(VALUE_EDGES[0])}"
+    if i >= len(VALUE_EDGES):
+        return f"{k(lo)}+"
+    return f"{k(lo)}-{k(VALUE_EDGES[i])}"
+
+
+def value_bands(zip_code: str, classes: list[str]) -> dict:
+    """Homes in the ZIP per assessed-value band, from the county parcel
+    records (no measuring). Counted on parcel centres, the same rule the
+    sheets use, one count per parcel id. Cached for a day."""
+    key = (zip_code, tuple(sorted(classes)))
+    hit = _band_cache.get(key)
+    if hit and time.time() - hit[0] < 86400:
+        return hit[1]
+    counts = [0] * (len(VALUE_EDGES) + 1)
+    unknown = 0
+    seen = set()
+    for cid, f in _zip_parcels(zip_code, classes):
+        m = measurer_for(cid)
+        a = m.parcel_attrs(f["attributes"])
+        pid = (cid, a.get("pin"))
+        if pid in seen:
+            continue
+        seen.add(pid)
+        v = a.get("home_value")
+        if not v:
+            unknown += 1
+        counts[band_of(v)] += 1
+    out = {"bands": counts, "labels": [band_label(i) for i in range(len(counts))],
+           "unknown_value": unknown, "edges": list(VALUE_EDGES), "total": sum(counts)}
+    _band_cache[key] = (time.time(), out)
+    return out
+
+
 def start_job(zip_code: str, classes: list[str], measures: list[str], limit: int | None = None,
               include_owner: bool = False, workers: int = 6, on_done=None) -> dict:
     measures = [k for k in measures if k in MEASUREMENTS] or list(MEASUREMENTS)
@@ -142,8 +196,8 @@ def _run(job: dict, workers: int, on_done=None):
         job["status"] = "measuring"
         _save(job)
 
-        cols = (["pin", "county", "address", "city", "zip", "class"] + job["measures"]
-                + ["driveway_method", "sidewalk_detected", "quality", "notes"])
+        cols = (["pin", "county", "address", "city", "zip", "class", "home_value", "year_built", "living_sqft"]
+                + job["measures"] + ["driveway_method", "sidewalk_detected", "quality", "notes"])
         if job["include_owner"]:
             cols += ["owner", "mail_address", "mail_city", "mail_state", "mail_zip"]
         cols += ["lat", "lon"]
