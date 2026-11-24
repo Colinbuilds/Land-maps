@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=15">
+<link rel="stylesheet" href="/static/styles.css?v=16">
 <style>
   /* ------------------------------------------------------------------
      Page-scoped design for /data. Everything is under body.dp so the
@@ -345,6 +345,19 @@
   .dp .prodswitch button b { display: block; font-family: var(--display); font-size: 16px; font-weight: 800; }
   .dp .prodswitch button span { font-size: 13px; color: var(--muted); line-height: 1.3; display: block; }
   .dp .prodswitch button.on { border-color: var(--acc-strong); background: var(--acc-soft); }
+  .dp .valuepick { background: var(--field, #f3f5f0); border-radius: 16px; padding: 12px 14px; margin: 4px 0 14px; }
+  .dp .valuepick .vp-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+  .dp .valuepick .vp-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-top: 8px; }
+  .dp .valuepick select { width: 100%; min-height: 46px; font-size: 16px; border-radius: 12px; background: #fff; }
+  .dp .vbars { display: grid; gap: 3px; margin-top: 10px; }
+  .dp .vbar { display: grid; grid-template-columns: 92px minmax(0, 1fr) 54px; gap: 8px; align-items: center; font-size: 12.5px;
+    cursor: pointer; border-radius: 6px; padding: 1px 2px; }
+  .dp .vbar .t { height: 10px; border-radius: 4px; background: #dfe6dc; overflow: hidden; }
+  .dp .vbar .t i { display: block; height: 100%; border-radius: 4px; background: #b9c7b5; }
+  .dp .vbar.in .t i { background: var(--acc-strong); }
+  .dp .vbar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .dp .vbar.in .n, .dp .vbar.in .l { color: var(--ink); font-weight: 600; }
+  .dp .vbar .l { color: var(--muted); white-space: nowrap; }
 </style>
 </head>
 <body class="dp">
@@ -421,6 +434,15 @@
           </div>
           <div class="card stack buy-card">
             <h2>Buy the list</h2>
+            <div class="valuepick">
+              <div class="vp-head"><b>Which homes?</b> <span class="small muted" id="vSel"></span></div>
+              <div class="vp-row">
+                <label class="small">Home value from<select id="vLo" aria-label="Lowest home value"></select></label>
+                <label class="small">to<select id="vHi" aria-label="Highest home value"></select></label>
+              </div>
+              <div class="vbars" id="vBars" aria-label="Homes in this ZIP by assessed value"></div>
+              <p class="small muted" style="margin:6px 0 0">Values are the county's assessed values. Higher-value homes cost a little more per home.</p>
+            </div>
             <div class="prodswitch" role="radiogroup" aria-label="List type">
               <button type="button" class="on" data-prod="standard" role="radio" aria-checked="true"><b>Standard sheet</b><span>Spreadsheet, pick your measurements</span></button>
               <button type="button" data-prod="premier" role="radio" aria-checked="false"><b>Premier list</b><span>Full report PDF for every home</span></button>
@@ -640,8 +662,8 @@
   <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Get 25 free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=15"></script>
-<script src="/static/data.js?v=15"></script>
+<script src="/static/common.js?v=16"></script>
+<script src="/static/data.js?v=16"></script>
 <script>
 // Phone-only sticky "Get 25 free" button: shown once the ZIP box has scrolled
 // away, hidden while the ZIP box or the closing CTA is on screen and once a

@@ -33,38 +33,45 @@ INDEX_COLS = [("address", "Address"), ("city", "City"), ("zip", "ZIP"), ("file",
               ("lot_sqft", "Lot sq ft"), ("pin", "Property id"), ("status", "Status")]
 
 
-def _key(zip_code: str, classes: list[str]) -> str:
+def _key(zip_code: str, classes: list[str], bands=None) -> str:
     z = "".join(ch for ch in zip_code if ch.isdigit())[:5]
-    return f"{z}_{''.join(sorted(set(classes))) or 'ALL'}"
+    k = f"{z}_{''.join(sorted(set(classes))) or 'ALL'}"
+    if bands is not None:
+        from .datastore import band_range
+        from .bulk import VALUE_EDGES
+        lo, hi = band_range(*bands)
+        if (lo, hi) != (0, len(VALUE_EDGES)):
+            k += f"_v{lo}-{hi}"
+    return k
 
 
-def path(zip_code, classes):
-    return PREMIER_DIR / f"{_key(zip_code, classes)}.zip"
+def path(zip_code, classes, bands=None):
+    return PREMIER_DIR / f"{_key(zip_code, classes, bands)}.zip"
 
 
-def meta(zip_code, classes) -> dict:
-    p = PREMIER_DIR / f"{_key(zip_code, classes)}.json"
+def meta(zip_code, classes, bands=None) -> dict:
+    p = PREMIER_DIR / f"{_key(zip_code, classes, bands)}.json"
     try:
         return json.loads(p.read_text()) if p.exists() else {}
     except Exception:
         return {}
 
 
-def _write_meta(zip_code, classes, m: dict):
-    p = PREMIER_DIR / f"{_key(zip_code, classes)}.json"
+def _write_meta(zip_code, classes, m: dict, bands=None):
+    p = PREMIER_DIR / f"{_key(zip_code, classes, bands)}.json"
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(m))
     tmp.replace(p)
 
 
-def ready(zip_code, classes) -> bool:
-    m = meta(zip_code, classes)
-    return bool(m.get("status") == "ready" and path(zip_code, classes).exists()
+def ready(zip_code, classes, bands=None) -> bool:
+    m = meta(zip_code, classes, bands)
+    return bool(m.get("status") == "ready" and path(zip_code, classes, bands).exists()
                 and time.time() - m.get("finished", 0) < MAX_AGE_DAYS * 86400)
 
 
-def progress(zip_code, classes) -> dict:
-    m = meta(zip_code, classes)
+def progress(zip_code, classes, bands=None) -> dict:
+    m = meta(zip_code, classes, bands)
     return {"status": m.get("status", "none"), "done": m.get("done", 0), "total": m.get("total", 0)}
 
 
@@ -106,17 +113,23 @@ def _one(cid, f):
         return row, None
 
 
-def build(zip_code: str, classes: list[str]) -> None:
-    """Measure every home in the ZIP and write the folder. Blocking."""
-    from .bulk import _zip_parcels
+def build(zip_code: str, classes: list[str], bands=None) -> None:
+    """Measure every home in the ZIP (in the value bands, if given) and write
+    the folder. Blocking."""
+    from .bulk import _zip_parcels, band_of
     from .measure import measurer_for
     items = _zip_parcels(zip_code, classes)
     items = [it for it in items if (measurer_for(it[0]).parcel_attrs(it[1]["attributes"]).get("address") or "").strip()]
+    if bands is not None:
+        from .datastore import band_range
+        lo, hi = band_range(*bands)
+        items = [it for it in items
+                 if lo <= band_of(measurer_for(it[0]).parcel_attrs(it[1]["attributes"]).get("home_value")) <= hi]
     items.sort(key=lambda it: measurer_for(it[0]).parcel_attrs(it[1]["attributes"]).get("address") or "")
     total = len(items)
     m = {"status": "building", "started": time.time(), "done": 0, "total": total}
-    _write_meta(zip_code, classes, m)
-    final = path(zip_code, classes)
+    _write_meta(zip_code, classes, m, bands)
+    final = path(zip_code, classes, bands)
     tmp = final.with_suffix(".building")
     rows, used = [], set()
     zlock = threading.Lock()
@@ -135,7 +148,7 @@ def build(zip_code: str, classes: list[str]) -> None:
                 rows.append(row)
                 if i % 10 == 0 or i == total:
                     m.update(done=i)
-                    _write_meta(zip_code, classes, m)
+                    _write_meta(zip_code, classes, m, bands)
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow([label for _, label in INDEX_COLS])
@@ -145,13 +158,13 @@ def build(zip_code: str, classes: list[str]) -> None:
     tmp.replace(final)
     m.update(status="ready", finished=time.time(), done=total,
              reports=sum(1 for r in rows if r.get("file")), size=final.stat().st_size)
-    _write_meta(zip_code, classes, m)
+    _write_meta(zip_code, classes, m, bands)
 
 
-def ensure(zip_code: str, classes: list[str], on_ready=None) -> str:
+def ensure(zip_code: str, classes: list[str], on_ready=None, bands=None) -> str:
     """Start building unless ready or running. Returns 'ready' or 'building'."""
-    key = _key(zip_code, classes)
-    if ready(zip_code, classes):
+    key = _key(zip_code, classes, bands)
+    if ready(zip_code, classes, bands):
         if on_ready:
             on_ready()
         return "ready"
@@ -165,10 +178,10 @@ def ensure(zip_code: str, classes: list[str], on_ready=None) -> str:
     def run():
         ok = True
         try:
-            build(zip_code, classes)
+            build(zip_code, classes, bands)
         except Exception as e:
             ok = False
-            _write_meta(zip_code, classes, {"status": "failed", "error": str(e)[:300], "finished": time.time()})
+            _write_meta(zip_code, classes, {"status": "failed", "error": str(e)[:300], "finished": time.time()}, bands)
             from . import mailer
             mailer.notify_owner(f"Premier list for ZIP {zip_code} failed", f"{e}\nRe-run it from Business > Data sales.")
         with _lock:

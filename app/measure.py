@@ -613,11 +613,17 @@ class Measurer:
                                          for r, c, h_ in lot_tops)],
             "frontage_ft": round(frontage_ft),
             **self._house_walls(P_wgs, env, lid is not None),
+            "home_value": _num(attrs.get("home_value")),
+            "year_built": _year(attrs.get("year_built")),
+            "living_sqft": _num(attrs.get("bldg_sqft")),
             "assessor": {
                 "lot_sqft": attrs.get("lot_sqft"),
                 "living_sqft": attrs.get("bldg_sqft"),
                 "building": attrs.get("bldg_desc"),
                 "year_built": attrs.get("year_built"),
+                "home_value": attrs.get("home_value"),
+                "land_value": attrs.get("land_value"),
+                "sale_price": attrs.get("sale_price"),
             },
             "sources": {
                 "imagery_year": img.get("year"),
@@ -867,6 +873,19 @@ def _lines(g):
             out.extend(_lines(x))
         return out
     return []
+
+
+def _num(v):
+    try:
+        f = float(v)
+        return round(f) if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _year(v):
+    n = _num(v)
+    return n if n and 1700 <= n <= 2100 else None
 
 
 def _geojson(g):

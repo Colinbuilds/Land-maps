@@ -21,6 +21,8 @@ COUNTY = {
             "bldg_sqft": "RESFLRAREA",
             "bldg_desc": "RESSTRTYP",
             "year_built": "RESYRBLT",
+            "home_value": "CNTASSDVAL",     # current assessed value
+            "land_value": "LNDVALUE",
             "mail_address": "PSTLADDRESS", "mail_city": "PSTLCITY", "mail_state": "PSTLSTATE", "mail_zip": "PSTLZIP5",
         },
         "address_has_city_zip": True,

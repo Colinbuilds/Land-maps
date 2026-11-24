@@ -141,6 +141,11 @@
           <label class="small">Minimum order ($)<input type="number" step="1" id="dMin"></label>
         </div>
         <p class="small muted" style="margin:0">Buyers tick the measurements they want (lawn, driveway, sidewalk, patios, decks &amp; sheds, beds, trees, building, walls &amp; windows). Example at 10¢ + 5¢: lawn + driveway + sidewalk = 20¢ per property.</p>
+        <div>
+          <div class="small" style="font-weight:600;margin-bottom:4px">Price multiplier by home value (assessed)</div>
+          <div class="row" id="dMult" style="gap:6px"></div>
+          <p class="small muted" style="margin:4px 0 0">Each home's price is multiplied by its value band. 1 = normal price, 2 = double.</p>
+        </div>
         <button id="dSave">Save pricing</button>
         <div id="dMsg" class="small"></div>
         <div id="dStripe" class="small muted"></div>
@@ -180,7 +185,7 @@
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
-<script src="/static/common.js?v=15"></script>
+<script src="/static/common.js?v=16"></script>
 <script src="/static/business.js?v=9"></script>
 </body>
 </html>
