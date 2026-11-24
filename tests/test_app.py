@@ -196,3 +196,14 @@ def test_owner_test_drive():
     assert r.status_code == 303 and r.headers["location"] == "/reports"
     me = cl2.get("/api/roof/me").json()
     assert me["trades"] == ["lawn", "snow"] and not me["member"] and me["credits"] >= 3
+
+
+def test_admin_key_signs_in_on_customer_site(monkeypatch):
+    import app.main as m
+    cl = TestClient(app)
+    assert cl.post("/api/roof/login", json={"email": "admin", "password": ""}).status_code == 401  # no key set: off
+    monkeypatch.setattr(m, "ADMIN_TOKEN", "owner-key-123")
+    assert cl.post("/api/roof/login", json={"email": "admin", "password": "wrong"}).status_code == 401
+    r = cl.post("/api/roof/login", json={"email": "admin", "password": "owner-key-123"})
+    assert r.status_code == 200 and r.json()["crm"] and r.json()["member"]
+    assert cl.get("/api/crm/home").status_code == 200

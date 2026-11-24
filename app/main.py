@@ -7,6 +7,7 @@ Business page:  http://localhost:8000/business
 from __future__ import annotations
 
 import hashlib
+import hmac
 import io
 import json
 import threading
@@ -446,6 +447,8 @@ class RoofLogin(BaseModel):
 @app.post("/api/roof/login")
 def roof_login(body: RoofLogin, request: Request):
     c = accounts.login(body.email, body.password)
+    if not c and ADMIN_TOKEN and hmac.compare_digest(body.password.encode(), ADMIN_TOKEN.encode()):
+        c = _owner_login(body.email)
     if not c:
         raise HTTPException(401, "wrong email or password")
     r = JSONResponse(c)
@@ -892,6 +895,24 @@ def _demo_company() -> dict:
 
 
 _TEST_EMAIL = "testdrive@owner.invalid"
+
+
+def _owner_login(email: str) -> dict | None:
+    """The owner signing in on the customer site with the admin key:
+    a company's email = that company; "admin" or blank = the owner's own
+    test company (member, CRM on)."""
+    e = (email or "").strip().lower()
+    if e and e != "admin":
+        return accounts.company_by_email(e)
+    c = accounts.company_by_email(_TEST_EMAIL)
+    if not c:
+        from . import trades as _tr
+        c = accounts.create_company("Test drive (owner)", _TEST_EMAIL, secrets.token_urlsafe(24), phone="(402) 555-0199")
+        accounts.update_company(c["id"], trades=["lawn"], rates=_tr.suggested_rates())
+    accounts.update_company(c["id"], crm=1, disabled=0)
+    if not (accounts.get_company(c["id"]) or {}).get("member"):
+        accounts.set_membership(c["id"], time.time() + 3650 * 86400, active=True)
+    return accounts.get_company(c["id"])
 
 
 class TestDrive(BaseModel):
