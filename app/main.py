@@ -888,7 +888,7 @@ def data_quote(request: Request, zip: str, classes: str = "R", types: str = "law
     c = _session_company(request)
     try:
         q = datastore.quote(z, _classes(classes), types.split(","), product, member=bool(c and c["member"]),
-                            lo=vlo, hi=vhi)
+                            lo=vlo, hi=vhi, email=(c or {}).get("email"))
     except LookupError as e:
         raise HTTPException(404, str(e))
     try:
@@ -920,9 +920,12 @@ def data_sample(body: SampleReq, request: Request):
         rows = datastore.take_sample(body.email, _client_ip(request), z, _classes(body.classes))
     except LookupError as e:
         raise HTTPException(404, str(e))
-    keys = [k for k, _ in datastore.COLUMNS]
-    return {"zip": z, "columns": [{"key": k, "label": l} for k, l in datastore.COLUMNS], "rows": rows,
-            "csv": datastore.to_csv(rows), "keys": keys}
+    c = _session_company(request)
+    rows, taken = datastore.strip_locked(rows, z, (c or {}).get("email"))
+    taken_cols = {c for k, _, cs in datastore.MEASURE_TYPES if k in taken for c in cs}
+    cols = [(k, l) for k, l in datastore.COLUMNS if k not in taken_cols]
+    return {"zip": z, "columns": [{"key": k, "label": l} for k, l in cols], "rows": rows,
+            "csv": datastore.to_csv(rows, cols), "keys": [k for k, _ in cols], "taken_types": taken}
 
 
 class OrderReq(BaseModel):
@@ -940,11 +943,15 @@ def data_order(body: OrderReq, request: Request):
     z = _zip5(body.zip)
     try:
         c = _session_company(request)
+        if body.product == "exclusive" and not c:
+            raise PermissionError("Sign in (or create a free account) to buy an exclusive ZIP, so the lock is tied to your company.")
         o = datastore.create_order(body.email, z, _classes(body.classes), body.types, site=_base_url(request),
                                    product=body.product, member=bool(c and c["member"]),
-                                   lo=body.value_lo, hi=body.value_hi)
+                                   lo=body.value_lo, hi=body.value_hi, account_email=(c or {}).get("email"))
     except LookupError as e:
         raise HTTPException(404, str(e))
+    except PermissionError as e:
+        raise HTTPException(409, str(e))
     out = {"id": o["id"], "token": o["token"], "amount_cents": o["amount_cents"], "count": o["count"],
            "order_url": f"/data/order/{o['id']}?t={o['token']}"}
     if datastore.stripe_enabled():
@@ -1009,7 +1016,8 @@ def admin_data():
         meta = json.loads(p.read_text())
         zips.append({"key": p.stem, **meta})
     return {"pricing": datastore.pricing(), "orders": datastore.list_orders(), "zips": zips,
-            "stripe": datastore.stripe_enabled()}
+            "stripe": datastore.stripe_enabled(), "locks": datastore.all_locks(),
+            "prebuild_all": datastore.prebuild_status()}
 
 
 class DataPricing(BaseModel):
@@ -1019,6 +1027,9 @@ class DataPricing(BaseModel):
     min_order_usd: float = Field(ge=0, le=100_000)
     value_multipliers: list[float] = Field(default=[1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0],
                                            min_length=9, max_length=9)
+    exclusive_cents: float = Field(default=100.0, ge=1, le=10_000)       # exclusive ZIP, first type
+    exclusive_extra_cents: float = Field(default=50.0, ge=0, le=10_000)  # each extra type
+    exclusive_months: int = Field(default=12, ge=1, le=60)
 
 
 @app.put("/api/admin/data/pricing", dependencies=[Depends(admin)])
@@ -1050,3 +1061,31 @@ def admin_data_prebuild(body: Prebuild):
         from . import premier
         return {"status": premier.ensure(_zip5(body.zip), _classes(body.classes))}
     return {"status": datastore.ensure_dataset(_zip5(body.zip), _classes(body.classes))}
+
+
+class PrebuildAll(BaseModel):
+    classes: list[str] = ["R"]
+    start: bool = True
+
+
+@app.post("/api/admin/data/prebuild-all", dependencies=[Depends(admin)])
+def admin_data_prebuild_all(body: PrebuildAll):
+    """Measure every ZIP in the service area, one after another (start/stop)."""
+    return datastore.prebuild_all(_classes(body.classes), start=body.start)
+
+
+@app.get("/api/admin/data/prebuild-all", dependencies=[Depends(admin)])
+def admin_data_prebuild_all_status():
+    return datastore.prebuild_status()
+
+
+@app.delete("/api/admin/data/locks/{zip_code}/{type_key}", dependencies=[Depends(admin)])
+def admin_data_release_lock(zip_code: str, type_key: str):
+    """End an exclusive early (e.g. after a refund)."""
+    datastore.release_lock(_zip5(zip_code), type_key)
+    return {"locks": datastore.all_locks()}
+
+
+@app.on_event("startup")
+def _resume_prebuild():
+    datastore.resume_prebuild()

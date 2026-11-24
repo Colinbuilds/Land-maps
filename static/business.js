@@ -236,6 +236,21 @@
     try { d = await api("/api/admin/data"); } catch (e) { $("dOrders").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; return; }
     $("dRate").value = d.pricing.rate_cents; $("dExtra").value = d.pricing.extra_type_cents;
     $("dMin").value = d.pricing.min_order_usd; $("dPremier").value = d.pricing.premier_cents;
+    $("dExFirst").value = d.pricing.exclusive_cents; $("dExExtra").value = d.pricing.exclusive_extra_cents;
+    $("dExMonths").value = d.pricing.exclusive_months;
+    const pa = d.prebuild_all || {};
+    $("dPreAllMsg").innerHTML = pa.zips ? `${pa.running ? "<b>Running</b>" : esc(pa.status)}: ${pa.done.length} of ${pa.zips.length} ZIPs measured`
+      + (pa.failed && pa.failed.length ? `, ${pa.failed.length} failed (${esc(pa.failed.join(", "))})` : "")
+      + (pa.current ? `. Now: ${esc(pa.current)}${pa.current_progress && pa.current_progress.total ? ` (${pa.current_progress.done}/${pa.current_progress.total})` : ""}` : "")
+      : "Measures all ZIPs in the counties we cover, one at a time, skipping any measured in the last year. Keeps going after a redeploy.";
+    const day = (t) => new Date(t * 1000).toLocaleDateString();
+    $("dLocks").innerHTML = `<thead><tr><th>ZIP</th><th>Measurement</th><th>Company</th><th>Until</th><th></th></tr></thead><tbody>${
+      (d.locks || []).map((l) => `<tr><td>${esc(l.zip)}</td><td>${esc(l.type)}</td><td>${esc(l.email)}</td><td>${l.until * 1000 < Date.now() ? "expired " : ""}${day(l.until)}</td>
+        <td><button class="secondary" data-unlock="${esc(l.zip)}/${esc(l.type)}">Release</button></td></tr>`).join("") || '<tr><td colspan="5" class="muted">None yet.</td></tr>'}</tbody>`;
+    $("dLocks").querySelectorAll("[data-unlock]").forEach((b) => b.addEventListener("click", async () => {
+      if (!confirm(`Release ${b.dataset.unlock}? Others can buy it again right away.`)) return;
+      await api(`/api/admin/data/locks/${b.dataset.unlock}`, { method: "DELETE" }); loadData();
+    }));
     const BANDS = ["<$250k", "$250-500k", "$500-750k", "$750k-1M", "$1-1.25M", "$1.25-1.5M", "$1.5-1.75M", "$1.75-2M", "$2M+"];
     const mult = d.pricing.value_multipliers || [1, 1.25, 1.5, 2, 2.5, 3, 3.5, 4, 5];
     $("dMult").innerHTML = BANDS.map((b, i) => `<label class="small" style="flex:1 1 90px">${b}<input type="number" step="0.05" min="0.1" data-m="${i}" value="${mult[i] ?? 1}"></label>`).join("");
@@ -257,6 +272,7 @@
     try {
       await api("/api/admin/data/pricing", { method: "PUT", json: { rate_cents: +$("dRate").value, extra_type_cents: +$("dExtra").value,
         premier_cents: +$("dPremier").value, min_order_usd: +$("dMin").value,
+        exclusive_cents: +$("dExFirst").value || 100, exclusive_extra_cents: +$("dExExtra").value, exclusive_months: +$("dExMonths").value || 12,
         value_multipliers: [...document.querySelectorAll("#dMult input")].map((x) => +x.value || 1) } });
       $("dMsg").innerHTML = '<span class="ok">Saved.</span>';
     } catch (e) { $("dMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
@@ -265,6 +281,16 @@
     try { const r = await api("/api/admin/data/prebuild", { method: "POST", json: { zip: $("dZip").value.trim() } });
       $("dPreMsg").innerHTML = `<span class="ok">${r.status === "ready" ? "Already measured." : "Measuring started."}</span>`; loadData(); }
     catch (e) { $("dPreMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  });
+
+  $("dPreAll").addEventListener("click", async () => {
+    if (!confirm("Measure every ZIP we cover? This runs for days in the background and uses server time.")) return;
+    try { await api("/api/admin/data/prebuild-all", { method: "POST", json: { start: true } }); loadData(); }
+    catch (e) { $("dPreAllMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  });
+  $("dPreStop").addEventListener("click", async () => {
+    try { await api("/api/admin/data/prebuild-all", { method: "POST", json: { start: false } }); loadData(); }
+    catch (e) { $("dPreAllMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   });
 
   // ---------------- settings

@@ -79,3 +79,32 @@ def test_trade_catalog_and_metrics():
     m = {x["label"]: x for x in trades.metrics("roofing", d)}
     assert m["Year built"]["value"] == "1999"                    # not "1,999"
     assert all(x["beta"] for x in trades.metrics("fencing", d) if "ence" in x["label"])
+
+
+def test_exclusive_zip_locks_and_pricing(monkeypatch):
+    import secrets
+    from app import datastore as ds
+    z = "9" + secrets.token_hex(2)[:4].translate(str.maketrans("abcdef", "123456"))  # a ZIP no one uses
+    a, b = f"a{z}@x.test", f"b{z}@x.test"
+    # $1/home first type, 50c each extra; whole ZIP
+    p = ds.exclusive_price(z, 1000, ["lawn", "driveway"], a)
+    assert p["price_cents"] == 1000 * 150 and p["new_types"] == ["lawn", "driveway"]
+    # buyer A locks lawn
+    o = {"id": "T" + z, "zip": z, "email": a, "types": "lawn", "new_types": "lawn"}
+    assert ds._grant_locks(o) == []
+    # B can't buy lawn here (standard, exclusive or Premier) but can buy driveway
+    assert "exclusive" in ds.sale_blocked(z, ["lawn", "driveway"], "standard", b)
+    assert ds.sale_blocked(z, ["driveway"], "standard", b) is None
+    assert ds.sale_blocked(z, ["driveway"], "premier", b)
+    assert ds.sale_blocked(z, ["lawn"], "exclusive", b)
+    # A can still buy their own ZIP, and adds driveway at 50c/home
+    assert ds.sale_blocked(z, ["lawn"], "premier", a) is None
+    p = ds.exclusive_price(z, 1000, ["lawn", "driveway"], a)
+    assert p["new_types"] == ["driveway"] and p["price_cents"] == 1000 * 50
+    # B's later exclusive on lawn is refused at payment time
+    assert ds._grant_locks({"id": "U" + z, "zip": z, "email": b, "types": "lawn", "new_types": "lawn"}) == ["lawn"]
+    # free samples hide the locked columns from others
+    rows, taken = ds.strip_locked([{"lawn_sqft": 5000, "driveway_sqft": 600}], z, b)
+    assert taken == ["lawn"] and rows[0]["lawn_sqft"] == "" and rows[0]["driveway_sqft"] == 600
+    ds.release_lock(z, "lawn")
+    assert ds.sale_blocked(z, ["lawn"], "standard", b) is None

@@ -75,6 +75,11 @@ DEFAULT_PRICING = {
     "min_order_usd": 25.0,
     # price multiplier per assessed-value band (every $250k: <250k ... 1.75-2M, 2M+)
     "value_multipliers": [1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0],
+    # Exclusive ZIP: buy every home in the ZIP and nobody else can buy those
+    # measurement types there until the lock runs out. Whole ZIP only.
+    "exclusive_cents": 100.0,        # per property, first measurement type
+    "exclusive_extra_cents": 50.0,   # per property, each additional type
+    "exclusive_months": 12,          # how long the lock lasts
 }
 
 
@@ -154,6 +159,12 @@ def init():
         for col in ("value_lo", "value_hi"):  # home-value band range bought
             if col not in have:
                 con.execute(f"ALTER TABLE orders ADD COLUMN {col} INTEGER")
+        if "new_types" not in have:  # exclusive orders: the types this order adds (charged)
+            con.execute("ALTER TABLE orders ADD COLUMN new_types TEXT")
+        # Exclusive ZIP locks: one holder per (ZIP, measurement type)
+        con.execute("""CREATE TABLE IF NOT EXISTS zip_locks (
+            zip TEXT NOT NULL, type TEXT NOT NULL, email TEXT NOT NULL, order_id TEXT NOT NULL,
+            since REAL NOT NULL, until REAL NOT NULL, PRIMARY KEY (zip, type))""")
 
 
 def pricing() -> dict:
@@ -219,21 +230,123 @@ def list_price(count: int, types=None, product: str = "standard", member: bool =
 
 
 def quote(zip_code: str, classes: list[str], types=None, product: str = "standard", member: bool = False,
-          lo: int | None = None, hi: int | None = None) -> dict:
+          lo: int | None = None, hi: int | None = None, email: str | None = None) -> dict:
     pv = bulk.preview(zip_code, classes)
     meta = dataset_meta(zip_code, classes)
     p = pricing()
     types = normalize_types(types)
     vb = bulk.value_bands(zip_code, classes) if pv["count"] else {"bands": [], "labels": [], "total": 0}
-    lo, hi = band_range(lo, hi)
-    lp = list_price(0, types, product, member, p, bands=vb["bands"] or [0], lo=lo, hi=hi)
-    n = lp.pop("count")
+    if product == "exclusive":
+        lo, hi = band_range(None, None)  # whole ZIP only
+        n = vb.get("total", pv["count"]) if vb["bands"] else pv["count"]
+        lp = exclusive_price(zip_code, n, types, email, p)
+    else:
+        lo, hi = band_range(lo, hi)
+        lp = list_price(0, types, product, member, p, bands=vb["bands"] or [0], lo=lo, hi=hi)
+        n = lp.pop("count")
+    lk = locks(zip_code)
+    mine = {t for t, l in lk.items() if email and l["email"] == email.lower()}
+    taken = [t for t in lk if t not in mine]
+    blocked = sale_blocked(zip_code, types, product, email)
     return {"zip": zip_code, "classes": classes, "count": n, "zip_total": vb.get("total", pv["count"]),
+            "locks": {t: {"until": l["until"], "yours": t in mine} for t, l in lk.items()},
+            "taken_types": taken, "blocked": blocked,
             "by_county": pv["by_county"], "value_bands": vb, "value_lo": lo, "value_hi": hi,
             "value_label": range_label(lo, hi),
             "types": types, "product": product, **lp, "pricing": p,
             "ready": dataset_ready(zip_code, classes),
             "measured": meta.get("finished") if meta and meta.get("status") == "ready" else None}
+
+
+# --------------------------------------------------------- exclusive ZIPs
+def locks(zip_code: str) -> dict:
+    """Active locks in a ZIP: {type: {email, until, order_id}}."""
+    with _db() as con:
+        rows = con.execute("SELECT * FROM zip_locks WHERE zip=? AND until>?", (zip_code, time.time())).fetchall()
+    return {r["type"]: {"email": r["email"], "until": r["until"], "order_id": r["order_id"]} for r in rows}
+
+
+def all_locks() -> list[dict]:
+    with _db() as con:
+        return [dict(r) for r in con.execute("SELECT * FROM zip_locks ORDER BY zip, type")]
+
+
+def held_types(zip_code: str, email: str | None) -> list[str]:
+    if not email:
+        return []
+    return [t for t, l in locks(zip_code).items() if l["email"] == email.lower()]
+
+
+def taken_by_others(zip_code: str, email: str | None = None) -> list[str]:
+    e = (email or "").lower()
+    return [t for t, l in locks(zip_code).items() if l["email"] != e]
+
+
+def sale_blocked(zip_code: str, types, product: str = "standard", email: str | None = None) -> str | None:
+    """Why this sale can't happen (another company holds the ZIP), else None."""
+    taken = taken_by_others(zip_code, email)
+    if not taken:
+        return None
+    lab = dict((k, l) for k, l, _ in MEASURE_TYPES)
+    names = ", ".join(lab.get(t, t) for t in TYPE_KEYS if t in taken)
+    if product == "premier":
+        return (f"ZIP {zip_code} is exclusive to another company for: {names}. "
+                f"Premier lists include every measurement, so they can't be sold in this ZIP right now.")
+    hit = [t for t in normalize_types(types) if t in taken]
+    if hit:
+        return (f"ZIP {zip_code} is exclusive to another company for: "
+                f"{', '.join(lab[t] for t in hit)}. Untick those to buy the rest.")
+    return None
+
+
+def exclusive_price(zip_code: str, count: int, types, email: str | None = None, p: dict | None = None) -> dict:
+    """$1/home for the first type, 50c/home for each extra type. Types the
+    buyer already holds in this ZIP aren't charged again; once they hold
+    any type, each added type is the extra-type rate."""
+    p = p or pricing()
+    types = normalize_types(types)
+    held = set(held_types(zip_code, email))
+    new = [t for t in types if t not in held]
+    first, extra = float(p.get("exclusive_cents", 100.0)), float(p.get("exclusive_extra_cents", 50.0))
+    per = (extra * len(new)) if held else ((first + extra * (len(new) - 1)) if new else 0.0)
+    raw = count * per
+    cents = int(max(math.ceil(raw - 1e-9), round(float(p["min_order_usd"]) * 100))) if (count and new) else 0
+    return {"per_property_cents": per, "price_cents": cents, "full_price_cents": cents, "member_discount": False,
+            "new_types": new, "already_held": [t for t in types if t in held],
+            "exclusive_months": int(p.get("exclusive_months", 12))}
+
+
+def _grant_locks(o: dict) -> list[str]:
+    """Lock the order's new types for the buyer. Returns types someone else
+    took in the meantime (then nothing is locked)."""
+    z, email = o["zip"], o["email"].lower()
+    new = normalize_types((o.get("new_types") or o.get("types") or "").split(","))
+    months = int(pricing().get("exclusive_months", 12))
+    now = time.time()
+    with _lock, _db() as con:
+        clash = [r["type"] for r in con.execute(
+            f"SELECT type FROM zip_locks WHERE zip=? AND until>? AND email<>? AND type IN ({','.join('?' * len(new))})",
+            (z, now, email, *new))]
+        if clash:
+            return clash
+        for t in new:
+            con.execute("INSERT OR REPLACE INTO zip_locks(zip,type,email,order_id,since,until) VALUES(?,?,?,?,?,?)",
+                        (z, t, email, o["id"], now, now + months * 30.44 * 86400))
+    return []
+
+
+def release_lock(zip_code: str, type_key: str):
+    with _lock, _db() as con:
+        con.execute("DELETE FROM zip_locks WHERE zip=? AND type=?", (zip_code, type_key))
+
+
+def strip_locked(rows: list[dict], zip_code: str, email: str | None = None) -> tuple[list[dict], list[str]]:
+    """Blank out columns of types another company holds (free samples)."""
+    taken = taken_by_others(zip_code, email)
+    cols = {c for k, _, cs in MEASURE_TYPES if k in taken for c in cs}
+    if not cols:
+        return rows, []
+    return [{k: ("" if k in cols else v) for k, v in r.items()} for r in rows], taken
 
 
 # ------------------------------------------------------------- row helpers
@@ -387,19 +500,36 @@ def dataset_progress(zip_code: str, classes: list[str]) -> dict:
 
 # ------------------------------------------------------------------- orders
 def create_order(email: str, zip_code: str, classes: list[str], types=None, site: str = "",
-                 product: str = "standard", member: bool = False, lo: int | None = None, hi: int | None = None) -> dict:
+                 product: str = "standard", member: bool = False, lo: int | None = None, hi: int | None = None,
+                 account_email: str | None = None) -> dict:
+    """``account_email`` is the signed-in company's email: lock-holder rights
+    (buying in their own exclusive ZIP) come from it, never from a typed email."""
     types = normalize_types(types)
-    product = "premier" if product == "premier" else "standard"
-    q = quote(zip_code, classes, types, product, member, lo, hi)
+    product = product if product in ("premier", "exclusive") else "standard"
+    holder = (account_email or "").lower() or None
+    if product == "exclusive":
+        if not holder:
+            raise PermissionError("Sign in to buy an exclusive ZIP.")
+        email = holder  # the lock belongs to the account
+    q = quote(zip_code, classes, types, product, member, lo, hi, email=holder)
     if not q["count"]:
         raise LookupError("No matching properties in that ZIP code in our service area.")
+    if q["blocked"]:
+        raise PermissionError(q["blocked"])
+    new_types = None
+    if product == "exclusive":
+        if not q["new_types"]:
+            raise PermissionError("You already hold every one of those measurements in this ZIP.")
+        new_types = ",".join(q["new_types"])
+        types = normalize_types(types + held_types(zip_code, holder))  # deliver everything they hold
     oid = secrets.token_hex(4).upper()
     tok = secrets.token_urlsafe(16)
     with _lock, _db() as con:
         con.execute("INSERT INTO orders(id,email,zip,classes,count,amount_cents,status,token,created,types,site,product,"
-                    "value_lo,value_hi) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "value_lo,value_hi,new_types) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (oid, email.lower(), zip_code, ",".join(classes), q["count"], q["price_cents"],
-                     "awaiting_payment", tok, time.time(), ",".join(types), site, product, q["value_lo"], q["value_hi"]))
+                     "awaiting_payment", tok, time.time(), ",".join(types), site, product, q["value_lo"], q["value_hi"],
+                     new_types))
     o = get_order(oid)
     _email_new_order(o)
     return o
@@ -422,6 +552,17 @@ def order_types(o: dict) -> list[str]:
     return normalize_types((o.get("types") or "lawn").split(","))
 
 
+def order_what(o: dict) -> str:
+    prod = o.get("product") or "standard"
+    if prod == "premier":
+        return "Premier list: full property report PDF for every home"
+    what = ", ".join(type_labels(order_types(o)))
+    if prod == "exclusive":
+        months = int(pricing().get("exclusive_months", 12))
+        what = f"Exclusive ZIP ({months} months, no one else can buy these here): {what}"
+    return what
+
+
 def type_labels(types) -> list[str]:
     lab = {k: l for k, l, _ in MEASURE_TYPES}
     return [lab[t] for t in normalize_types(types)]
@@ -435,8 +576,7 @@ def order_link(o: dict) -> str:
 def _email_new_order(o: dict):
     from . import mailer
     usd = f"${o['amount_cents'] / 100:,.2f}"
-    what = ("Premier list: full property report PDF for every home" if (o.get("product") or "") == "premier"
-            else ", ".join(type_labels(order_types(o))))
+    what = order_what(o)
     what += f"\nHomes: {range_label(*order_bands(o))}"
     mailer.notify_owner(f"New data order {o['id']}: ZIP {o['zip']}, {usd}",
                         f"Order {o['id']}\nBuyer: {o['email']}\nZIP {o['zip']}: {o['count']:,} properties\n"
@@ -480,8 +620,20 @@ def mark_paid(oid: str, note: str = "") -> dict:
     if not o:
         raise LookupError("order not found")
     if o["status"] in ("awaiting_payment",):
-        _set(oid, status="processing", paid=time.time(), note=note)
         from . import mailer
+        if (o.get("product") or "") == "exclusive":
+            clash = _grant_locks(o)
+            if clash:
+                # someone else's exclusive was paid first: refund this one
+                _set(oid, status="conflict", paid=time.time(), note=f"{note}; taken: {','.join(clash)}")
+                mailer.notify_owner(f"REFUND NEEDED: order {oid}, ZIP {o['zip']}",
+                                    f"{o['email']} paid ${o['amount_cents'] / 100:,.2f} for an exclusive on ZIP {o['zip']}, "
+                                    f"but another company locked {', '.join(type_labels(clash))} first. Refund it in Stripe.")
+                mailer.send(o["email"], f"Order {oid}: ZIP {o['zip']} was just taken",
+                            f"Another company locked {', '.join(type_labels(clash))} in ZIP {o['zip']} moments before "
+                            f"your payment went through. You'll get a full refund; we'll be in touch.")
+                return get_order(oid)
+        _set(oid, status="processing", paid=time.time(), note=note)
         mailer.notify_owner(f"Paid: order {oid}, ZIP {o['zip']} (${o['amount_cents'] / 100:,.2f})",
                             f"{o['email']} paid for ZIP {o['zip']} ({note or 'payment'}).\n{order_link(o)}")
         classes = o["classes"].split(",") if o["classes"] else []
@@ -509,6 +661,9 @@ def order_view(o: dict) -> dict:
     v["types"] = order_types(o)
     v["type_labels"] = (["Full property report PDF for every home (roof, walls & elevations, lot & yard)"]
                         if v["product"] == "premier" else type_labels(v["types"]))
+    if v["product"] == "exclusive":
+        lk = locks(o["zip"])
+        v["exclusive_until"] = max([l["until"] for t, l in lk.items() if l["email"] == o["email"].lower()] or [0]) or None
     if o["status"] == "processing":
         if v["product"] == "premier":
             from . import premier
@@ -542,8 +697,7 @@ def stripe_checkout(o: dict, base_url: str) -> str:
         "line_items[0][price_data][unit_amount]": str(o["amount_cents"]),
         "line_items[0][price_data][product_data][name]": f"Property measurements: ZIP {o['zip']} ({o['count']:,} properties)",
         "line_items[0][price_data][product_data][description]": f"{biz}: " + (
-            "Premier list: full property report PDF for every home" if (o.get("product") or "") == "premier"
-            else ", ".join(type_labels(order_types(o)))),
+            order_what(o)),
         "success_url": f"{base_url}/data/order/{o['id']}?t={o['token']}&session_id={{CHECKOUT_SESSION_ID}}",
         "cancel_url": f"{base_url}/data?zip={o['zip']}",
         "metadata[order_id]": o["id"],
@@ -569,6 +723,102 @@ def stripe_confirm(o: dict, session_id: str) -> bool:
         mark_paid(o["id"], note="stripe")
         return True
     return False
+
+
+# ------------------------------------------------- measure every ZIP ahead
+PREBUILD_STATE = DATA_DIR / "prebuild_all.json"
+_pre = {"thread": None, "stop": False}
+
+
+def service_zips() -> list[str]:
+    """ZIPs mostly (>= 20%) inside the counties we cover, smallest first."""
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+    from .gis import _esri_to_geojson_geom, get_json
+    u = unary_union(list(counties.boundaries().values()))
+    d = get_json(bulk._ZCTA + "/query", {"where": "1=1", "geometry": ",".join(map(str, u.bounds)),
+                                          "geometryType": "esriGeometryEnvelope", "inSR": 4326,
+                                          "spatialRel": "esriSpatialRelIntersects", "outFields": "ZCTA5",
+                                          "outSR": 4326, "geometryPrecision": 5, "f": "json"}, ttl=30 * 86400)
+    out = []
+    for f in d.get("features") or []:
+        g = shape(_esri_to_geojson_geom(f["geometry"]))
+        if g.area and g.intersection(u).area / g.area >= 0.2:
+            out.append((g.area, f["attributes"]["ZCTA5"]))
+    return [z for _, z in sorted(out)]
+
+
+def prebuild_status() -> dict:
+    st = json.loads(PREBUILD_STATE.read_text()) if PREBUILD_STATE.exists() else {"status": "idle"}
+    st["running"] = bool(_pre["thread"] and _pre["thread"].is_alive())
+    if st.get("current"):
+        st["current_progress"] = dataset_progress(st["current"], st.get("classes") or ["R"])
+    return st
+
+
+def _save_pre(st: dict):
+    PREBUILD_STATE.write_text(json.dumps(st))
+
+
+def prebuild_all(classes: list[str] | None = None, start: bool = True) -> dict:
+    """Measure every ZIP in the service area, one at a time, so lists are
+    ready to download the moment someone buys. Skips ZIPs already measured
+    in the last year; resumes after a restart."""
+    if not start:
+        _pre["stop"] = True
+        if not (_pre["thread"] and _pre["thread"].is_alive()) and PREBUILD_STATE.exists():
+            st = json.loads(PREBUILD_STATE.read_text())
+            if st.get("status") == "running":
+                st.update(status="stopped", current=None); _save_pre(st)
+        return prebuild_status()
+    if _pre["thread"] and _pre["thread"].is_alive():
+        return prebuild_status()
+    classes = classes or ["R"]
+    zips = service_zips()
+    st = {"status": "running", "classes": classes, "zips": zips, "done": [], "failed": [],
+          "started": time.time(), "current": None}
+    if PREBUILD_STATE.exists():  # keep what an earlier run finished
+        old = json.loads(PREBUILD_STATE.read_text())
+        st["done"] = [z for z in old.get("done", []) if z in zips]
+    _save_pre(st)
+    _pre["stop"] = False
+
+    def run():
+        for z in zips:
+            if _pre["stop"]:
+                st.update(status="stopped", current=None); _save_pre(st)
+                return
+            if z in st["done"]:
+                continue
+            st["current"] = z; _save_pre(st)
+            ev = threading.Event()
+            try:
+                state = ensure_dataset(z, classes, on_ready=ev.set)
+                if state != "ready":
+                    while not ev.wait(30):
+                        m = dataset_meta(z, classes) or {}
+                        if m.get("status") == "failed" or _pre["stop"]:
+                            break
+                ok = dataset_ready(z, classes)
+            except Exception:
+                ok = False
+            (st["done"] if ok else st["failed"]).append(z)
+            _save_pre(st)
+        st.update(status="finished", current=None, finished=time.time()); _save_pre(st)
+
+    _pre["thread"] = threading.Thread(target=run, daemon=True, name="prebuild-all")
+    _pre["thread"].start()
+    return prebuild_status()
+
+
+def resume_prebuild():
+    """Called at startup: carry on a run a deploy/restart interrupted."""
+    try:
+        if PREBUILD_STATE.exists() and json.loads(PREBUILD_STATE.read_text()).get("status") == "running":
+            st = json.loads(PREBUILD_STATE.read_text())
+            prebuild_all(st.get("classes"))
+    except Exception:
+        pass
 
 
 init()
