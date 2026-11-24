@@ -52,6 +52,28 @@ GENERIC = ("Your property, measured.", "Call for your exact price. No visit need
 PRICED_OFFER = "Your price is already figured from your home's real measurements. Call or text to get on the schedule."
 
 
+# ----------------------------------------------------------- studio settings
+LAYOUT_DEFAULTS = {"photo_side": "left", "show_facts": True, "show_address_tag": True}
+
+
+def studio() -> dict:
+    """The owner's postcard studio settings: per-trade wording and layout."""
+    from .pricing import load_settings
+    st = load_settings().get("postcards") or {}
+    return {"templates": st.get("templates") or {}, "layout": {**LAYOUT_DEFAULTS, **(st.get("layout") or {})}}
+
+
+def copy_for(trade: str | None, priced: bool) -> tuple[str, str]:
+    """(headline, back message) for a trade: the studio's wording, else the defaults."""
+    t = studio()["templates"].get(trade or "") or {}
+    h, o = DEFAULT_COPY.get(trade or "", GENERIC)
+    if priced:
+        o = t.get("priced_offer") or PRICED_OFFER
+    else:
+        o = t.get("offer") or o
+    return t.get("headline") or h, o
+
+
 # ------------------------------------------------------------------- photo
 def _parcel(d: dict):
     from .counties import split_pid
@@ -211,7 +233,8 @@ def _wrap(c, text, x, y, width, font, size, lead, color):
 
 
 def render_postcard(d: dict, company: dict, trade: str | None = None, headline: str | None = None,
-                    offer: str | None = None, photo_jpg: bytes | None = None, cv=None) -> bytes | None:
+                    offer: str | None = None, photo_jpg: bytes | None = None, cv=None,
+                    layout: dict | None = None) -> bytes | None:
     """Front + back for one property. Pass ``cv`` to add the pages to an
     existing canvas (a whole mailing in one print file)."""
     own = cv is None
@@ -221,12 +244,11 @@ def render_postcard(d: dict, company: dict, trade: str | None = None, headline: 
         c.setTitle(f"Postcard - {d.get('address', '')}")
     accent = colors.HexColor(company.get("brand_color") or "#1d4ed8")
     dark = colors.HexColor("#0f172a")
-    h_def, o_def = DEFAULT_COPY.get(trade or "", GENERIC)
     from .trades import report_price
     pr = report_price(trade, company.get("rates"), d) if trade else None
-    if pr and not offer:  # a priced card: no "call for your price"
-        o_def = PRICED_OFFER
+    h_def, o_def = copy_for(trade, bool(pr))  # a priced card: no "call for your price"
     headline, offer = (headline or h_def), (offer or o_def)
+    lay = layout or studio()["layout"]
     name = company.get("name") or ""
     phone = company.get("phone") or ""
     big, cap, more = _hero(trade, d)
@@ -235,6 +257,9 @@ def render_postcard(d: dict, company: dict, trade: str | None = None, headline: 
 
     # ---------------------------------------------------------------- front
     pw = PW * PHOTO_FRAC
+    right = lay.get("photo_side") == "right"
+    px0 = PW - pw if right else 0          # where the photo sits
+    qx0 = 0 if right else pw               # where the colour panel sits
     if photo_jpg is None:
         try:
             photo_jpg = property_photo(d, trade, aspect=pw / PH)
@@ -245,23 +270,25 @@ def render_postcard(d: dict, company: dict, trade: str | None = None, headline: 
         iw, ih = img.getSize()
         s = max(pw / iw, PH / ih)                    # cover the panel
         c.saveState()
-        p = c.beginPath(); p.rect(0, 0, pw, PH); c.clipPath(p, stroke=0, fill=0)
-        c.drawImage(img, (pw - iw * s) / 2, (PH - ih * s) / 2, iw * s, ih * s)
+        p = c.beginPath(); p.rect(px0, 0, pw, PH); c.clipPath(p, stroke=0, fill=0)
+        c.drawImage(img, px0 + (pw - iw * s) / 2, (PH - ih * s) / 2, iw * s, ih * s)
         c.restoreState()
     else:
-        c.setFillColor(colors.HexColor("#e2e8f0")); c.rect(0, 0, pw, PH, stroke=0, fill=1)
+        c.setFillColor(colors.HexColor("#e2e8f0")); c.rect(px0, 0, pw, PH, stroke=0, fill=1)
     # address tag on the photo
-    if addr:
+    if addr and lay.get("show_address_tag", True):
         c.setFont("Helvetica-Bold", 11)
         tw = c.stringWidth(addr, "Helvetica-Bold", 11)
         c.setFillColor(colors.Color(0.06, 0.09, 0.16, alpha=0.82))
-        c.roundRect(SAFE, PH - SAFE - 26, tw + 20, 24, 6, stroke=0, fill=1)
+        tx = (PW - SAFE - tw - 20) if right else SAFE
+        c.roundRect(tx, PH - SAFE - 26, tw + 20, 24, 6, stroke=0, fill=1)
         c.setFillColor(colors.white)
-        c.drawString(SAFE + 10, PH - SAFE - 18, addr)
+        c.drawString(tx + 10, PH - SAFE - 18, addr)
     # colour panel
     c.setFillColor(accent)
-    c.rect(pw, 0, PW - pw, PH, stroke=0, fill=1)
-    x, width = pw + 0.28 * IN, PW - pw - 0.28 * IN - SAFE
+    c.rect(qx0, 0, PW - pw, PH, stroke=0, fill=1)
+    x = qx0 + (SAFE if right else 0.28 * IN)
+    width = PW - pw - 0.28 * IN - SAFE
     y = PH - SAFE - 16
     y = _wrap(c, headline, x, y, width, "Helvetica-Bold", 21, 24, colors.white) - 14
     if big:
@@ -274,7 +301,7 @@ def render_postcard(d: dict, company: dict, trade: str | None = None, headline: 
             c.setFont("Helvetica-Bold", 16)
             c.drawString(x + c.stringWidth(num, "Helvetica-Bold", size) + 6, base, unit)
         y = _wrap(c, cap, x, base - 20, width, "Helvetica", 12.5, 15, colors.white) - 10
-    for k, v in more:
+    for k, v in (more if lay.get("show_facts", True) else []):
         c.setFont("Helvetica", 10.5); c.setFillColor(colors.Color(1, 1, 1, alpha=0.88))
         c.drawString(x, y, k)
         c.setFont("Helvetica-Bold", 10.5); c.setFillColor(colors.white)
@@ -393,7 +420,7 @@ def build_mailing(src_zip, out_path, company: dict, trade: str | None, headline:
     import csv as _csv
     import json as _json
     import zipfile as _zf
-    h_def, o_def = DEFAULT_COPY.get(trade or "", GENERIC)
+    h_def, o_def = copy_for(trade, False)
     custom_offer = offer
     headline, offer = headline or h_def, offer or o_def
     with _zf.ZipFile(src_zip) as src:
@@ -417,7 +444,7 @@ def build_mailing(src_zip, out_path, company: dict, trade: str | None, headline:
                     pr = report_price(trade, company.get("rates"), d) if trade else None
                     r = {"owner": nice_name(d.get("owner")), "your_price": pr["price"] if pr else "",
                          "price_label": pr["label"] if pr else "",
-                         "offer": custom_offer or (PRICED_OFFER if pr else o_def),
+                         "offer": custom_offer or copy_for(trade, bool(pr))[1],
                          "address": d.get("address"), "city": (d.get("city") or "").title(), "zip": d.get("zip"),
                          "photo": f"photos/{stem}.jpg" if jpg else "", "headline": headline,
                          "big_number": big, "big_label": cap}

@@ -88,7 +88,7 @@
 
   <p class="eyebrow">Membership</p>
   <h1>Every property, measured. <em>One flat price.</em></h1>
-  <p class="lead">Full property reports for any address: roof lengths and pitch, wall areas and elevations for siding and gutters, and the lot and yard for lawn, snow and concrete. Plus ZIP code lists at half price.</p>
+  <p class="lead">Property reports for any address with the measurements your trade prices from: lot and yard for lawn, snow and concrete; the roof for roofing, gutters and lights; walls and elevations for siding and windows. Plus ZIP code data at half price and an optional CRM.</p>
 
   <div id="account" class="card2 hidden" style="margin:0 0 22px"></div>
 
@@ -106,7 +106,7 @@
         <li>Unlimited single-property reports, any address we cover</li>
         <li>Half off every ZIP code list: standard sheets and Premier lists</li>
         <li>2 trades included. 3rd trade +$15, 4th +$5 a month ($20 per extra pair)</li>
-        <li>The full Premier report for every trade: roof, walls &amp; elevations, lot &amp; yard, with each trade's numbers up top</li>
+        <li>Reports carry the measurements your trades need: lot &amp; yard for lawn and snow, the roof for roofing and lights, walls &amp; elevations for siding and windows, with your prices up top</li>
         <li>A print-ready postcard of any home you measure, for door-to-door mail</li>
         <li><b>Add the CRM portal for <span id="crmPrice">$25</span>/mo:</b> estimates in one tap, scheduling, job photos and invoices</li>
         <li>Cancel any time from your billing page</li>
@@ -127,7 +127,7 @@
 
   <section class="card2" id="signup" aria-labelledby="s-h">
     <h2 id="s-h" style="margin:0 0 4px;font-size:22px">Create your company account</h2>
-    <p class="muted" style="margin:0 0 14px">Already have one? <a href="/roof">Log in</a>, then come back here.</p>
+    <p class="muted" style="margin:0 0 14px">Already have one? <a href="/reports">Log in</a>, then come back here.</p>
     <div class="form">
       <input id="jName" placeholder="Company name" autocomplete="organization" aria-label="Company name">
       <input id="jPhone" placeholder="Phone (optional)" autocomplete="tel" inputmode="tel" aria-label="Phone">
@@ -225,7 +225,7 @@
         <div><div class="small muted">Credits</div><div class="big">${me.member ? "Unlimited" : me.credits}</div></div>
         <div><div class="small muted">Trades</div><div class="big" style="font-size:15px">${esc((me.trades || []).map((k) => (TR.find((t) => t.key === k) || {}).label || k).join(", ") || "None yet")}</div></div>
         ${me.member ? `<div><div class="small muted">CRM portal</div><div class="big" style="font-size:15px">${me.crm ? 'On · <a href="/crm">open</a> · <a href="#" id="crmOff">turn off</a>' : `Off · <a href="#" id="crmOn">add for ${usd(P.crm_price_cents || 2500).replace(".00", "")}/mo</a>`}</div></div>` : ""}
-        <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/roof">Order a report</a>${me.stripe_customer ? `<button class="secondary" id="bill">Billing</button>` : ""}</div>
+        <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/reports">Order a report</a>${me.stripe_customer ? `<button class="secondary" id="bill">Billing</button>` : ""}</div>
       </div>`;
     if (me.member) { $("mBtn").textContent = "You're a member"; $("mBtn").disabled = true; }
     const crmSet = (on) => async (e) => {
@@ -283,8 +283,8 @@
       me = await api(`/api/billing/confirm?session_id=${encodeURIComponent(sid)}`);
       drawAccount();
       $("done").innerHTML = me.member
-        ? `<h2 style="margin:0 0 6px">Welcome aboard.</h2><p class="muted" style="margin:0 0 14px">Your membership is active: unlimited property reports and half-price ZIP lists.</p><a class="btn" href="/roof">Order your first report</a> <a class="btn secondary" href="/data">Browse ZIP lists</a>`
-        : `<h2 style="margin:0 0 6px">Credits added.</h2><p class="muted" style="margin:0 0 14px">You have ${me.credits} report credit${me.credits === 1 ? "" : "s"}.</p><a class="btn" href="/roof">Order a report</a>`;
+        ? `<h2 style="margin:0 0 6px">Welcome aboard.</h2><p class="muted" style="margin:0 0 14px">Your membership is active: unlimited property reports and half-price ZIP lists.</p><a class="btn" href="/reports">Order your first report</a> <a class="btn secondary" href="/data">Browse ZIP lists</a>`
+        : `<h2 style="margin:0 0 6px">Credits added.</h2><p class="muted" style="margin:0 0 14px">You have ${me.credits} report credit${me.credits === 1 ? "" : "s"}.</p><a class="btn" href="/reports">Order a report</a>`;
     } catch (e) { $("done").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
     history.replaceState(null, "", "/join");
   }

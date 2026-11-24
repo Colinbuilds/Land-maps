@@ -135,7 +135,7 @@
         <button class="secondary" id="editBtn">Adjust outline</button>
         <button class="secondary" id="resetBtn">Reset</button>
       </div>
-      <button id="orderBtn">Get roof report (1 credit)</button>
+      <button id="orderBtn">Get report (1 credit)</button>
       <div id="orderMsg" class="small"></div>`;
     let editing = false;
     $("editBtn").addEventListener("click", () => {
@@ -160,7 +160,7 @@
     const ids = [...document.querySelectorAll(".structs input:checked")].map((i) => +i.value);
     if (!ids.length) { $("orderMsg").innerHTML = '<span class="err">Pick at least one building.</span>'; return; }
     $("orderBtn").disabled = true;
-    $("orderMsg").innerHTML = '<span class="spinner"></span>Measuring the roof. The first report in a new area can take about 30 seconds.';
+    $("orderMsg").innerHTML = '<span class="spinner"></span>Measuring the property. The first report in a new area can take about 30 seconds.';
     try {
       Object.values(polys).forEach(({ layer }) => layer.editing.disable());
       const ed = {};

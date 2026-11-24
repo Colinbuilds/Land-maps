@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Estimator Business Dashboard</title>
+<title>Command center</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
 <link rel="stylesheet" href="/static/styles.css?v=9">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="dot"></span><span>Business dashboard</span></div>
-  <div class="contact"><a href="/" target="_blank">Open customer page ↗</a></div>
+  <div class="brand"><span class="dot"></span><span>Command center</span></div>
+  <div class="contact"><a href="/" target="_blank">Open customer site ↗</a></div>
 </header>
 <main>
   <div class="tabs" id="tabs">
@@ -116,7 +116,7 @@
     <div class="grid2">
       <div class="card stack">
         <h2>Add a roofing company</h2>
-        <p class="small muted" style="margin-top:-6px">They log in at <a href="/roof" target="_blank">/roof</a> with this email and password. Each report uses 1 credit.</p>
+        <p class="small muted" style="margin-top:-6px">They log in at <a href="/reports" target="_blank">/roof</a> with this email and password. Each report uses 1 credit.</p>
         <input type="text" id="cName" placeholder="Company name">
         <div class="row"><input type="email" id="cEmail" placeholder="Login email"><input type="tel" id="cPhone" placeholder="Phone (shown on reports)"></div>
         <div class="row"><input type="text" id="cPass" placeholder="Password (at least 6 characters)" minlength="6"><input type="number" id="cCredits" placeholder="Starting credits" min="0"></div>
@@ -198,6 +198,6 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
 <script src="/static/common.js?v=16"></script>
-<script src="/static/business.js?v=10"></script>
+<script src="/static/business.js?v=11"></script>
 </body>
 </html>

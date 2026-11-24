@@ -10,3 +10,4 @@ laspy>=2.5
 python-multipart>=0.0.9
 reportlab>=4.0
 lazrs>=0.6
+pypdfium2>=4.30

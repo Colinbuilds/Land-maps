@@ -1,4 +1,4 @@
-"""Company accounts, credits and stored roof reports (SQLite in the data dir)."""
+"""Company accounts, credits and stored property reports (SQLite in the data dir)."""
 from __future__ import annotations
 
 import hashlib

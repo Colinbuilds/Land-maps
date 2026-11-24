@@ -283,3 +283,59 @@ def sheet_price(trade: str, rates: dict | None, row: dict) -> dict | None:
     if all(v in (None, "") for v in vals):
         return None
     return price_for(trade, rates, sum(float(v or 0) for v in vals))
+
+
+# ------------------------------------------------------------ report sections
+# A report only carries what the company's trades need.
+#   roof        roof area, pitch, lines, waste, facet diagrams
+#   walls       wall areas, siding, windows, gutters, soffit and fascia
+#   elevations  the four side views
+#   yard        lot & yard: lawn, driveway, sidewalk, beds, trees (shaded photo)
+# County facts (lot size, house size, year built, value) come with every report.
+SECTIONS = ("roof", "walls", "elevations", "yard")
+TRADE_SECTIONS = {
+    "lawn": {"yard"}, "snow": {"yard"}, "concrete": {"yard"}, "pressure": {"yard", "walls"},
+    "windows": {"walls", "elevations"}, "gutters": {"roof", "walls"}, "lights": {"roof"},
+    "roofing": {"roof"}, "siding": {"walls", "elevations"}, "solar": {"roof"}, "trees": {"yard"},
+    "landscaping": {"yard"}, "irrigation": {"yard"}, "pest": {"yard", "walls"}, "hvac": {"walls"},
+    "fencing": {"yard"}, "pets": {"yard"}, "pools": {"yard"},
+}
+SECTION_LABELS = {"roof": "Roof", "walls": "Walls & siding", "elevations": "Elevations", "yard": "Lot & yard"}
+_BASIC_YARD = ("lot_sqft", "home_value", "year_built", "living_sqft", "building_sqft")
+_ROOF_KEYS = ("squares", "pitch", "pitch_label", "pitch_table", "pitch_measured", "facets", "lines", "derived",
+              "waste", "suggested_waste", "line_labels", "tree_note")
+
+
+def sections_for(trade_keys) -> set[str]:
+    """Sections a company's trades unlock. No trades (older accounts) = all."""
+    ks = [t for t in (trade_keys or []) if t in TRADE_SECTIONS]
+    if not ks:
+        return set(SECTIONS)
+    out = set()
+    for t in ks:
+        out |= TRADE_SECTIONS[t]
+    return out
+
+
+def filter_report(d: dict, sections: set[str]) -> dict:
+    """The report with only the unlocked sections (the full one is kept on file)."""
+    if set(SECTIONS) <= set(sections):
+        return dict(d, sections=list(SECTIONS))
+    out = dict(d)
+    if "roof" not in sections:
+        for k in _ROOF_KEYS:
+            out.pop(k, None)
+        out["structures"] = [{"name": s.get("name"), "plan_sqft": s.get("plan_sqft")} for s in d.get("structures") or []]
+    if "walls" not in sections:
+        out.pop("walls", None)
+    elif "elevations" not in sections and out.get("walls"):
+        out["walls"] = {k: v for k, v in out["walls"].items() if k != "elevations"}
+    if "yard" not in sections and out.get("yard"):
+        out["yard"] = {**{k: out["yard"].get(k) for k in _BASIC_YARD}, "basic": True}
+    out["sections"] = [s for s in SECTIONS if s in sections]
+    return out
+
+
+def suggested_rates() -> dict:
+    """Every trade at its suggested starting price (demo and sample postcards)."""
+    return clean_rates({r["key"]: {"rate": r["rate"], "min": r["min"], "label": r["price_label"]} for r in price_catalog()})
