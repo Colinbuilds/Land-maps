@@ -6,6 +6,7 @@ Business page:  http://localhost:8000/business
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import threading
@@ -399,6 +400,8 @@ def _session_company(request: Request) -> dict | None:
     """The logged-in company (membership re-checked with Stripe if it lapsed)."""
     cid = accounts.read_session(request.cookies.get(ROOF_COOKIE))
     c = accounts.get_company(cid) if cid else None
+    if c and c.get("disabled"):  # paused by the owner
+        return None
     return billing.refresh(c) if c else None
 
 
@@ -515,21 +518,56 @@ def _report_access(rid: str, request: Request) -> tuple[dict, dict]:
 def roof_report_json(rid: str, request: Request):
     rep, comp = _report_access(rid, request)
     from . import trades
-    trade = request.query_params.get("trade") or comp.get("trade")
-    summary = ({"key": trade, "label": trades.label(trade), "metrics": trades.metrics(trade, rep["data"])}
-               if trade in trades.TRADE_KEYS else None)
+    chosen = _report_trades(request, comp)
+    sums = [{"key": t, "label": trades.label(t), "metrics": trades.metrics(t, rep["data"]),
+             "price": trades.report_price(t, comp.get("rates"), rep["data"])} for t in chosen]
     return {"id": rep["id"], "created": rep["created"], "share_token": rep["share_token"], "data": rep["data"],
             "company": {k: comp.get(k) for k in ("name", "phone", "email", "brand_color")},
-            "trade_summary": summary}
+            "company_trades": comp.get("trades") or [], "trades": chosen,
+            "trade_summaries": sums, "trade_summary": sums[0] if sums else None}
+
+
+def _report_trades(request: Request, comp: dict) -> list[str]:
+    """Trades to show on a report: ?trades=a,b (or ?trade=a), else the company's."""
+    raw = request.query_params.get("trades") or request.query_params.get("trade")
+    return _clean_trades(raw.split(",")) if raw else _clean_trades(comp.get("trades") or [])
 
 
 @app.get("/r/{rid}/pdf")
 def roof_report_pdf(rid: str, request: Request):
     rep, comp = _report_access(rid, request)
-    pdf = render_pdf(rep, comp)
+    pdf = render_pdf(rep, comp, trades=_report_trades(request, comp))
     safe = "".join(ch if ch.isalnum() else "_" for ch in rep["data"].get("address", "roof"))
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="Roof_Report_{safe}_{rep["id"]}.pdf"'})
+
+
+@app.get("/r/{rid}/postcard.pdf")
+def roof_report_postcard(rid: str, request: Request, trade: str | None = None,
+                         headline: str | None = None, offer: str | None = None):
+    """Print-ready 9x6 in postcard (with 1/8 in bleed) for door-to-door mail."""
+    from . import postcard
+    rep, comp = _report_access(rid, request)
+    t = (_clean_trades([trade]) or _report_trades(request, comp) or [None])[0]
+    pdf = postcard.render_postcard(rep["data"], comp, t, (headline or "")[:90] or None, (offer or "")[:220] or None)
+    safe = "".join(ch if ch.isalnum() else "_" for ch in rep["data"].get("address", "home"))
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="Postcard_{safe}_{rep["id"]}.pdf"'})
+
+
+@app.get("/r/{rid}/photo.jpg")
+def roof_report_photo(rid: str, request: Request, trade: str | None = None, lines: int = 1):
+    """High-resolution aerial photo of the property (for your own mail design)."""
+    from . import postcard
+    rep, comp = _report_access(rid, request)
+    t = (_clean_trades([trade]) or _report_trades(request, comp) or [None])[0]
+    try:
+        jpg = postcard.property_photo(rep["data"], t, aspect=1.25, lines=bool(lines), min_px=2400)
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't get the aerial photo: {str(e)[:120]}")
+    safe = "".join(ch if ch.isalnum() else "_" for ch in rep["data"].get("address", "home"))
+    return Response(jpg, media_type="image/jpeg",
+                    headers={"Content-Disposition": f'inline; filename="Aerial_{safe}.jpg"'})
 
 
 # ------------------------------------------------------------- owner (admin)
@@ -630,6 +668,7 @@ class JoinReq(BaseModel):
     password: str = Field(min_length=8, max_length=200)
     phone: str = Field(default="", max_length=40)
     trade: str | None = Field(default=None, max_length=40)
+    trades: list[str] | None = Field(default=None, max_length=30)
 
 
 @app.get("/api/trades")
@@ -642,12 +681,61 @@ class TradeReq(BaseModel):
     trade: str = Field(max_length=40)
 
 
+def _clean_trades(raw) -> list[str]:
+    from . import trades
+    out = []
+    for t in raw or []:
+        if t in trades.TRADE_KEYS and t not in out:
+            out.append(t)
+    return out
+
+
 @app.put("/api/roof/trade")
 def set_trade(body: TradeReq, c: dict = Depends(roof_company)):
+    return set_trades(TradesReq(trades=[body.trade]), c)
+
+
+class TradesReq(BaseModel):
+    trades: list[str] = Field(max_length=30)
+
+
+@app.put("/api/roof/trades")
+def set_trades(body: TradesReq, c: dict = Depends(roof_company)):
+    """Pick the trades your reports are set up for. Members: the monthly
+    price follows the number of trades (2 included)."""
+    ts = _clean_trades(body.trades)
+    if not ts:
+        raise HTTPException(400, "Pick at least one trade.")
+    try:
+        billing.update_member_price(c, ts)
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't update your membership price: {str(e)[:200]}")
+    return accounts.update_company(c["id"], trades=ts)
+
+
+@app.get("/api/pricing-rules")
+def pricing_rules():
+    """What each trade's price is based on, with suggested starting rates."""
     from . import trades
-    if body.trade not in trades.TRADE_KEYS:
-        raise HTTPException(400, "unknown trade")
-    return accounts.update_company(c["id"], trade=body.trade)
+    return {"rules": trades.price_catalog()}
+
+
+class RatesReq(BaseModel):
+    rates: dict
+
+
+@app.put("/api/roof/rates")
+def set_rates(body: RatesReq, c: dict = Depends(roof_company)):
+    """Your prices per trade. Every report, sheet and postcard prices each home from them."""
+    from . import trades
+    return accounts.update_company(c["id"], rates=trades.clean_rates(body.rates))
+
+
+@app.get("/api/billing/trade-price")
+def trade_price(trades: str = ""):
+    ts = _clean_trades(trades.split(","))
+    return {"trades": ts, "paid_trades": billing.paid_trades(ts), "price_cents": billing.member_price_cents(ts),
+            "addon_cents": billing.trade_addon_cents(len(billing.paid_trades(ts)))}
 
 
 @app.get("/join")
@@ -661,6 +749,8 @@ def billing_plans(request: Request):
     c = _session_company(request)
     p = billing.plans()
     return {"member_price_cents": p["member_price_cents"], "credit_price_cents": p["credit_price_cents"],
+            "included_trades": p["included_trades"], "trade_cents": p["trade_cents"],
+            "crm_price_cents": p["crm_price_cents"],
             "list_discount": p["list_discount"], "packs": list(billing.CREDIT_PACKS),
             "stripe": billing.enabled(), "company": c}
 
@@ -671,8 +761,9 @@ def join(body: JoinReq, request: Request):
         raise HTTPException(409, "There's already an account with that email. Log in instead.")
     c = accounts.create_company(body.name, body.email, body.password, 0, body.phone)
     from . import trades as _tr
-    if body.trade in _tr.TRADE_KEYS:
-        c = accounts.update_company(c["id"], trade=body.trade)
+    ts = _clean_trades((body.trades or []) + ([body.trade] if body.trade else []))
+    if ts:
+        c = accounts.update_company(c["id"], trades=ts)
     from . import mailer
     mailer.notify_owner(f"New company sign-up: {c['name']}",
                         f"{c['name']} ({c['email']}, {body.phone or 'no phone'}) created an account.", reply_to=c["email"])
@@ -757,6 +848,11 @@ def _demo_company() -> dict:
         c = accounts.create_company("Demo (owner tests)", _DEMO_EMAIL, secrets.token_urlsafe(24))
     if not c["member"]:
         c = accounts.set_membership(c["id"], time.time() + 3650 * 86400, active=True)
+    if not c.get("rates") or not c.get("trades"):  # every trade, at the suggested prices, so tests show prices
+        from . import trades as _tr
+        c = accounts.update_company(c["id"], trades=[k for k in _tr.TRADE_KEYS if k in _tr.PRICE_RULES],
+                                    rates=_tr.clean_rates({r["key"]: r for r in _tr.price_catalog()}),
+                                    phone=c.get("phone") or "(402) 555-0100", name="Demo Home Services")
     return c
 
 
@@ -794,7 +890,7 @@ def demo_report(body: DemoReq):
         if st.get("edited"):
             checks.append(f"{st['name']}: outline was adjusted by hand")
     return {"id": rid, "token": rep["share_token"], "address": d.get("address"), "city": d.get("city"),
-            "zip": d.get("zip"), "county": d.get("county_name"), "summaries": trades.summaries(d), "checks": checks,
+            "zip": d.get("zip"), "county": d.get("county_name"), "summaries": [{**x, "price": trades.report_price(x["key"], c.get("rates"), d)} for x in trades.summaries(d)], "checks": checks,
             "yard_photo": y.get("photo_jpg") or "", "aerial": d.get("aerial_jpg") or "",
             "roof_sqft": d.get("roof_sqft"), "structures": [s_["name"] for s_ in d.get("structures") or []]}
 
@@ -830,10 +926,9 @@ def demo_premier(body: DemoPremierReq):
         rows = []
         try:
             with _zf.ZipFile(out, "w") as zf, ThreadPoolExecutor(max_workers=4) as ex:
-                for i, (row, pdf) in enumerate(ex.map(lambda it: premier._one(*it), items), 1):
-                    if pdf:
-                        row["file"] = f"{premier._safe(row['address'] + ' ' + (row.get('city') or ''))}.pdf"
-                        zf.writestr(f"reports/{row['file']}", pdf)
+                used = set()
+                for i, (row, pdf, extras) in enumerate(ex.map(lambda it: premier._one(*it), items), 1):
+                    premier.add_home(zf, row, pdf, extras, used)
                     rows.append(row)
                     _demo_jobs[jid]["done"] = i
                 buf = _io.StringIO()
@@ -917,7 +1012,8 @@ def data_sample(body: SampleReq, request: Request):
     if why:
         raise HTTPException(429, why)
     try:
-        rows = datastore.take_sample(body.email, _client_ip(request), z, _classes(body.classes))
+        rows = datastore.add_owners(datastore.take_sample(body.email, _client_ip(request), z, _classes(body.classes)),
+                                    z, _classes(body.classes))
     except LookupError as e:
         raise HTTPException(404, str(e))
     c = _session_company(request)
@@ -1003,9 +1099,121 @@ def data_order_csv(oid: str, t: str | None = None):
     if o["status"] != "ready" and not (o["status"] == "processing" and datastore.dataset_ready(o["zip"], classes)):
         raise HTTPException(409, "Your sheet isn't ready yet.")
     rows = datastore.rows_in_bands(datastore.read_dataset(o["zip"], classes), *datastore.order_bands(o))
+    rows = datastore.add_owners(rows, o["zip"], classes)
     cols = datastore.columns_for(datastore.order_types(o))  # only what they paid for
+    buyer = accounts.company_by_email(o["email"])
+    if buyer:
+        rows, cols = datastore.add_prices(rows, cols, (accounts.get_company(buyer["id"]) or {}).get("rates"))
     return Response(datastore.to_csv(rows, cols), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="properties_{o["zip"]}_{o["id"]}.csv"'})
+
+
+# ---- postcard mail files (Premier lists)
+_mail_jobs: dict = {}
+
+
+class MailReq(BaseModel):
+    trade: str | None = Field(default=None, max_length=40)
+    headline: str | None = Field(default=None, max_length=90)
+    offer: str | None = Field(default=None, max_length=220)
+    name: str | None = Field(default=None, max_length=120)
+    phone: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=200)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+
+
+def _start_mailing(key: str, src, body: MailReq, base: dict) -> dict:
+    """Build a branded postcard mail file from a Premier folder in the background."""
+    from . import postcard
+    comp = {"name": body.name or base.get("name") or "", "phone": body.phone or base.get("phone") or "",
+            "email": body.email or base.get("email") or "", "brand_color": body.color or base.get("brand_color") or "#1d4ed8",
+            "rates": base.get("rates") or {}}
+    trade = (_clean_trades([body.trade]) or _clean_trades(base.get("trades") or []) or [None])[0]
+    sig = hashlib.sha1(json.dumps([comp, trade, body.headline, body.offer], sort_keys=True).encode()).hexdigest()[:10]
+    out = postcard._mail_dir() / f"{key}_{sig}.zip"
+    j = _mail_jobs.get(key)
+    if j and j.get("sig") == sig and j["status"] in ("building", "ready"):
+        return j
+    j = {"status": "ready" if out.exists() else "building", "sig": sig, "path": str(out), "done": 0, "total": 0}
+    _mail_jobs[key] = j
+    if j["status"] == "ready":
+        return j
+
+    def run():
+        try:
+            r = postcard.build_mailing(src, out, comp, trade, body.headline, body.offer,
+                                       progress=lambda i, n: j.update(done=i, total=n))
+            if not r["homes"]:
+                j.update(status="failed", error="This list was built before postcards were added. Ask us to rebuild it.")
+                return
+            j.update(status="ready", **r)
+        except Exception as e:
+            j.update(status="failed", error=str(e)[:200])
+    threading.Thread(target=run, daemon=True, name=f"mail-{key}").start()
+    return j
+
+
+def _mail_view(j: dict | None) -> dict:
+    return {k: v for k, v in (j or {"status": "none"}).items() if k not in ("path", "sig")}
+
+
+def _premier_order(oid: str, t: str | None) -> tuple[dict, object]:
+    from . import premier
+    o = _order_access(oid, t)
+    if (o.get("product") or "") != "premier":
+        raise HTTPException(400, "Postcard mail files come with Premier lists.")
+    classes = o["classes"].split(",") if o["classes"] else ["R"]
+    bands = datastore.order_bands(o)
+    if not premier.ready(o["zip"], classes, bands):
+        raise HTTPException(409, "Your Premier list isn't ready yet.")
+    return o, premier.path(o["zip"], classes, bands)
+
+
+@app.post("/api/data/order/{oid}/mailing")
+def data_order_mailing(oid: str, body: MailReq, t: str | None = None):
+    o, src = _premier_order(oid, t)
+    base = accounts.company_by_email(o["email"]) or {}
+    if base:
+        base = accounts.get_company(base["id"]) or {}
+    return _mail_view(_start_mailing(f"order_{o['id']}", src, body, base))
+
+
+@app.get("/api/data/order/{oid}/mailing")
+def data_order_mailing_status(oid: str, t: str | None = None):
+    o = _order_access(oid, t)
+    return _mail_view(_mail_jobs.get(f"order_{o['id']}"))
+
+
+@app.get("/api/data/order/{oid}/mailing.zip")
+def data_order_mailing_zip(oid: str, t: str | None = None):
+    o = _order_access(oid, t)
+    j = _mail_jobs.get(f"order_{o['id']}")
+    if not j or j["status"] != "ready":
+        raise HTTPException(409, "Your mail file isn't ready yet.")
+    return FileResponse(j["path"], media_type="application/zip", filename=f"postcards_{o['zip']}_{o['id']}.zip")
+
+
+@app.post("/api/demo/premier/{jid}/mailing", dependencies=[Depends(admin)])
+def demo_premier_mailing(jid: str, body: MailReq):
+    j = _demo_jobs.get(jid)
+    if not j or j.get("status") != "ready":
+        raise HTTPException(409, "Build a Premier test first.")
+    return _mail_view(_start_mailing(f"demo_{jid}", j["path"], body, _demo_company()))
+
+
+@app.get("/api/demo/premier/{jid}/mailing", dependencies=[Depends(admin)])
+def demo_premier_mailing_status(jid: str):
+    return _mail_view(_mail_jobs.get(f"demo_{jid}"))
+
+
+@app.get("/api/demo/premier/{jid}/mailing.zip")
+def demo_premier_mailing_zip(jid: str, token: str | None = None):
+    if ADMIN_TOKEN and token != ADMIN_TOKEN:
+        raise HTTPException(403)
+    j = _mail_jobs.get(f"demo_{jid}")
+    if not j or j["status"] != "ready":
+        raise HTTPException(409, "not ready")
+    return FileResponse(j["path"], media_type="application/zip", filename=f"demo_postcards_{jid}.zip")
 
 
 # ---- owner
@@ -1089,3 +1297,556 @@ def admin_data_release_lock(zip_code: str, type_key: str):
 @app.on_event("startup")
 def _resume_prebuild():
     datastore.resume_prebuild()
+
+
+# ================================================================ CRM portal
+from . import crm as _crm  # noqa: E402
+
+
+def crm_company(request: Request) -> dict:
+    """A signed-in company with the CRM add-on."""
+    c = roof_company(request)
+    accounts.touch(c["id"])
+    if not c.get("crm"):
+        raise HTTPException(402, "The CRM portal is a member add-on. Turn it on from your membership page.")
+    return c
+
+
+@app.get("/crm")
+def page_crm():
+    return FileResponse(STATIC / "crm.html")
+
+
+class CrmToggle(BaseModel):
+    on: bool
+
+
+@app.put("/api/roof/crm")
+def set_crm(body: CrmToggle, c: dict = Depends(roof_company)):
+    """Turn the CRM add-on on or off (members; the monthly price follows)."""
+    if body.on and not c["member"]:
+        raise HTTPException(402, "The CRM portal is an add-on for members. Become a member first.")
+    try:
+        billing.update_member_price(c, c.get("trades"), crm=body.on)
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't update your membership price: {str(e)[:200]}")
+    return accounts.update_company(c["id"], crm=1 if body.on else 0)
+
+
+class Profile(BaseModel):
+    phone: str | None = Field(default=None, max_length=40)
+    brand_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    pay_note: str | None = Field(default=None, max_length=300)
+
+
+@app.put("/api/roof/profile")
+def set_profile(body: Profile, c: dict = Depends(roof_company)):
+    return accounts.update_company(c["id"], **body.model_dump())
+
+
+@app.get("/api/crm/home")
+def crm_home(c: dict = Depends(crm_company)):
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    return {"company": c, "today": _crm.schedule(c["id"], today, 1), "week": _crm.schedule(c["id"], today, 7),
+            "money": _crm.money(c["id"]), "stats": _crm.stats(c["id"]),
+            "open_estimates": _crm.list_estimates(c["id"], "sent")[:10],
+            "recent_reports": accounts.list_reports(c["id"], 10)}
+
+
+# ---- customers
+class CustomerIn(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    phone: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=200)
+    address: str | None = Field(default=None, max_length=200)
+    city: str | None = Field(default=None, max_length=80)
+    zip: str | None = Field(default=None, max_length=10)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+@app.get("/api/crm/customers")
+def crm_customers(q: str | None = None, c: dict = Depends(crm_company)):
+    return _crm.list_customers(c["id"], (q or "").strip()[:80] or None)
+
+
+@app.post("/api/crm/customers")
+def crm_add_customer(body: CustomerIn, c: dict = Depends(crm_company)):
+    return _crm.add_customer(c["id"], **body.model_dump())
+
+
+@app.put("/api/crm/customers/{cid}")
+def crm_edit_customer(cid: int, body: CustomerIn, c: dict = Depends(crm_company)):
+    if not _crm.get_customer(c["id"], cid):
+        raise HTTPException(404)
+    return _crm.update_customer(c["id"], cid, **{k: v for k, v in body.model_dump().items() if v is not None})
+
+
+@app.get("/api/crm/customers/{cid}")
+def crm_customer(cid: int, c: dict = Depends(crm_company)):
+    cu = _crm.get_customer(c["id"], cid)
+    if not cu:
+        raise HTTPException(404)
+    co = c["id"]
+    return {"customer": cu,
+            "estimates": [e for e in _crm.list_estimates(co) if e["customer_id"] == cid],
+            "invoices": [i for i in _crm.list_invoices(co) if i["customer_id"] == cid],
+            "jobs": _crm._all("SELECT * FROM jobs WHERE company_id=? AND customer_id=? ORDER BY start DESC", (co, cid)),
+            "photos": _crm.list_photos(co, customer_id=cid),
+            "reports": [r for r in accounts.list_reports(co, 500) if cu.get("pin") and r["pin"] == cu["pin"]]}
+
+
+class FromReport(BaseModel):
+    report_id: str = Field(max_length=20)
+    trades: list[str] | None = None
+
+
+def _own_report(c: dict, rid: str) -> dict:
+    rep = accounts.get_report(rid.upper())
+    if not rep or rep["company_id"] != c["id"]:
+        raise HTTPException(404, "report not found")
+    return rep
+
+
+@app.post("/api/crm/estimates/from-report")
+def crm_estimate_from_report(body: FromReport, c: dict = Depends(crm_company)):
+    """One tap: the report's home becomes a customer and an estimate priced
+    from your rates for each of your trades."""
+    rep = _own_report(c, body.report_id)
+    cu = _crm.customer_from_report(c["id"], rep)
+    items = _crm.estimate_items_from_report(c, rep["data"], _clean_trades(body.trades) or None)
+    return _crm.create_estimate(c["id"], cu["id"], items, report_id=rep["id"])
+
+
+# ---- estimates
+class EstimateIn(BaseModel):
+    customer_id: int | None = None
+    items: list[dict] | None = None
+    note: str | None = Field(default=None, max_length=1000)
+    status: str | None = None
+
+
+@app.get("/api/crm/estimates")
+def crm_estimates(status: str | None = None, c: dict = Depends(crm_company)):
+    return _crm.list_estimates(c["id"], status)
+
+
+@app.post("/api/crm/estimates")
+def crm_add_estimate(body: EstimateIn, c: dict = Depends(crm_company)):
+    if not body.customer_id or not _crm.get_customer(c["id"], body.customer_id):
+        raise HTTPException(400, "Pick a customer.")
+    return _crm.create_estimate(c["id"], body.customer_id, body.items or [], body.note or "")
+
+
+@app.put("/api/crm/estimates/{eid}")
+def crm_edit_estimate(eid: int, body: EstimateIn, c: dict = Depends(crm_company)):
+    if not _crm.get_estimate(c["id"], eid):
+        raise HTTPException(404)
+    return _crm.update_estimate(c["id"], eid, body.items, body.note, body.status)
+
+
+def _send(c: dict, to: str | None, subject: str, text: str) -> bool:
+    if not to:
+        return False
+    from . import mailer
+    mailer.send(to, subject, text, reply_to=c["email"])
+    return mailer.enabled()
+
+
+@app.post("/api/crm/estimates/{eid}/send")
+def crm_send_estimate(eid: int, request: Request, c: dict = Depends(crm_company)):
+    """Mark sent and return the homeowner's link (emailed when we have their email)."""
+    e = _crm.get_estimate(c["id"], eid)
+    if not e:
+        raise HTTPException(404)
+    cu = _crm.get_customer(c["id"], e["customer_id"])
+    link = f"{_base_url(request)}/e/{e['token']}"
+    _crm.update_estimate(c["id"], eid, status="sent")
+    emailed = _send(c, cu.get("email"), f"Your estimate from {c['name']}",
+                    f"Hi{(' ' + cu['name'].split()[0]) if cu.get('name') else ''},\n\n{c['name']} sent you an estimate "
+                    f"for {cu.get('address') or 'your property'}: ${e['total_cents'] / 100:,.2f}.\n\n"
+                    f"See it and accept it here:\n{link}\n\n{c['name']} {c.get('phone') or ''}")
+    return {"link": link, "emailed": emailed,
+            "sms": f"Hi, it's {c['name']}. Your estimate for {cu.get('address') or 'your property'} is ready: {link}"}
+
+
+class ScheduleIn(BaseModel):
+    start: str
+    repeat: str = "none"
+    time: str | None = None
+    until: str | None = None
+
+
+@app.post("/api/crm/estimates/{eid}/schedule")
+def crm_schedule_estimate(eid: int, body: ScheduleIn, c: dict = Depends(crm_company)):
+    """Turn an accepted estimate into jobs on the schedule: one job per line."""
+    e = _crm.get_estimate(c["id"], eid)
+    if not e:
+        raise HTTPException(404)
+    out = []
+    try:
+        for it in e["items"] or [{"desc": "Job", "price_cents": e["total_cents"], "qty": 1}]:
+            out.append(_crm.create_job(c["id"], e["customer_id"], it["desc"].split(" (")[0], body.start, body.repeat,
+                                       int(it["price_cents"] * it.get("qty", 1)), body.time, body.until,
+                                       it.get("trade"), e["id"]))
+    except ValueError:
+        raise HTTPException(400, "Dates must look like 2026-05-01.")
+    if e["status"] in ("draft", "sent"):
+        _crm.update_estimate(c["id"], eid, status="accepted")
+    return out
+
+
+# ---- public estimate and invoice pages (homeowner)
+@app.get("/e/{tok}")
+def page_estimate(tok: str):
+    return FileResponse(STATIC / "estimate.html")
+
+
+@app.get("/i/{tok}")
+def page_invoice(tok: str):
+    return FileResponse(STATIC / "estimate.html")
+
+
+def _public_doc(kind: str, d: dict) -> dict:
+    co = accounts.get_company(d["company_id"]) or {}
+    cu = _crm.get_customer(d["company_id"], d["customer_id"]) or {}
+    out = {"kind": kind, "id": d["id"], "items": d["items"], "total_cents": d["total_cents"], "note": d.get("note"),
+           "status": d["status"], "created": d["created"], "due": d.get("due"),
+           "company": {k: co.get(k) for k in ("name", "phone", "email", "brand_color", "pay_note")},
+           "customer": {k: cu.get(k) for k in ("name", "address", "city", "zip")}}
+    if kind == "estimate" and d.get("report_id"):
+        rep = accounts.get_report(d["report_id"])
+        if rep:
+            out["aerial_jpg"] = (rep["data"].get("yard") or {}).get("photo_jpg") or rep["data"].get("aerial_jpg")
+    return out
+
+
+@app.get("/api/public/estimate/{tok}")
+def public_estimate(tok: str):
+    e = _crm.estimate_by_token(tok)
+    if not e:
+        raise HTTPException(404, "This estimate link isn't valid.")
+    return _public_doc("estimate", e)
+
+
+class Answer(BaseModel):
+    accept: bool
+
+
+@app.post("/api/public/estimate/{tok}")
+def public_answer(tok: str, body: Answer):
+    e = _crm.answer_estimate(tok, body.accept)
+    if not e:
+        raise HTTPException(404)
+    co = accounts.get_company(e["company_id"]) or {}
+    cu = _crm.get_customer(e["company_id"], e["customer_id"]) or {}
+    from . import mailer
+    word = "ACCEPTED" if body.accept else "declined"
+    mailer.send(co.get("email"), f"Estimate {word}: {cu.get('address') or cu.get('name') or ''}",
+                f"{cu.get('name') or 'Your customer'} {word} your estimate (${e['total_cents'] / 100:,.2f}) for "
+                f"{cu.get('address') or 'their property'}.\n\nOpen your CRM to put it on the schedule.")
+    return _public_doc("estimate", e)
+
+
+@app.get("/api/public/invoice/{tok}")
+def public_invoice(tok: str):
+    i = _crm.invoice_by_token(tok)
+    if not i:
+        raise HTTPException(404, "This invoice link isn't valid.")
+    return _public_doc("invoice", i)
+
+
+# ---- jobs and schedule
+class JobIn(BaseModel):
+    customer_id: int
+    title: str = Field(max_length=120)
+    start: str
+    repeat: str = "none"
+    time: str | None = Field(default=None, max_length=10)
+    until: str | None = None
+    price: float = Field(default=0, ge=0, le=1_000_000)
+    trade: str | None = None
+    notes: str | None = Field(default="", max_length=1000)
+
+
+@app.post("/api/crm/jobs")
+def crm_add_job(body: JobIn, c: dict = Depends(crm_company)):
+    if not _crm.get_customer(c["id"], body.customer_id):
+        raise HTTPException(400, "Pick a customer.")
+    try:
+        return _crm.create_job(c["id"], body.customer_id, body.title, body.start, body.repeat,
+                               int(round(body.price * 100)), body.time, body.until, body.trade, None, body.notes or "")
+    except ValueError:
+        raise HTTPException(400, "Dates must look like 2026-05-01.")
+
+
+class JobEdit(BaseModel):
+    title: str | None = Field(default=None, max_length=120)
+    start: str | None = None
+    repeat: str | None = None
+    time: str | None = None
+    until: str | None = None
+    price: float | None = Field(default=None, ge=0, le=1_000_000)
+    notes: str | None = Field(default=None, max_length=1000)
+    active: bool | None = None
+
+
+@app.put("/api/crm/jobs/{jid}")
+def crm_edit_job(jid: int, body: JobEdit, c: dict = Depends(crm_company)):
+    if not _crm.get_job(c["id"], jid):
+        raise HTTPException(404)
+    f = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "price" in f:
+        f["price_cents"] = int(round(f.pop("price") * 100))
+    if "active" in f:
+        f["active"] = 1 if f["active"] else 0
+    return _crm.update_job(c["id"], jid, **f)
+
+
+@app.get("/api/crm/schedule")
+def crm_schedule(start: str | None = None, days: int = 7, c: dict = Depends(crm_company)):
+    import datetime as _dt
+    try:
+        return _crm.schedule(c["id"], start or _dt.date.today().isoformat(), max(1, min(days, 62)))
+    except ValueError:
+        raise HTTPException(400, "bad date")
+
+
+class VisitIn(BaseModel):
+    job_id: int
+    day: str
+    status: str = Field(pattern=r"^(done|skipped|scheduled)$")
+    invoice: bool = False
+    note: str | None = Field(default="", max_length=500)
+
+
+@app.post("/api/crm/visits")
+def crm_visit(body: VisitIn, c: dict = Depends(crm_company)):
+    try:
+        return _crm.mark_visit(c["id"], body.job_id, body.day, body.status, body.note or "", body.invoice)
+    except LookupError:
+        raise HTTPException(404)
+    except ValueError:
+        raise HTTPException(400, "bad date")
+
+
+# ---- photos
+@app.post("/api/crm/photos")
+async def crm_add_photo(file: UploadFile = File(...), customer_id: int | None = Form(None), job_id: int | None = Form(None),
+                        day: str | None = Form(None), kind: str = Form(""), caption: str = Form(""),
+                        c: dict = Depends(crm_company)):
+    data = await file.read()
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(413, "Photos up to 15 MB.")
+    if customer_id and not _crm.get_customer(c["id"], customer_id):
+        raise HTTPException(404)
+    if job_id:
+        j = _crm.get_job(c["id"], job_id)
+        if not j:
+            raise HTTPException(404)
+        customer_id = customer_id or j["customer_id"]
+    try:
+        return _crm.add_photo(c["id"], data, "jpg", customer_id, job_id, day, kind, caption)
+    except Exception:
+        raise HTTPException(400, "That file isn't a photo we can read.")
+
+
+@app.get("/api/crm/photos")
+def crm_photos(customer_id: int | None = None, job_id: int | None = None, c: dict = Depends(crm_company)):
+    return _crm.list_photos(c["id"], customer_id, job_id)
+
+
+@app.get("/api/crm/photos/{pid}.jpg")
+def crm_photo(pid: int, c: dict = Depends(crm_company)):
+    f = _crm.photo_file(c["id"], pid)
+    if not f or not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="image/jpeg")
+
+
+@app.delete("/api/crm/photos/{pid}")
+def crm_delete_photo(pid: int, c: dict = Depends(crm_company)):
+    _crm.delete_photo(c["id"], pid)
+    return {"ok": True}
+
+
+# ---- invoices and money
+class InvoiceIn(BaseModel):
+    customer_id: int
+    items: list[dict]
+    note: str | None = Field(default="", max_length=1000)
+    due_days: int = Field(default=14, ge=0, le=120)
+
+
+@app.post("/api/crm/invoices")
+def crm_add_invoice(body: InvoiceIn, c: dict = Depends(crm_company)):
+    if not _crm.get_customer(c["id"], body.customer_id):
+        raise HTTPException(400, "Pick a customer.")
+    return _crm.create_invoice(c["id"], body.customer_id, body.items, body.note or "", None, body.due_days)
+
+
+@app.get("/api/crm/invoices")
+def crm_invoices(status: str | None = None, c: dict = Depends(crm_company)):
+    return _crm.list_invoices(c["id"], status)
+
+
+class InvoiceStatus(BaseModel):
+    status: str = Field(pattern=r"^(paid|unpaid|void)$")
+    method: str | None = Field(default=None, max_length=40)
+
+
+@app.put("/api/crm/invoices/{iid}")
+def crm_set_invoice(iid: int, body: InvoiceStatus, c: dict = Depends(crm_company)):
+    if not _crm.get_invoice(c["id"], iid):
+        raise HTTPException(404)
+    return _crm.set_invoice(c["id"], iid, body.status, body.method)
+
+
+@app.post("/api/crm/invoices/{iid}/send")
+def crm_send_invoice(iid: int, request: Request, c: dict = Depends(crm_company)):
+    i = _crm.get_invoice(c["id"], iid)
+    if not i:
+        raise HTTPException(404)
+    cu = _crm.get_customer(c["id"], i["customer_id"])
+    link = f"{_base_url(request)}/i/{i['token']}"
+    emailed = _send(c, cu.get("email"), f"Invoice from {c['name']}: ${i['total_cents'] / 100:,.2f}",
+                    f"Hi{(' ' + cu['name'].split()[0]) if cu.get('name') else ''},\n\nHere's your invoice from {c['name']} "
+                    f"for ${i['total_cents'] / 100:,.2f}, due {i['due']}.\n\n{link}\n\n{c.get('pay_note') or ''}")
+    return {"link": link, "emailed": emailed,
+            "sms": f"Hi, it's {c['name']}. Your invoice for ${i['total_cents'] / 100:,.2f} is here: {link}"}
+
+
+@app.get("/api/crm/money")
+def crm_money(c: dict = Depends(crm_company)):
+    return _crm.money(c["id"])
+
+
+# ================================================================ owner command center
+def _summary(c: dict, st: dict, cs: dict, orders: list[dict]) -> dict:
+    """One company at a glance: a sentence, monthly value and flags."""
+    from . import trades as T
+    now = time.time()
+    tl = [(T.label(t) or t).split(" &")[0].split(" (")[0] for t in c.get("trades") or []]
+    mrr = billing.member_price_cents(c.get("trades"), crm=bool(c.get("crm"))) if c["member"] else 0
+    paid_orders = [o for o in orders if o["status"] in ("processing", "ready")]
+    parts = []
+    parts.append((", ".join(tl[:4]) + (" +" + str(len(tl) - 4) if len(tl) > 4 else "") + " company") if tl else "No trades picked yet")
+    if c["member"]:
+        parts.append(f"member at ${mrr / 100:,.0f}/mo" + (" with CRM" if c.get("crm") else ""))
+    else:
+        parts.append(f"pay as you go, {c['credits']} credit{'s' if c['credits'] != 1 else ''} left")
+    n = st.get("reports", 0)
+    parts.append(f"{n} report{'' if n == 1 else 's'} ({st.get('reports_30d', 0)} in 30 days)")
+    if paid_orders:
+        parts.append(f"{len(paid_orders)} ZIP list{'s' if len(paid_orders) != 1 else ''} (${sum(o['amount_cents'] for o in paid_orders) / 100:,.0f})")
+    if cs.get("customers"):
+        parts.append(f"CRM: {cs['customers']} customer{'' if cs['customers'] == 1 else 's'}, ${cs['paid_cents'] / 100:,.0f} collected")
+    flags = []
+    if c.get("disabled"):
+        flags.append(("Paused", "bad"))
+    if c["member"] and c.get("member_until") and c["member_until"] - now < 7 * 86400:
+        flags.append(("Renewal due in under 7 days", "warn"))
+    if c.get("plan") == "member" and not c["member"]:
+        flags.append(("Membership lapsed", "bad"))
+    if not c["member"] and c["credits"] <= 0:
+        flags.append(("Out of credits", "warn"))
+    seen = c.get("last_seen") or st.get("last_report") or c["created"]
+    if now - seen > 30 * 86400:
+        flags.append(("Inactive 30+ days", "warn"))
+    if any(o["status"] == "awaiting_payment" for o in orders):
+        flags.append(("Unpaid ZIP order", "warn"))
+    return {"text": ". ".join(parts) + ".", "mrr_cents": mrr, "flags": [{"text": t, "level": l} for t, l in flags],
+            "orders_cents": sum(o["amount_cents"] for o in paid_orders), "last_active": seen}
+
+
+def _orders_by_email() -> dict:
+    out: dict = {}
+    for o in datastore.list_orders(5000):
+        out.setdefault(o["email"].lower(), []).append(o)
+    return out
+
+
+@app.get("/command")
+def page_command():
+    return FileResponse(STATIC / "command.html")
+
+
+@app.get("/api/admin/library", dependencies=[Depends(admin)])
+def admin_library():
+    """Every company with a short summary, for the owner's command center."""
+    stats = accounts.company_stats()
+    orders = _orders_by_email()
+    rows = []
+    for c in accounts.list_companies():
+        if c["email"] == _DEMO_EMAIL:
+            continue
+        st, cs = stats.get(c["id"], {}), _crm.stats(c["id"])
+        rows.append({**{k: c.get(k) for k in ("id", "name", "email", "phone", "credits", "member", "plan", "member_until",
+                                               "trades", "crm", "disabled", "created", "last_seen", "brand_color",
+                                               "admin_notes")},
+                     "stats": st, "crm_stats": cs, "summary": _summary(c, st, cs, orders.get(c["email"].lower(), []))})
+    tot = {"companies": len(rows), "members": sum(1 for r in rows if r["member"]),
+           "crm": sum(1 for r in rows if r["crm"] and r["member"]),
+           "mrr_cents": sum(r["summary"]["mrr_cents"] for r in rows),
+           "orders_cents": sum(r["summary"]["orders_cents"] for r in rows),
+           "reports_30d": sum((r["stats"] or {}).get("reports_30d", 0) for r in rows),
+           "flagged": sum(1 for r in rows if r["summary"]["flags"])}
+    return {"companies": rows, "totals": tot}
+
+
+@app.get("/api/admin/companies/{cid}/detail", dependencies=[Depends(admin)])
+def admin_company_detail(cid: int):
+    c = accounts.get_company(cid)
+    if not c:
+        raise HTTPException(404)
+    st = accounts.company_stats(cid).get(cid, {})
+    orders = _orders_by_email().get(c["email"].lower(), [])
+    return {"company": c, "summary": _summary(c, st, _crm.stats(cid), orders), "stats": st,
+            "crm_stats": _crm.stats(cid), "money": _crm.money(cid) if c.get("crm") else None,
+            "ledger": accounts.ledger(cid, 30), "reports": accounts.list_reports(cid, 25),
+            "orders": [{k: o.get(k) for k in ("id", "zip", "count", "amount_cents", "status", "product", "created")}
+                       for o in orders[:25]],
+            "plan_price_cents": billing.member_price_cents(c.get("trades"), crm=bool(c.get("crm")))}
+
+
+class AdminCompanyEdit(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    phone: str | None = Field(default=None, max_length=40)
+    brand_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    password: str | None = Field(default=None, min_length=6)
+    trades: list[str] | None = None
+    crm: bool | None = None
+    disabled: bool | None = None
+    admin_notes: str | None = Field(default=None, max_length=5000)
+    comp_months: int | None = Field(default=None, ge=0, le=60)   # free membership for N months (0 ends it)
+
+
+@app.patch("/api/admin/companies/{cid}/manage", dependencies=[Depends(admin)])
+def admin_manage_company(cid: int, body: AdminCompanyEdit):
+    """Everything about one company from the command center."""
+    c = accounts.get_company(cid)
+    if not c:
+        raise HTTPException(404)
+    f = body.model_dump()
+    months = f.pop("comp_months")
+    if f.get("trades") is not None:
+        f["trades"] = _clean_trades(f["trades"])
+    for k in ("crm", "disabled"):
+        if f.get(k) is not None:
+            f[k] = 1 if f[k] else 0
+    accounts.update_company(cid, **{k: v for k, v in f.items() if v is not None})
+    if months is not None:
+        accounts.set_membership(cid, time.time() + months * 30.44 * 86400 if months else time.time(), active=bool(months))
+    return admin_company_detail(cid)
+
+
+@app.post("/api/admin/companies/{cid}/view-as", dependencies=[Depends(admin)])
+def admin_view_as(cid: int, request: Request):
+    """Open the company's portal as them (sets their session in your browser)."""
+    c = accounts.get_company(cid)
+    if not c:
+        raise HTTPException(404)
+    r = JSONResponse({"ok": True, "go": "/crm" if c.get("crm") else "/roof"})
+    r.set_cookie(ROOF_COOKIE, accounts.make_session(cid, days=1), max_age=86400, httponly=True, samesite="lax",
+                 secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
+    return r

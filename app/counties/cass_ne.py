@@ -47,6 +47,8 @@ COUNTY = {
         "zoom": 19,
         "max_zoom": 19,
         "source": "Esri World Imagery",
+        # Esri's terms don't allow it on printed mail: postcards use NAIP
+        "print_ok": False,
     },
     "lidar": {
         "type": "ept",

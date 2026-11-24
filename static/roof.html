@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Roof Reports</title>
+<title>Property Reports</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css">
 <link rel="stylesheet" href="/static/styles.css?v=9">
@@ -13,12 +13,22 @@
   .structs label { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
   .structs label:first-child { border-top: 0; }
   #login { max-width: 420px; margin: 40px auto; }
+  .tradebar { margin: 0 0 14px; }
+  .tchips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .tchips button { min-height: 36px; padding: 6px 12px; font-size: 13.5px; font-weight: 600; border-radius: 99px;
+    background: #eef2f7; color: #0f172a; box-shadow: none; border: 1.5px solid transparent; }
+  .tchips button.on { background: var(--accent); color: #fff; }
+  .rate { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)); gap: 8px; align-items: end; padding: 8px 0; border-top: 1px solid var(--line); }
+  .rate:first-child { border-top: 0; }
+  .rate label { font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
+  .rate input { min-height: 40px; font-size: 16px; }
+  @media (max-width: 560px) { .rate { grid-template-columns: 1fr 1fr 1fr; } .rate .rt { grid-column: 1 / -1; } }
 </style>
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="dot"></span><span id="coName">Roof Reports</span></div>
-  <div class="contact"><span id="credits" class="credits"></span> <button class="secondary hidden" id="logout" style="margin-left:10px;padding:6px 10px">Log out</button></div>
+  <div class="brand"><span class="dot"></span><span id="coName">Property Reports</span></div>
+  <div class="contact"><a href="/crm" style="margin-right:10px;font-weight:600">CRM</a><span id="credits" class="credits"></span> <button class="secondary hidden" id="logout" style="margin-left:10px;padding:6px 10px">Log out</button></div>
 </header>
 <main>
   <div class="card stack hidden" id="login">
@@ -32,6 +42,15 @@
   <section id="app" class="hidden">
     <h1>Order a property report</h1>
     <p class="lead">Type an address, check the buildings to include, and get the full report in under a minute: roof lengths, pitch and facet diagrams, wall areas and elevations for siding, gutters, and the lot and yard measurements. Each report uses 1 credit.</p>
+    <div class="tradebar">
+      <div class="small"><b>Show numbers for</b> <span class="muted">(your trades; tap to switch)</span> <a href="/join" class="small" style="margin-left:6px">Change trades</a></div>
+      <div class="tchips" id="tradeBar"></div>
+    </div>
+    <details class="card stack" id="ratesCard" style="margin:0 0 14px">
+      <summary style="cursor:pointer;font-weight:700">Your prices <span class="small muted" style="font-weight:400">(set once: every report, sheet and postcard prices each home for you)</span></summary>
+      <div id="ratesBox"></div>
+      <div class="row"><button id="ratesSave" style="flex:0 0 auto">Save prices</button><span id="ratesMsg" class="small"></span></div>
+    </details>
     <div class="search">
       <input id="addr" type="text" autocomplete="off" placeholder="Property address">
       <div class="suggest hidden" id="suggest"></div>
@@ -53,6 +72,6 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
 <script src="/static/common.js?v=15"></script>
-<script src="/static/roof.js?v=15"></script>
+<script src="/static/roof.js?v=16"></script>
 </body>
 </html>

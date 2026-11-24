@@ -38,7 +38,9 @@ def init():
         """)
         have = {r[1] for r in con.execute("PRAGMA table_info(companies)")}
         for col, typ in (("plan", "TEXT"), ("member_until", "REAL"), ("stripe_customer", "TEXT"),
-                         ("stripe_sub", "TEXT"), ("trade", "TEXT")):
+                         ("stripe_sub", "TEXT"), ("trade", "TEXT"), ("trades", "TEXT"), ("rates", "TEXT"),
+                         ("crm", "INTEGER"), ("disabled", "INTEGER"), ("last_seen", "REAL"),
+                         ("admin_notes", "TEXT"), ("pay_note", "TEXT")):
             if col not in have:
                 con.execute(f"ALTER TABLE companies ADD COLUMN {col} {typ}")
 
@@ -94,6 +96,12 @@ def _public(row) -> dict:
     d = dict(row)
     d.pop("pw_hash", None)
     d["member"] = is_member(d)
+    # every trade the company picked (older accounts: the single `trade`)
+    d["trades"] = [t for t in (d.get("trades") or d.get("trade") or "").split(",") if t]
+    try:  # the company's prices per trade (see trades.PRICE_RULES)
+        d["rates"] = json.loads(d.get("rates") or "{}")
+    except ValueError:
+        d["rates"] = {}
     return d
 
 
@@ -141,7 +149,7 @@ def get_company(cid: int) -> dict | None:
 def login(email: str, password: str) -> dict | None:
     with _db() as con:
         r = con.execute("SELECT * FROM companies WHERE email=?", (email.strip().lower(),)).fetchone()
-    if r and check_pw(password, r["pw_hash"]):
+    if r and check_pw(password, r["pw_hash"]) and not r["disabled"]:
         return _public(r)
     return None
 
@@ -154,7 +162,13 @@ def list_companies() -> list[dict]:
 
 
 def update_company(cid: int, **fields) -> dict | None:
-    allowed = {k: v for k, v in fields.items() if k in ("name", "phone", "brand_color", "trade") and v is not None}
+    if isinstance(fields.get("trades"), (list, tuple)):
+        fields["trade"] = fields["trades"][0] if fields["trades"] else ""
+        fields["trades"] = ",".join(fields["trades"])
+    if isinstance(fields.get("rates"), dict):
+        fields["rates"] = json.dumps(fields["rates"])
+    allowed = {k: v for k, v in fields.items() if k in ("name", "phone", "brand_color", "trade", "trades", "rates",
+               "crm", "disabled", "admin_notes", "pay_note", "credits") and v is not None}
     if fields.get("password"):
         allowed["pw_hash"] = hash_pw(fields["password"])
     if allowed:
@@ -194,6 +208,32 @@ def spend_and_save(cid: int, report: dict) -> str:
                     (rid, cid, report.get("pin"), report.get("address"), time.time(),
                      secrets.token_urlsafe(16), json.dumps(report)))
     return rid
+
+
+def touch(cid: int):
+    """Remember when a company was last active (at most once a minute)."""
+    with _db() as con:
+        con.execute("UPDATE companies SET last_seen=? WHERE id=? AND (last_seen IS NULL OR last_seen < ?)",
+                    (time.time(), cid, time.time() - 60))
+
+
+def company_stats(cid: int | None = None) -> dict:
+    """{company id: {reports, reports_30d, last_report}} for the owner's library."""
+    q = """SELECT company_id, COUNT(*) n, SUM(created > ?) n30, MAX(created) last FROM reports
+           {} GROUP BY company_id"""
+    args = [time.time() - 30 * 86400]
+    w = ""
+    if cid is not None:
+        w, args = "WHERE company_id=?", args + [cid]
+    with _db() as con:
+        return {r["company_id"]: {"reports": r["n"], "reports_30d": r["n30"] or 0, "last_report": r["last"]}
+                for r in con.execute(q.format(w), args)}
+
+
+def ledger(cid: int, limit: int = 50) -> list[dict]:
+    with _db() as con:
+        return [dict(r) for r in con.execute("SELECT delta, reason, ts FROM ledger WHERE company_id=? ORDER BY ts DESC LIMIT ?",
+                                             (cid, limit))]
 
 
 def has_credit(cid: int) -> bool:

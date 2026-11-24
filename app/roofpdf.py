@@ -64,13 +64,15 @@ def _ft(v):
     return f"{v:,.0f} ft"
 
 
-def render_pdf(rep: dict, company: dict) -> bytes:
+def render_pdf(rep: dict, company: dict, trades: list[str] | None = None) -> bytes:
     d = rep["data"]
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     c.setTitle(f"Property Report - {d['address']}")
     has_facets = any(st.get("facet_polys") for st in d["structures"])
     extra = []  # pages after the first three, in order
+    if trades:
+        extra.append("trades")
     if has_facets:
         extra += ["pitch", "area"]
     if d.get("walls"):
@@ -229,7 +231,9 @@ def render_pdf(rep: dict, company: dict) -> bytes:
     c.showPage()
     for i, kind in enumerate(extra):
         pg = 4 + i
-        if kind in ("pitch", "area"):
+        if kind == "trades":
+            _trades_page(c, rep, company, d, trades, pg, total_pages)
+        elif kind in ("pitch", "area"):
             _facet_page(c, rep, company, d, kind, pg, total_pages)
         elif kind == "walls":
             _walls_page(c, rep, company, d["walls"], total_pages, pg)
@@ -548,4 +552,54 @@ def _yard_page(c, rep, company, y, page, total_pages):
         c.drawString(x0 + 14, yy, k)
         c.drawRightString(W - M, yy, v)
         yy -= 17
+    c.showPage()
+
+
+def _metric_text(m: dict) -> str:
+    v, u = m["value"], m.get("unit") or ""
+    if u == "$":
+        return f"${float(v):,.0f}"
+    if isinstance(v, (int, float)):
+        return f"{v:,.2f} {u}".strip() if u == "sq" else f"{v:,.0f} {u}".strip()
+    return f"{v} {u}".strip()
+
+
+def _trades_page(c, rep, company, d, trade_keys, page, total_pages):
+    """The numbers each of the company's trades quotes from, one block per trade."""
+    from .trades import label, metrics
+    _header(c, rep, company, page, total_pages)
+    _title(c, "For your trades", H - 92)
+    c.setFont("Helvetica", 9)
+    c.setFillColor(colors.HexColor("#475569"))
+    c.drawString(M, H - 108, "The measurements each of your services is priced from. Full details on the other pages.")
+    col_w = (W - 2 * M - 24) / 2
+    cols = [M, M + col_w + 24]
+    ys = [H - 136, H - 136]
+    for key in trade_keys:
+        ms = [m for m in metrics(key, d) if not m.get("beta")]
+        if not ms:
+            continue
+        from .trades import report_price
+        pr = report_price(key, company.get("rates"), d)
+        need = 26 + 16 * len(ms) + (18 if pr else 0)
+        i = 0 if ys[0] >= ys[1] else 1
+        if ys[i] - need < 50:
+            i = 1 - i
+            if ys[i] - need < 50:
+                c.showPage()
+                _header(c, rep, company, page, total_pages)
+                ys = [H - 80, H - 80]
+                i = 0
+        x, y = cols[i], ys[i]
+        c.setFillColor(_hex(company.get("brand_color") or "#1d4ed8"))
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(x, y, label(key) or key)
+        y -= 18
+        if pr:
+            c.setFillColor(colors.HexColor("#0f172a"))
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(x, y, f"Your price: {pr['text']}")
+            y -= 18
+        y = _kv_table(c, [(m["label"], _metric_text(m)) for m in ms], x + 4, y, col_w=(col_w - 90, 82), lh=16)
+        ys[i] = y - 16
     c.showPage()

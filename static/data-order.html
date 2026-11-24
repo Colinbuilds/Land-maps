@@ -47,16 +47,61 @@
         <div class="progress"><div style="width:${pct}%"></div></div>`;
       setTimeout(load, 5000);
     } else if (o.status === "ready") {
-      body = `<p><b>Your sheet is ready.</b> One row per property.</p>
+      const prem = o.product === "premier";
+      body = prem
+        ? `<p><b>Your Premier list is ready.</b> One folder: a full report PDF for every home, named by address, with an index spreadsheet (owner names included).</p>
+           <a class="btn" href="/api/data/order/${esc(o.id)}/csv?t=${encodeURIComponent(t)}">Download folder (.zip)</a>
+           <div class="card stack" style="margin-top:16px;background:var(--field,#f3f5f0)">
+             <h2 style="margin:0">Postcards for door-to-door mail</h2>
+             <p class="small muted" style="margin:0">Print-ready 9 x 6 in postcards (1/8 in bleed) for every home: the aerial photo, its measurements, the owner's name and <b>your price</b> from the prices in your account. You handle printing and postage. Also includes every photo and a mail-merge spreadsheet for your own design.</p>
+             <div class="row" style="flex-wrap:wrap">
+               <select id="mTrade" aria-label="Trade"></select>
+               <input id="mName" placeholder="Company name (default: your account)">
+               <input id="mPhone" placeholder="Phone (default: your account)" inputmode="tel">
+             </div>
+             <input id="mHead" placeholder="Headline (optional), e.g. Your yard, measured." maxlength="90">
+             <input id="mOffer" placeholder="Back message (optional)" maxlength="220">
+             <div class="row"><button id="mBuild" style="flex:0 0 auto">Make postcards</button></div>
+             <div id="mMsg" class="small"></div>
+           </div>`
+        : `<p><b>Your sheet is ready.</b> One row per property, with the owner's name and your price for each home when your account has prices set.</p>
         <a class="btn" href="/api/data/order/${esc(o.id)}/csv?t=${encodeURIComponent(t)}">Download CSV</a>`;
     }
     $("box").innerHTML = head + body;
+    if (document.getElementById("mBuild")) wireMail(o);
     const pay = document.getElementById("pay");
     if (pay) pay.addEventListener("click", async () => {
       pay.disabled = true;
       try { const r = await api(`/api/data/order/${oid}/checkout?t=${encodeURIComponent(t)}`, { method: "POST" }); location.href = r.checkout_url; }
       catch (e) { pay.disabled = false; alert(e.message); }
     });
+  }
+  async function wireMail(o) {
+    let TR = [];
+    try { TR = (await api("/api/trades")).trades.filter((x) => !/beta/i.test(x.label)); } catch (e) {}
+    $("mTrade").innerHTML = TR.map((x) => `<option value="${esc(x.key)}">${esc(x.label)}</option>`).join("");
+    const q = `?t=${encodeURIComponent(t)}`;
+    const show = (j) => {
+      if (j.status === "building") {
+        const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+        $("mMsg").innerHTML = `<span class="spinner"></span>Making postcards${j.total ? ` (${j.done.toLocaleString()} of ${j.total.toLocaleString()})` : ""}…<div class="progress"><div style="width:${pct}%"></div></div>`;
+        setTimeout(poll, 3000);
+      } else if (j.status === "ready") {
+        $("mMsg").innerHTML = `<a class="btn" href="/api/data/order/${esc(o.id)}/mailing.zip${q}">Download postcards (${(j.homes || 0).toLocaleString()} homes)</a>`;
+      } else if (j.status === "failed") {
+        $("mMsg").innerHTML = `<span class="err">${esc(j.error || "Something went wrong.")}</span>`;
+      }
+    };
+    const poll = async () => { try { show(await api(`/api/data/order/${o.id}/mailing${q}`)); } catch (e) {} };
+    $("mBuild").addEventListener("click", async () => {
+      $("mMsg").innerHTML = '<span class="spinner"></span>Starting…';
+      try {
+        show(await api(`/api/data/order/${o.id}/mailing${q}`, { method: "POST", json: {
+          trade: $("mTrade").value, name: $("mName").value.trim() || null, phone: $("mPhone").value.trim() || null,
+          headline: $("mHead").value.trim() || null, offer: $("mOffer").value.trim() || null } }));
+      } catch (e) { $("mMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    });
+    poll();
   }
   load();
 })();

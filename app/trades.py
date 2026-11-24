@@ -178,3 +178,108 @@ def metrics(key: str, d: dict) -> list[dict]:
 def summaries(d: dict) -> list[dict]:
     """Every trade's headline numbers for one report."""
     return [{"key": k, "label": l, "premier": prem, "metrics": metrics(k, d)} for k, l, _t, prem, _p in TRADES]
+
+
+# ------------------------------------------------------------------ pricing
+# Each company sets its rates once per trade; every report, sheet, Premier
+# mail file and postcard then shows "your price" for that home automatically.
+# price = max(minimum, base + rate x (measurement / per))
+# ``sheet``: sheet columns summed for the measurement (ZIP sheets);
+# ``report``: how to read it from a full report.
+def _y(k):
+    return lambda d: (d.get("yard") or {}).get(k)
+
+
+def _w(k):
+    return lambda d: (d.get("walls") or {}).get(k)
+
+
+def _sum(*fs):
+    def f(d):
+        vals = [g(d) for g in fs]
+        return None if all(v in (None, "") for v in vals) else sum(float(v or 0) for v in vals)
+    return f
+
+
+PRICE_RULES = {
+    # trade: (measured, unit, per, default label, default rate $, default minimum $, sheet columns, report getter)
+    "lawn": ("lawn + parkway", "sq ft", 1000, "per mow", 6.0, 35.0, ["lawn_sqft", "parkway_sqft"],
+             _sum(_y("lawn_sqft"), _y("parkway_sqft"))),
+    "snow": ("driveway + sidewalk", "sq ft", 1000, "per push", 40.0, 45.0, ["driveway_sqft", "sidewalk_sqft"],
+             _sum(_y("driveway_sqft"), _y("sidewalk_sqft"))),
+    "concrete": ("driveway", "sq ft", 1, "to seal", 0.25, 150.0, ["driveway_sqft"], _y("driveway_sqft")),
+    "pressure": ("driveway + patios + sidewalk", "sq ft", 1, "per wash", 0.20, 125.0,
+                 ["driveway_sqft", "other_hardscape_sqft", "sidewalk_sqft"],
+                 _sum(_y("driveway_sqft"), _y("other_hardscape_sqft"), _y("sidewalk_sqft"))),
+    "windows": ("windows", "windows", 1, "per cleaning", 8.0, 150.0, ["est_windows"], _w("est_openings")),
+    "gutters": ("gutters", "ft", 1, "per cleaning", 1.25, 125.0, [], _w("gutter_ft")),
+    "lights": ("roofline", "ft", 1, "installed", 3.0, 300.0, [],
+               lambda d: sum(float((d.get("lines") or {}).get(k) or 0) for k in ("eave", "rake", "ridge")) or None),
+    "roofing": ("roof", "squares", 1, "to replace", 450.0, 6000.0, [], lambda d: d.get("squares")),
+    "siding": ("house walls", "sq ft", 1, "installed", 8.0, 5000.0, ["wall_sqft"], _w("gross_wall_sqft")),
+    "solar": ("roof", "sq ft", 1, "system estimate", 0.0, 0.0, [], lambda d: d.get("roof_sqft")),
+    "trees": ("trees", "trees", 1, "per trim", 150.0, 250.0, ["tree_count"], _y("tree_count")),
+    "landscaping": ("beds", "sq ft", 1, "to mulch", 0.75, 150.0, ["beds_sqft"], _y("beds_sqft")),
+    "irrigation": ("lawn + parkway", "sq ft", 1000, "to winterize", 5.0, 60.0, ["lawn_sqft", "parkway_sqft"],
+                   _sum(_y("lawn_sqft"), _y("parkway_sqft"))),
+    "pest": ("lot", "sq ft", 1000, "per treatment", 4.0, 69.0, ["lot_sqft"], _y("lot_sqft")),
+    "hvac": ("house", "sq ft", 1000, "tune-up", 0.0, 99.0, ["living_sqft"], _y("living_sqft")),
+}
+
+
+def price_catalog() -> list[dict]:
+    """What each trade's price is based on, with suggested starting rates."""
+    out = []
+    for k, (what, unit, per, lab, rate, mn, cols, _g) in PRICE_RULES.items():
+        out.append({"key": k, "label": label(k), "measured": what, "unit": unit, "per": per,
+                    "basis": f"per {per:,} {unit}" if per != 1 else f"per {unit.rstrip('s') if unit.endswith('s') and unit != 'sq ft' else unit}",
+                    "price_label": lab, "rate": rate, "min": mn, "sheet_ok": bool(cols)})
+    return out
+
+
+def clean_rates(raw: dict | None) -> dict:
+    out = {}
+    for k, v in (raw or {}).items():
+        if k not in PRICE_RULES or not isinstance(v, dict):
+            continue
+        try:
+            r = {"rate": max(0.0, float(v.get("rate") or 0)), "min": max(0.0, float(v.get("min") or 0)),
+                 "base": max(0.0, float(v.get("base") or 0)),
+                 "label": str(v.get("label") or PRICE_RULES[k][3])[:30]}
+        except (TypeError, ValueError):
+            continue
+        if r["rate"] or r["min"] or r["base"]:
+            out[k] = r
+    return out
+
+
+def price_for(trade: str, rates: dict | None, amount) -> dict | None:
+    """{"price": dollars, "label": "per mow", "text": "$48 per mow"} or None."""
+    r = (rates or {}).get(trade)
+    if not r or amount in (None, ""):
+        return None
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return None
+    if amount <= 0 and not r.get("min"):
+        return None
+    per = PRICE_RULES[trade][2]
+    p = max(float(r.get("min") or 0), float(r.get("base") or 0) + float(r.get("rate") or 0) * amount / per)
+    p = round(p) if p >= 20 else round(p, 2)
+    return {"price": p, "label": r.get("label") or PRICE_RULES[trade][3],
+            "text": f"${p:,.0f} {r.get('label') or PRICE_RULES[trade][3]}" if p >= 20 else f"${p:,.2f} {r.get('label')}"}
+
+
+def report_price(trade: str, rates: dict | None, d: dict) -> dict | None:
+    return price_for(trade, rates, PRICE_RULES[trade][7](d)) if trade in PRICE_RULES else None
+
+
+def sheet_price(trade: str, rates: dict | None, row: dict) -> dict | None:
+    """Price from a ZIP-sheet row (None when the sheet lacks the columns)."""
+    if trade not in PRICE_RULES or not PRICE_RULES[trade][6]:
+        return None
+    vals = [row.get(c) for c in PRICE_RULES[trade][6]]
+    if all(v in (None, "") for v in vals):
+        return None
+    return price_for(trade, rates, sum(float(v or 0) for v in vals))

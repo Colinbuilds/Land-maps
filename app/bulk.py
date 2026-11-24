@@ -65,6 +65,42 @@ def _zip_parcels(zip_code: str, classes: list[str], limit: int | None = None):
     return out[:limit] if limit else out
 
 
+def owner_info(m, f) -> dict:
+    """Owner name and mailing address from the assessor record. Empty for
+    counties where using public-record names for marketing isn't allowed
+    (``owner_names: False`` in the county config, e.g. Kansas, K.S.A. 45-230)."""
+    if m.c.get("owner_names", True) is False:
+        return {"owner": "", "owner_mailing": ""}
+    a = m.parcel_attrs(f["attributes"])
+    raw = f["attributes"]
+    mf = {**{"mail_address": "ADDRESS1", "mail_city": "OWNER_CITY", "mail_state": "OWNER_STAT", "mail_zip": "OWNER_ZIP"},
+          **{k: v for k, v in m.c["parcels"]["fields"].items() if k.startswith("mail_")}}
+    parts = [str(raw.get(v) or "").strip() for v in (mf["mail_address"], mf["mail_city"], mf["mail_state"], mf["mail_zip"])]
+    mailing = ", ".join(p for p in [parts[0], " ".join(p for p in parts[1:] if p)] if p)
+    return {"owner": " ".join(str(a.get("owner") or "").split()), "owner_mailing": mailing}
+
+
+_owner_cache: dict = {}
+
+
+def zip_owners(zip_code: str, classes: list[str]) -> dict:
+    """{property id: owner info} for a ZIP, from the county parcel records
+    (no measuring; cached for a day). Fills owner names into every sheet,
+    old or new, at download time."""
+    key = (zip_code, tuple(sorted(classes)))
+    hit = _owner_cache.get(key)
+    if hit and time.time() - hit[0] < 86400:
+        return hit[1]
+    out = {}
+    for cid, f in _zip_parcels(zip_code, classes):
+        m = measurer_for(cid)
+        pin = m.parcel_attrs(f["attributes"]).get("pin")
+        if pin is not None:
+            out[counties.make_pid(cid, pin)] = owner_info(m, f)
+    _owner_cache[key] = (time.time(), out)
+    return out
+
+
 def preview(zip_code: str, classes: list[str]) -> dict:
     zp = zip_polygon(zip_code)
     from .gis import get_json as _gj

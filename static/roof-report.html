@@ -21,6 +21,8 @@
   tr.sug td { background: #dcfce7; font-weight: 700; }
   .actions { display: flex; gap: 10px; flex-wrap: wrap; }
   @media print { .actions { display: none; } body { background: #fff; } .card { break-inside: avoid; } }
+  .tradegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .tradegrid .card { margin: 0; }
 </style>
 </head>
 <body>
@@ -37,7 +39,12 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
   const rid = location.pathname.split("/")[2];
   const t = new URLSearchParams(location.search).get("t");
   let r;
-  try { r = await api(`/api/roof/report/${rid}${t ? `?t=${encodeURIComponent(t)}` : ""}`); }
+  const qp = new URLSearchParams();
+  if (t) qp.set("t", t);
+  const trq = new URLSearchParams(location.search).get("trades");
+  if (trq) qp.set("trades", trq);
+  const qs = qp.toString() ? `?${qp}` : "";
+  try { r = await api(`/api/roof/report/${rid}${qs}`); }
   catch (e) { document.getElementById("main").innerHTML = `<div class="card err">${esc(e.message)}</div>`; return; }
   const d = r.data, c = r.company, L = d.lines;
   document.documentElement.style.setProperty("--accent", c.brand_color || "#1d4ed8");
@@ -49,7 +56,9 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
   const sug = d.waste.find((w) => w.suggested);
   document.getElementById("main").innerHTML = `
     <div class="actions">
-      <a class="btn" href="/r/${r.id}/pdf${t ? `?t=${encodeURIComponent(t)}` : ""}" target="_blank">Download PDF</a>
+      <a class="btn" href="/r/${r.id}/pdf${qs}" target="_blank">Download PDF</a>
+      <a class="btn secondary" href="/r/${r.id}/postcard.pdf?${new URLSearchParams({ ...(t ? { t } : {}), ...(r.trades && r.trades[0] ? { trade: r.trades[0] } : {}) })}" target="_blank" title="Print-ready 9 x 6 in postcard with 1/8 in bleed">Mail postcard</a>
+      <a class="btn secondary" href="/r/${r.id}/photo.jpg${t ? `?t=${encodeURIComponent(t)}` : ""}" target="_blank">Aerial photo</a>
       <button class="secondary" id="copy">Copy share link</button>
       <span class="small muted" id="copied"></span>
     </div>
@@ -57,7 +66,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
       <h1 style="margin-bottom:2px">Property Measurement Report</h1>
       <div class="muted">${esc(d.address)}, ${esc((d.city || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()))} NE ${esc(d.zip || "")} · Parcel ${esc(String(d.pin).split(':').pop())}${d.county_name ? ` · ${esc(d.county_name)}` : ''} · Report ${esc(r.id)} · ${new Date(r.created * 1000).toLocaleDateString(undefined, { dateStyle: "long" })}</div>
     </div>
-    ${tradeCard(r.trade_summary)}
+    ${(r.trade_summaries || []).length ? `<div class="tradegrid">${r.trade_summaries.map(tradeCard).join("")}</div>` : tradeCard(r.trade_summary)}
     <div class="cover">
       <div class="card">${d.aerial_jpg ? `<img alt="Aerial photo of the property" src="data:image/jpeg;base64,${d.aerial_jpg}">` : ""}</div>
       <div class="card">
@@ -240,6 +249,7 @@ function tradeCard(t) {
   const shown = t.metrics.filter((m) => !m.beta);
   return `<div class="card">
       <div class="muted small">For ${esc(t.label)}</div>
+      ${t.price ? `<div style="margin:4px 0 2px"><span class="big" style="font-size:26px">${esc(t.price.text.split(" ")[0])}</span> <span class="muted">${esc(t.price.label)} · your price</span></div>` : ""}
       <table class="kv" style="margin-top:6px">${shown.map((m) => `<tr><td>${esc(m.label)}</td><td>${v(m)}</td></tr>`).join("")}</table>
     </div>`;
 }
