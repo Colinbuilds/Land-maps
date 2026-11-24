@@ -59,7 +59,7 @@
     <b>Owner access</b><input id="tok" type="password" placeholder="Admin token (ESTIMATOR_ADMIN_TOKEN)"><button id="tokGo">Open</button><div id="tokMsg" class="small"></div>
   </div>
   <div id="app" class="hidden">
-    <h1>Your companies</h1>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h1>Your companies</h1><div class="acts"><button class="secondary" id="tryIt">Try the customer site</button><button id="addCo">+ Add company</button></div></div>
     <div class="muted" id="when"></div>
     <div class="tot" id="tot"></div>
     <div class="tools">
@@ -96,6 +96,65 @@
       .map(([k, l]) => `<button class="chip ${filter === k ? "on" : ""}" data-f="${k}">${l}</button>`).join("");
     draw();
   }
+  $("tryIt").onclick = () => {
+    const bg = document.createElement("div");
+    bg.className = "drawer-bg"; bg.id = "dr";
+    bg.innerHTML = `<div class="drawer"><div class="acts" style="justify-content:space-between"><h2>Try the customer site</h2><button class="secondary" id="tx">Close</button></div>
+      <p class="muted">See exactly what a company sees. This signs this browser in to your private test company (not in your list, never billed). Log out on the customer site to end it.</p>
+      <div class="box stack">
+        <div><div class="small muted" style="margin-bottom:6px">Be a company in these trades</div><div class="tchips" id="tTr">${TR.map((t) => `<button data-k="${t.key}" class="${t.key === "lawn" ? "on" : ""}">${esc(tl(t.key))}</button>`).join("")}</div></div>
+        <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="tMem" checked style="width:auto"> Member (unlimited reports). Off = pay as you go with 5 credits</label>
+        <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="tCrm" checked style="width:auto"> CRM portal on</label>
+        <div class="acts"><button id="tGo">Open the customer site</button><button class="secondary" id="tGoCrm">Open straight to the CRM</button></div>
+        <div id="tMsg" class="small"></div>
+      </div></div>`;
+    document.body.appendChild(bg);
+    const shut = () => bg.remove();
+    bg.onclick = (e) => { if (e.target === bg) shut(); };
+    $("tx").onclick = shut;
+    const picked = new Set(["lawn"]);
+    $("tTr").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; const k = b.dataset.k; picked.has(k) ? picked.delete(k) : picked.add(k); b.classList.toggle("on"); };
+    const go = (where) => async () => {
+      if (!picked.size) { $("tMsg").innerHTML = '<span class="err">Pick at least one trade.</span>'; return; }
+      try {
+        await api("/api/admin/test-drive", { method: "POST", json: { trades: [...picked], member: $("tMem").checked, crm: $("tCrm").checked } });
+        window.open(where, "_blank"); shut();
+      } catch (e) { $("tMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
+    $("tGo").onclick = go("/");
+    $("tGoCrm").onclick = go("/crm");
+  };
+  $("addCo").onclick = () => {
+    const bg = document.createElement("div");
+    bg.className = "drawer-bg"; bg.id = "dr";
+    bg.innerHTML = `<div class="drawer"><div class="acts" style="justify-content:space-between"><h2>Add a company</h2><button class="secondary" id="ax">Close</button></div>
+      <div class="box stack">
+        <input id="aName" placeholder="Company name"><input id="aEmail" type="email" placeholder="Login email">
+        <input id="aPhone" placeholder="Phone (optional)"><input id="aPass" type="text" placeholder="Temporary password (8+ characters)" value="${Math.random().toString(36).slice(2, 10)}A1">
+        <div><div class="small muted" style="margin-bottom:6px">Trades</div><div class="tchips" id="aTr">${TR.map((t) => `<button data-k="${t.key}">${esc(tl(t.key))}</button>`).join("")}</div></div>
+        <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="aCrm" checked style="width:auto"> CRM portal on</label>
+        <select id="aComp"><option value="0">No free membership (they pay at /join)</option><option value="1">Free membership: 1 month</option><option value="3">Free membership: 3 months</option><option value="12">Free membership: 12 months</option></select>
+        <input id="aCred" type="number" placeholder="Report credits to give (optional)">
+        <button id="aGo">Create company</button><div id="aMsg" class="small"></div>
+        <p class="small muted">Send them the login email and temporary password. They sign in at <b>/reports</b> or <b>/crm</b>.</p>
+      </div></div>`;
+    document.body.appendChild(bg);
+    const shut = () => bg.remove();
+    bg.onclick = (e) => { if (e.target === bg) shut(); };
+    $("ax").onclick = shut;
+    const picked = new Set();
+    $("aTr").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; const k = b.dataset.k; picked.has(k) ? picked.delete(k) : picked.add(k); b.classList.toggle("on"); };
+    $("aGo").onclick = async () => {
+      try {
+        const c = await api("/api/admin/companies", { method: "POST", json: { name: $("aName").value.trim(), email: $("aEmail").value.trim(),
+          password: $("aPass").value, phone: $("aPhone").value.trim(), credits: +$("aCred").value || 0 } });
+        const body = { trades: [...picked], crm: $("aCrm").checked };
+        if (+$("aComp").value) body.comp_months = +$("aComp").value;
+        await api(`/api/admin/companies/${c.id}/manage`, { method: "PATCH", json: body });
+        shut(); await load(); open(c.id);
+      } catch (e) { $("aMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
+  };
   $("tokGo").onclick = () => { localStorage.setItem("adminToken", $("tok").value.trim()); load(); };
   $("filters").addEventListener("click", (e) => { const b = e.target.closest("[data-f]"); if (b) { filter = b.dataset.f; load(); } });
   $("q").oninput = draw; $("sort").onchange = draw;

@@ -177,7 +177,7 @@ function measurementCards(r, keys, labels) {
     { href: "/join", label: "Membership", icon: "⭐" },
   ];
   const isActive = (h) => (h === "/" ? here === "/" : h === "/command" ? here === "/command"
-    : here === h || here.startsWith(h + "/") || (h === "/reports" && (here === "/roof" || here.startsWith("/r/"))));
+    : here === h || here.startsWith(h + "/") || (h === "/reports" && here.startsWith("/r/")));
   const build = () => {
     const header = document.querySelector("header.top");
     if (header && !header.querySelector(".site-nav")) {

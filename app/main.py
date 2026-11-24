@@ -7,6 +7,7 @@ Business page:  http://localhost:8000/business
 from __future__ import annotations
 
 import hashlib
+import hmac
 import io
 import json
 import threading
@@ -92,7 +93,7 @@ def page_postcards():
 
 @app.get("/reports")
 def page_reports():
-    return FileResponse(STATIC / "roof.html")
+    return FileResponse(STATIC / "reports.html")
 
 
 # --------------------------------------------------------------- public API
@@ -433,14 +434,9 @@ def roof_company(request: Request) -> dict:
     return c
 
 
-@app.get("/roof")
-def page_roof():
-    return FileResponse(STATIC / "roof.html")
-
-
 @app.get("/r/{rid}")
-def page_roof_report(rid: str):
-    return FileResponse(STATIC / "roof-report.html")
+def page_report(rid: str):
+    return FileResponse(STATIC / "report.html")
 
 
 class RoofLogin(BaseModel):
@@ -451,6 +447,8 @@ class RoofLogin(BaseModel):
 @app.post("/api/roof/login")
 def roof_login(body: RoofLogin, request: Request):
     c = accounts.login(body.email, body.password)
+    if not c and ADMIN_TOKEN and hmac.compare_digest(body.password.encode(), ADMIN_TOKEN.encode()):
+        c = _owner_login(body.email)
     if not c:
         raise HTTPException(401, "wrong email or password")
     r = JSONResponse(c)
@@ -894,6 +892,67 @@ def _demo_company() -> dict:
                                     rates=_tr.suggested_rates(),
                                     phone=c.get("phone") or "(402) 555-0100", name="Demo Home Services")
     return c
+
+
+_TEST_EMAIL = "testdrive@owner.invalid"
+
+
+def _owner_login(email: str) -> dict | None:
+    """The owner signing in on the customer site with the admin key:
+    a company's email = that company; "admin" or blank = the owner's own
+    test company (member, CRM on)."""
+    e = (email or "").strip().lower()
+    if e and e != "admin":
+        return accounts.company_by_email(e)
+    c = accounts.company_by_email(_TEST_EMAIL)
+    if not c:
+        from . import trades as _tr
+        c = accounts.create_company("Test drive (owner)", _TEST_EMAIL, secrets.token_urlsafe(24), phone="(402) 555-0199")
+        accounts.update_company(c["id"], trades=["lawn"], rates=_tr.suggested_rates())
+    accounts.update_company(c["id"], crm=1, disabled=0)
+    if not (accounts.get_company(c["id"]) or {}).get("member"):
+        accounts.set_membership(c["id"], time.time() + 3650 * 86400, active=True)
+    return accounts.get_company(c["id"])
+
+
+class TestDrive(BaseModel):
+    trades: list[str] = Field(default_factory=lambda: ["lawn"], max_length=30)
+    member: bool = True
+    crm: bool = True
+
+
+@app.post("/api/admin/test-drive", dependencies=[Depends(admin)])
+def admin_test_drive(body: TestDrive, request: Request):
+    """Use the customer site as a company would: signs this browser in to a
+    private owner test company set up with the trades, plan and CRM you pick."""
+    from . import trades as _tr
+    c = accounts.company_by_email(_TEST_EMAIL)
+    if not c:
+        c = accounts.create_company("Test drive (owner)", _TEST_EMAIL, secrets.token_urlsafe(24),
+                                    phone="(402) 555-0199")
+    ts = _clean_trades(body.trades) or ["lawn"]
+    accounts.update_company(c["id"], trades=ts, crm=1 if body.crm else 0,
+                            rates=c.get("rates") or _tr.suggested_rates(), disabled=0)
+    if body.member:
+        accounts.set_membership(c["id"], time.time() + 3650 * 86400, active=True)
+    else:  # see the pay-as-you-go side, with a few credits to try reports
+        accounts.set_membership(c["id"], time.time(), active=False)
+        if (accounts.get_company(c["id"]) or {}).get("credits", 0) < 3:
+            accounts.add_credits(c["id"], 5, "owner test drive")
+    r = JSONResponse({"ok": True, "go": "/", "company": accounts.get_company(c["id"])})
+    r.set_cookie(ROOF_COOKIE, accounts.make_session(c["id"], days=1), max_age=86400, httponly=True, samesite="lax",
+                 secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
+    return r
+
+
+@app.get("/test-drive", dependencies=[Depends(admin)])
+def test_drive_link(request: Request, trades: str = "lawn", member: int = 1, crm: int = 1, go: str = "/"):
+    """One link for the owner's phone: /test-drive?token=KEY&trades=lawn,snow"""
+    r = admin_test_drive(TestDrive(trades=trades.split(","), member=bool(member), crm=bool(crm)), request)
+    dest = go if go in ("/", "/reports", "/crm", "/data", "/join") else "/"
+    out = RedirectResponse(dest, status_code=303)
+    out.headers["set-cookie"] = r.headers["set-cookie"]
+    return out
 
 
 @app.get("/demo")
@@ -1819,7 +1878,7 @@ def admin_library():
     orders = _orders_by_email()
     rows = []
     for c in accounts.list_companies():
-        if c["email"] == _DEMO_EMAIL:
+        if c["email"] in (_DEMO_EMAIL, _TEST_EMAIL):
             continue
         st, cs = stats.get(c["id"], {}), _crm.stats(c["id"])
         rows.append({**{k: c.get(k) for k in ("id", "name", "email", "phone", "credits", "member", "plan", "member_until",
@@ -1902,7 +1961,8 @@ def admin_postcards():
             "priced_offer_default": postcard.PRICED_OFFER, "layout_defaults": postcard.LAYOUT_DEFAULTS,
             "trades": [t for t in trades.catalog() if t["key"] in trades.PRICE_RULES],
             "samples": [{"id": r["id"], "address": r["address"], "company": r["company"]} for r in accounts.list_reports(None, 30)],
-            "companies": [{"id": c["id"], "name": c["name"]} for c in accounts.list_companies() if c["email"] != _DEMO_EMAIL]}
+            "companies": [{"id": c["id"], "name": c["name"]} for c in accounts.list_companies()
+                          if c["email"] not in (_DEMO_EMAIL, _TEST_EMAIL)]}
 
 
 class StudioIn(BaseModel):
