@@ -29,7 +29,7 @@
   <div class="contact" id="coContact"></div>
 </header>
 <main class="stack" id="main"><p class="muted"><span class="spinner"></span>Loading report…</p></main>
-<script src="/static/common.js?v=15"></script>
+<script src="/static/common.js?v=17"></script>
 <script>
 const COLORS = { ridge: "#dc2626", hip: "#ea580c", valley: "#2563eb", rake: "#16a34a", eave: "#a16207", step_flashing: "#9333ea", flashing: "#0891b2" };
 const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flashing"];
@@ -57,6 +57,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
       <h1 style="margin-bottom:2px">Property Measurement Report</h1>
       <div class="muted">${esc(d.address)}, ${esc((d.city || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()))} NE ${esc(d.zip || "")} · Parcel ${esc(String(d.pin).split(':').pop())}${d.county_name ? ` · ${esc(d.county_name)}` : ''} · Report ${esc(r.id)} · ${new Date(r.created * 1000).toLocaleDateString(undefined, { dateStyle: "long" })}</div>
     </div>
+    ${tradeCard(r.trade_summary)}
     <div class="cover">
       <div class="card">${d.aerial_jpg ? `<img alt="Aerial photo of the property" src="data:image/jpeg;base64,${d.aerial_jpg}">` : ""}</div>
       <div class="card">
@@ -229,6 +230,17 @@ function yardCard(d) {
         </table>
         ${y.quality === "review" ? `<p class="small" style="color:#8a5300">Some yard areas on this lot may need a quick check on site${y.note ? `: ${esc(y.note)}` : ""}.</p>` : ""}</div>
       </div>
+    </div>`;
+}
+
+function tradeCard(t) {
+  if (!t || !t.metrics || !t.metrics.length) return "";
+  const v = (m) => m.unit === "$" ? "$" + Number(m.value).toLocaleString()
+    : (typeof m.value === "number" ? m.value.toLocaleString() + (m.unit ? " " + m.unit : "") : esc(String(m.value)) + (m.unit ? " " + m.unit : ""));
+  const shown = t.metrics.filter((m) => !m.beta);
+  return `<div class="card">
+      <div class="muted small">For ${esc(t.label)}</div>
+      <table class="kv" style="margin-top:6px">${shown.map((m) => `<tr><td>${esc(m.label)}</td><td>${v(m)}</td></tr>`).join("")}</table>
     </div>`;
 }
 

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Address Demo</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
+<link rel="stylesheet" href="/static/styles.css?v=16">
+<style>
+  body.dm { --bg: #f6f7f2; --card: #fff; --ink: #15342b; --muted: #55665c; --field: #f3f5f0; --line: rgba(21,52,43,.10);
+    --acc-text: #166534; --acc-soft: #e4f3e7;
+    --shadow: 0 1px 2px rgba(16,40,30,.04), 0 12px 32px -12px rgba(16,40,30,.16);
+    --display: "Manrope", system-ui, sans-serif;
+    font: 16px/1.55 "DM Sans", system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+  .dm main { max-width: 1180px; margin: 0 auto; padding: 24px 18px 90px; }
+  .dm h1, .dm h2, .dm h3 { font-family: var(--display); letter-spacing: -0.03em; }
+  .dm h1 { font-size: clamp(28px, 5vw, 40px); margin: 4px 0 6px; }
+  .dm .box { background: var(--card); border-radius: 22px; box-shadow: var(--shadow); padding: 20px; margin-top: 16px; }
+  .dm .search { max-width: none; }
+  .dm .search input, .dm input.tok { width: 100%; font-size: 17px; padding: 14px 16px; border-radius: 14px; border: 1.5px solid transparent; background: var(--field); }
+  .dm .row2 { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; }
+  .dm button, .dm .btn { border-radius: 99px; padding: 13px 20px; font-weight: 700; min-height: 48px; }
+  .dm .pics { display: grid; gap: 12px; grid-template-columns: 1fr; }
+  @media (min-width: 760px) { .dm .pics { grid-template-columns: 1fr 1fr; } }
+  .dm .pics figure { margin: 0; }
+  .dm .pics img { width: 100%; border-radius: 16px; display: block; }
+  .dm .pics figcaption { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .dm .checks { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  .dm .checks li { background: #fff7e6; color: #7a4b00; border-radius: 12px; padding: 9px 12px; font-size: 14.5px; }
+  .dm .checks li.ok { background: var(--acc-soft); color: var(--acc-text); }
+  .dm .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .dm .tradebar { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 12px; }
+  .dm .tradebar button { min-height: 38px; padding: 7px 13px; font-size: 13.5px; font-weight: 600; background: var(--field); color: var(--ink); }
+  .dm .tradebar button.on { background: var(--ink); color: #fff; }
+  .dm .tgrid { display: grid; gap: 12px; grid-template-columns: 1fr; }
+  @media (min-width: 700px) { .dm .tgrid { grid-template-columns: 1fr 1fr; } }
+  @media (min-width: 1040px) { .dm .tgrid { grid-template-columns: 1fr 1fr 1fr; } }
+  .dm .tcard { background: var(--card); border-radius: 18px; box-shadow: var(--shadow); padding: 16px; }
+  .dm .tcard h3 { margin: 0 0 2px; font-size: 17px; }
+  .dm .tcard .sub { font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+  .dm .tcard table { width: 100%; font-size: 14px; }
+  .dm .tcard td { padding: 5px 2px; border-bottom: 1px solid var(--line); white-space: normal; }
+  .dm .tcard td:last-child { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .dm .beta { font-size: 11px; font-weight: 700; background: #fff1d6; color: #8a5300; border-radius: 99px; padding: 1px 7px; margin-left: 6px; }
+  .dm .pill { font-size: 11.5px; font-weight: 700; border-radius: 99px; padding: 2px 8px; background: var(--acc-soft); color: var(--acc-text); }
+  .dm .progress { height: 10px; background: #e7ece9; border-radius: 99px; overflow: hidden; margin-top: 8px; }
+  .dm .progress > div { height: 100%; background: #16a34a; width: 0; transition: width .4s; }
+</style>
+</head>
+<body class="dm">
+<header class="top">
+  <div class="brand"><span class="dot"></span><span>Address demo</span></div>
+  <div class="contact">Owner tool: free, not visible to customers</div>
+</header>
+<main>
+  <h1>Test any address, for every trade</h1>
+  <p class="muted" style="margin:0">Runs the full property report (roof, walls &amp; elevations, lot &amp; yard), shows what each trade would get, and lets you test a Premier package. Check the lines before you sell.</p>
+
+  <div class="box">
+    <div class="row2">
+      <div class="search">
+        <input id="addr" type="text" autocomplete="off" placeholder="Type an address in our counties" aria-label="Address">
+        <div class="suggest hidden" id="suggest"></div>
+      </div>
+      <button id="run">Run report</button>
+    </div>
+    <details style="margin-top:10px"><summary class="small muted">Owner token</summary>
+      <input class="tok" id="tok" type="password" placeholder="ESTIMATOR_ADMIN_TOKEN" style="margin-top:8px" aria-label="Owner token">
+    </details>
+    <div id="msg" class="small" style="margin-top:8px"></div>
+  </div>
+
+  <div id="out" class="hidden">
+    <div class="box">
+      <h2 id="oTitle" style="margin:0"></h2>
+      <div class="muted small" id="oSub"></div>
+      <ul class="checks" id="oChecks"></ul>
+      <div class="actions">
+        <a class="btn" id="oReport" target="_blank">Open full report</a>
+        <a class="btn secondary" id="oPdf" target="_blank">Download PDF</a>
+      </div>
+      <div class="pics" style="margin-top:14px">
+        <figure><img id="oAerial" alt="Aerial photo with the measured roof outline"><figcaption>Roof outline used for the measurements</figcaption></figure>
+        <figure><img id="oYard" alt="Aerial photo with lawn, driveway, sidewalk, beds, trees and fences shaded"><figcaption>Yard: lawn green, driveway blue, sidewalk pink, patios yellow, structures red, beds purple, trees outlined, fences orange (beta)</figcaption></figure>
+      </div>
+    </div>
+
+    <div class="box">
+      <h2 style="margin:0 0 4px">What each trade gets</h2>
+      <p class="small muted" style="margin:0 0 10px">"Full report" trades get their numbers from the property report (single pulls, members, Premier lists). Others also work from the standard ZIP sheet. Items marked beta aren't sold yet.</p>
+      <div class="tradebar" id="tradebar"></div>
+      <div class="tgrid" id="tgrid"></div>
+    </div>
+
+    <div class="box">
+      <h2 style="margin:0 0 4px">Premier package test</h2>
+      <p class="small muted" style="margin:0 0 10px">Builds the Premier folder (one PDF per home plus index.csv) for this home and its nearest neighbours, exactly as a buyer would get it. About a minute per 4 homes.</p>
+      <div class="actions" style="margin-top:0">
+        <select id="pN" aria-label="Homes in the test" style="width:auto;min-height:48px"><option value="1">Just this home</option><option value="5" selected>This home + 4 neighbours</option><option value="10">This home + 9 neighbours</option></select>
+        <button id="pRun">Build test package</button>
+      </div>
+      <div id="pMsg" class="small" style="margin-top:8px"></div>
+      <div class="progress hidden" id="pBar"><div></div></div>
+    </div>
+  </div>
+</main>
+<script src="/static/common.js?v=16"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  try { $("tok").value = localStorage.getItem("adminToken") || ""; } catch (e) {}
+  $("tok").addEventListener("change", () => { try { localStorage.setItem("adminToken", $("tok").value.trim()); } catch (e) {} });
+  let chosen = null, current = null, tradeSel = "all";
+  wireAutocomplete($("addr"), $("suggest"), (s) => { chosen = s; run(); });
+  $("run").addEventListener("click", () => run());
+  $("addr").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+  const fmt = (m) => {
+    if (m.unit === "$") return "$" + Number(m.value).toLocaleString();
+    if (typeof m.value === "number") return m.value.toLocaleString() + (m.unit ? " " + m.unit : "");
+    return esc(String(m.value)) + (m.unit ? " " + m.unit : "");
+  };
+
+  async function run() {
+    const q = $("addr").value.trim();
+    if (!q) return;
+    $("run").disabled = true;
+    $("msg").innerHTML = '<span class="spinner"></span>Finding the property…';
+    try {
+      const loc = await api(`/api/locate?q=${encodeURIComponent(chosen ? chosen.text : q)}${chosen && chosen.magicKey ? `&magicKey=${encodeURIComponent(chosen.magicKey)}` : ""}`);
+      chosen = null;
+      if (!loc.suggested_pin) throw new Error("No parcel found at that address in our counties.");
+      $("msg").innerHTML = '<span class="spinner"></span>Measuring roof, walls and yard. About 20-60 seconds…';
+      current = await api("/api/demo/report", { method: "POST", json: { pin: loc.suggested_pin } });
+      current.pin = loc.suggested_pin;
+      show(current);
+      $("msg").textContent = "";
+    } catch (e) { $("msg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    finally { $("run").disabled = false; }
+  }
+
+  function show(r) {
+    $("out").classList.remove("hidden");
+    $("oTitle").textContent = r.address || "Property";
+    $("oSub").textContent = [r.city, r.zip, r.county, r.structures.length ? `${r.structures.length} structure(s): ${r.structures.join(", ")}` : ""].filter(Boolean).join(" · ");
+    $("oChecks").innerHTML = (r.checks.length ? r.checks.map((c) => `<li>${esc(c)}</li>`) : ['<li class="ok">No automatic warnings. Still compare the lines with the photo before selling.</li>']).join("");
+    $("oReport").href = `/r/${r.id}?t=${encodeURIComponent(r.token)}`;
+    $("oPdf").href = `/r/${r.id}/pdf?t=${encodeURIComponent(r.token)}`;
+    $("oAerial").src = r.aerial ? `data:image/jpeg;base64,${r.aerial}` : "";
+    $("oYard").src = r.yard_photo ? `data:image/jpeg;base64,${r.yard_photo}` : "";
+    $("tradebar").innerHTML = [`<button data-t="all" class="${tradeSel === "all" ? "on" : ""}">All trades</button>`]
+      .concat(r.summaries.map((t) => `<button data-t="${t.key}" class="${tradeSel === t.key ? "on" : ""}">${esc(t.label)}</button>`)).join("");
+    drawTrades();
+    $("oReport").scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function drawTrades() {
+    const list = current.summaries.filter((t) => tradeSel === "all" || t.key === tradeSel);
+    $("tgrid").innerHTML = list.map((t) => `<div class="tcard">
+        <h3>${esc(t.label)}</h3>
+        <div class="sub">${t.premier ? '<span class="pill">Full report</span>' : '<span class="pill">Sheet + full report</span>'}</div>
+        <table>${t.metrics.map((m) => `<tr><td>${esc(m.label)}${m.beta ? '<span class="beta">beta</span>' : ""}</td><td>${fmt(m)}</td></tr>`).join("") || '<tr><td class="muted">No data for this property</td><td></td></tr>'}</table>
+      </div>`).join("");
+  }
+  $("tradebar").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    tradeSel = b.dataset.t;
+    $("tradebar").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+    drawTrades();
+  });
+
+  $("pRun").addEventListener("click", async () => {
+    if (!current) return;
+    $("pRun").disabled = true;
+    $("pBar").classList.remove("hidden");
+    $("pBar").firstElementChild.style.width = "0%";
+    try {
+      const j = await api("/api/demo/premier", { method: "POST", json: { pin: current.pin, n: +$("pN").value } });
+      $("pMsg").innerHTML = `<span class="spinner"></span>Building ${j.total} report${j.total > 1 ? "s" : ""}…`;
+      const poll = async () => {
+        const s = await api(`/api/demo/premier/${j.job}`);
+        $("pBar").firstElementChild.style.width = `${Math.round(100 * (s.done || 0) / Math.max(1, s.total))}%`;
+        if (s.status === "ready") {
+          const tok = encodeURIComponent(localStorage.getItem("adminToken") || "");
+          $("pMsg").innerHTML = `<b>Ready</b>: ${(s.size / 1e6).toFixed(1)} MB. <a class="btn" style="margin-left:6px" href="/api/demo/premier/${j.job}/zip?token=${tok}">Download test package</a>
+            <div class="small muted" style="margin-top:6px">${(s.rows || []).map((r) => `${esc(r.address)}: ${esc(r.status)}`).join(" · ")}</div>`;
+          $("pRun").disabled = false;
+        } else if (s.status === "failed") {
+          $("pMsg").innerHTML = `<span class="err">${esc(s.error || "failed")}</span>`; $("pRun").disabled = false;
+        } else {
+          $("pMsg").innerHTML = `<span class="spinner"></span>Building… ${s.done} of ${s.total}`;
+          setTimeout(poll, 3000);
+        }
+      };
+      poll();
+    } catch (e) { $("pMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; $("pRun").disabled = false; }
+  });
+})();
+</script>
+</body>
+</html>

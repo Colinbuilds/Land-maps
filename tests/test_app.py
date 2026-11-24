@@ -54,3 +54,28 @@ def test_value_bands_and_band_pricing():
     assert hi["count"] == 110 and hi["price_cents"] == 2500   # 2000 -> $25 minimum
     rows = [{"home_value": "200000"}, {"home_value": "600000"}, {"home_value": ""}, {"home_value": "2500000"}]
     assert len(datastore.rows_in_bands(rows, 2, 8)) == 2
+
+
+def test_trade_catalog_and_metrics():
+    from app import trades, datastore
+    keys = trades.TRADE_KEYS
+    assert {"lawn", "pressure", "gutters", "lights", "solar", "roofing", "siding", "windows"} <= set(keys)
+    for t in trades.catalog():  # list presets only use sellable measurement types
+        assert set(t["types"]) <= set(datastore.TYPE_KEYS), t["key"]
+    d = {"roof_sqft": 2000, "squares": 20.0, "pitch_label": "6/12", "facets": 4, "tree_overhang_sqft": 120,
+         "lines": {"eave": 120, "rake": 80, "ridge": 40, "hip": 0, "valley": 0},
+         "walls": {"gross_wall_sqft": 2500, "est_openings": 15, "stories": 2, "gutter_ft": 120, "downspouts": 4,
+                   "by_side": {"North": 600, "East": 650, "South": 600, "West": 650}},
+         "yard": {"lawn_sqft": 5000, "driveway_sqft": 600, "other_hardscape_sqft": 100, "sidewalk_sqft": 300,
+                  "year_built": 1999, "home_value": 450000, "fence_ft": 80, "fenced_yard": True},
+         "structures": [{"facet_polys": [{"pitch": 6, "area_sqft": 1000, "down": [0, -1]},
+                                          {"pitch": 6, "area_sqft": 1000, "down": [0, 1]}]}]}
+    m = {x["label"]: x for x in trades.metrics("lights", d)}
+    assert m["Roofline total (eaves + rakes + ridges)"]["value"] == 240
+    m = {x["label"]: x for x in trades.metrics("pressure", d)}
+    assert m["Driveway + patios + sidewalk"]["value"] == 1000
+    m = {x["label"]: x for x in trades.metrics("solar", d)}
+    assert m["Roof facing south"]["value"] == 1000 and m["Roof facing north"]["value"] == 1000
+    m = {x["label"]: x for x in trades.metrics("roofing", d)}
+    assert m["Year built"]["value"] == "1999"                    # not "1,999"
+    assert all(x["beta"] for x in trades.metrics("fencing", d) if "ence" in x["label"])

@@ -154,6 +154,27 @@
   const selCount = () => (q && q.value_bands && q.value_bands.bands.length)
     ? q.value_bands.bands.slice(vLo, vHi + 1).reduce((a, b) => a + b, 0) : (q ? q.count : 0);
 
+  // trade presets: one tap picks a trade's measurements (or Premier for roof trades)
+  (async () => {
+    let TR = [];
+    try { TR = (await api("/api/trades")).trades.filter((t) => !/beta/i.test(t.label)); } catch (e) { return; }
+    const box = $("tradeChips");
+    if (!box) return;
+    box.innerHTML = TR.map((t) => `<button type="button" data-k="${esc(t.key)}" title="${esc(t.pitch)}">${esc(t.label)}</button>`).join("");
+    box.addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      const t = TR.find((x) => x.key === b.dataset.k);
+      box.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+      const prodBtn = document.querySelector(`.prodswitch button[data-prod="${t.premier ? "premier" : "standard"}"]`);
+      if (!t.premier && t.types.length) {
+        picked = t.types.slice();
+        document.querySelectorAll("#typePick input").forEach((x) => { x.checked = picked.includes(x.value); x.closest("label").classList.toggle("on", x.checked); });
+        try { localStorage.setItem("dataTypes", JSON.stringify(picked)); } catch (e2) {}
+      }
+      if (prodBtn) prodBtn.click(); else { updatePrice(); calc(); }
+    });
+  })();
+
   let product = "standard";
   document.querySelectorAll(".prodswitch button").forEach((btn) => btn.addEventListener("click", () => {
     product = btn.dataset.prod;

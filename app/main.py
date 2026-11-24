@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import secrets
 import os
 import time
 from functools import lru_cache
@@ -512,8 +514,13 @@ def _report_access(rid: str, request: Request) -> tuple[dict, dict]:
 @app.get("/api/roof/report/{rid}")
 def roof_report_json(rid: str, request: Request):
     rep, comp = _report_access(rid, request)
+    from . import trades
+    trade = request.query_params.get("trade") or comp.get("trade")
+    summary = ({"key": trade, "label": trades.label(trade), "metrics": trades.metrics(trade, rep["data"])}
+               if trade in trades.TRADE_KEYS else None)
     return {"id": rep["id"], "created": rep["created"], "share_token": rep["share_token"], "data": rep["data"],
-            "company": {k: comp.get(k) for k in ("name", "phone", "email", "brand_color")}}
+            "company": {k: comp.get(k) for k in ("name", "phone", "email", "brand_color")},
+            "trade_summary": summary}
 
 
 @app.get("/r/{rid}/pdf")
@@ -622,6 +629,25 @@ class JoinReq(BaseModel):
     email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     password: str = Field(min_length=8, max_length=200)
     phone: str = Field(default="", max_length=40)
+    trade: str | None = Field(default=None, max_length=40)
+
+
+@app.get("/api/trades")
+def trades_catalog():
+    from . import trades
+    return {"trades": trades.catalog()}
+
+
+class TradeReq(BaseModel):
+    trade: str = Field(max_length=40)
+
+
+@app.put("/api/roof/trade")
+def set_trade(body: TradeReq, c: dict = Depends(roof_company)):
+    from . import trades
+    if body.trade not in trades.TRADE_KEYS:
+        raise HTTPException(400, "unknown trade")
+    return accounts.update_company(c["id"], trade=body.trade)
 
 
 @app.get("/join")
@@ -644,6 +670,9 @@ def join(body: JoinReq, request: Request):
     if accounts.company_by_email(body.email):
         raise HTTPException(409, "There's already an account with that email. Log in instead.")
     c = accounts.create_company(body.name, body.email, body.password, 0, body.phone)
+    from . import trades as _tr
+    if body.trade in _tr.TRADE_KEYS:
+        c = accounts.update_company(c["id"], trade=body.trade)
     from . import mailer
     mailer.notify_owner(f"New company sign-up: {c['name']}",
                         f"{c['name']} ({c['email']}, {body.phone or 'no phone'}) created an account.", reply_to=c["email"])
@@ -714,6 +743,129 @@ async def stripe_webhook(request: Request):
     except Exception as e:
         raise HTTPException(500, f"webhook error: {str(e)[:200]}")
     return {"ok": True, "did": what}
+
+
+# ------------------------------------------------------------- owner demo
+_DEMO_EMAIL = "demo@owner.invalid"
+_demo_jobs: dict = {}
+
+
+def _demo_company() -> dict:
+    """An internal company the owner's demo reports are saved under (free)."""
+    c = accounts.company_by_email(_DEMO_EMAIL)
+    if not c:
+        c = accounts.create_company("Demo (owner tests)", _DEMO_EMAIL, secrets.token_urlsafe(24))
+    if not c["member"]:
+        c = accounts.set_membership(c["id"], time.time() + 3650 * 86400, active=True)
+    return c
+
+
+@app.get("/demo")
+def page_demo():
+    return FileResponse(STATIC / "demo.html")
+
+
+class DemoReq(BaseModel):
+    pin: str = Field(max_length=64)
+
+
+@app.post("/api/demo/report", dependencies=[Depends(admin)])
+def demo_report(body: DemoReq):
+    """A full property report for one address, free, plus every trade's numbers."""
+    from . import trades
+    try:
+        info = roofreport.list_structures(body.pin)
+        ids = [s_["id"] for s_ in info["structures"] if s_["id"] == 0 or s_["plan_sqft"] >= 250]
+        d = roofreport.build_report(body.pin, ids or None)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    c = _demo_company()
+    rid = accounts.spend_and_save(c["id"], d)
+    rep = accounts.get_report(rid)
+    y = d.get("yard") or {}
+    checks = []
+    if y.get("quality") == "review":
+        checks.append(f"Yard flagged for review: {y.get('note') or 'check the shaded map'}")
+    if d.get("tree_overhang_sqft", 0) > 100:
+        checks.append(f"{d['tree_overhang_sqft']:,} sq ft of roof is under trees: check dashed lines on site")
+    if d.get("method") != "lidar":
+        checks.append("Part of the roof had no usable LiDAR; its edges are counted from the outline")
+    for st in d.get("structures") or []:
+        if st.get("edited"):
+            checks.append(f"{st['name']}: outline was adjusted by hand")
+    return {"id": rid, "token": rep["share_token"], "address": d.get("address"), "city": d.get("city"),
+            "zip": d.get("zip"), "county": d.get("county_name"), "summaries": trades.summaries(d), "checks": checks,
+            "yard_photo": y.get("photo_jpg") or "", "aerial": d.get("aerial_jpg") or "",
+            "roof_sqft": d.get("roof_sqft"), "structures": [s_["name"] for s_ in d.get("structures") or []]}
+
+
+class DemoPremierReq(BaseModel):
+    pin: str = Field(max_length=64)
+    n: int = Field(default=5, ge=1, le=10)
+
+
+@app.post("/api/demo/premier", dependencies=[Depends(admin)])
+def demo_premier(body: DemoPremierReq):
+    """Test a Premier package: this home and its nearest neighbours (max 10)."""
+    from shapely.geometry import box as _box
+    from .counties import split_pid
+    from . import premier
+    cid, pin = split_pid(body.pin)
+    m = measurer_for(cid)
+    f0 = m.get_parcel(pin)
+    if not f0:
+        raise HTTPException(404, "parcel not found")
+    c0 = f0["geometry"].representative_point()
+    near = [f for f in query_features(m.c["parcels"]["url"], envelope=_box(c0.x - 0.002, c0.y - 0.0015, c0.x + 0.002, c0.y + 0.0015).bounds)
+            if f["geometry"] is not None and (m.parcel_attrs(f["attributes"]).get("address") or "").strip()]
+    near.sort(key=lambda f: f["geometry"].representative_point().distance(c0))
+    items = [(cid, f) for f in near[:body.n]]
+    jid = secrets.token_hex(4)
+    _demo_jobs[jid] = {"status": "building", "done": 0, "total": len(items), "started": time.time()}
+
+    def run():
+        import csv as _csv, io as _io, zipfile as _zf
+        from concurrent.futures import ThreadPoolExecutor
+        out = premier.PREMIER_DIR / f"demo_{jid}.zip"
+        rows = []
+        try:
+            with _zf.ZipFile(out, "w") as zf, ThreadPoolExecutor(max_workers=4) as ex:
+                for i, (row, pdf) in enumerate(ex.map(lambda it: premier._one(*it), items), 1):
+                    if pdf:
+                        row["file"] = f"{premier._safe(row['address'] + ' ' + (row.get('city') or ''))}.pdf"
+                        zf.writestr(f"reports/{row['file']}", pdf)
+                    rows.append(row)
+                    _demo_jobs[jid]["done"] = i
+                buf = _io.StringIO()
+                w = _csv.writer(buf)
+                w.writerow([lab for _, lab in premier.INDEX_COLS])
+                for r in rows:
+                    w.writerow(["" if r.get(k) is None else r.get(k) for k, _ in premier.INDEX_COLS])
+                zf.writestr("index.csv", buf.getvalue())
+            _demo_jobs[jid].update(status="ready", path=str(out), size=out.stat().st_size,
+                                   rows=[{k: r.get(k) for k in ("address", "status", "roof_sqft", "lawn_sqft")} for r in rows])
+        except Exception as e:
+            _demo_jobs[jid].update(status="failed", error=str(e)[:300])
+    threading.Thread(target=run, daemon=True).start()
+    return {"job": jid, "total": len(items)}
+
+
+@app.get("/api/demo/premier/{jid}", dependencies=[Depends(admin)])
+def demo_premier_status(jid: str):
+    j = _demo_jobs.get(jid)
+    if not j:
+        raise HTTPException(404, "no such test")
+    return {k: v for k, v in j.items() if k != "path"}
+
+
+@app.get("/api/demo/premier/{jid}/zip")
+def demo_premier_zip(jid: str, token: str | None = None):
+    if ADMIN_TOKEN and token != ADMIN_TOKEN:  # same rule as the other owner tools
+        raise HTTPException(403, "owner only")
+    j = _demo_jobs.get(jid)
+    if not j or j.get("status") != "ready":
+        raise HTTPException(409, "not ready")
+    return FileResponse(j["path"], media_type="application/zip", filename=f"premier_test_{jid}.zip")
 
 
 @app.get("/api/data/pricing")

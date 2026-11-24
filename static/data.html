@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=16">
+<link rel="stylesheet" href="/static/styles.css?v=17">
 <style>
   /* ------------------------------------------------------------------
      Page-scoped design for /data. Everything is under body.dp so the
@@ -358,6 +358,12 @@
   .dp .vbar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
   .dp .vbar.in .n, .dp .vbar.in .l { color: var(--ink); font-weight: 600; }
   .dp .vbar .l { color: var(--muted); white-space: nowrap; }
+  .dp .tradepresets { margin: 2px 0 12px; min-width: 0; max-width: 100%; }
+  .dp #result > *, .dp .buy-card, .dp .buy-card > * { min-width: 0; max-width: 100%; }
+  .dp .tradepresets .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+  .dp .tradepresets .chips button { flex: 0 0 auto; min-height: 38px; padding: 7px 13px; font-size: 13.5px; font-weight: 600;
+    background: var(--field, #f3f5f0); color: var(--ink); border-radius: 99px; box-shadow: none; white-space: nowrap; }
+  .dp .tradepresets .chips button.on { background: var(--ink); color: #fff; }
 </style>
 </head>
 <body class="dp">
@@ -442,6 +448,10 @@
               </div>
               <div class="vbars" id="vBars" aria-label="Homes in this ZIP by assessed value"></div>
               <p class="small muted" style="margin:6px 0 0">Values are the county's assessed values. Higher-value homes cost a little more per home.</p>
+            </div>
+            <div class="tradepresets">
+              <div class="small" style="font-weight:600;margin-bottom:6px">I'm in… <span class="muted" style="font-weight:400">(picks the right measurements)</span></div>
+              <div class="chips" id="tradeChips"></div>
             </div>
             <div class="prodswitch" role="radiogroup" aria-label="List type">
               <button type="button" class="on" data-prod="standard" role="radio" aria-checked="true"><b>Standard sheet</b><span>Spreadsheet, pick your measurements</span></button>
@@ -662,8 +672,8 @@
   <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Get 25 free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=16"></script>
-<script src="/static/data.js?v=16"></script>
+<script src="/static/common.js?v=17"></script>
+<script src="/static/data.js?v=17"></script>
 <script>
 // Phone-only sticky "Get 25 free" button: shown once the ZIP box has scrolled
 // away, hidden while the ZIP box or the closing CTA is on screen and once a

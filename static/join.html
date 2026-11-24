@@ -91,7 +91,7 @@
       <ul class="ticks">
         <li>Unlimited single-property reports, any address we cover</li>
         <li>Half off every ZIP code list: standard sheets and Premier lists</li>
-        <li>Roof, walls &amp; elevations, lot &amp; yard in every report (web + PDF)</li>
+        <li>Roof, walls &amp; elevations, lot &amp; yard in every report (web + PDF), with your trade's numbers up top</li>
         <li>Cancel any time from your billing page</li>
       </ul>
       <button id="mBtn">Become a member</button>
@@ -116,6 +116,7 @@
       <input id="jPhone" placeholder="Phone (optional)" autocomplete="tel" inputmode="tel" aria-label="Phone">
       <input id="jEmail" type="email" placeholder="Email" autocomplete="email" aria-label="Email">
       <input id="jPass" type="password" placeholder="Password (8+ characters)" autocomplete="new-password" aria-label="Password">
+      <select id="jTrade" aria-label="Your trade" style="font-size:16px;padding:13px 14px;border-radius:14px;border:1.5px solid transparent;background:var(--field);min-height:50px"><option value="">What's your trade?</option></select>
     </div>
     <p class="small" id="jMsg" style="margin:10px 0 0"></p>
   </section>
@@ -140,6 +141,11 @@
     $("bizContact").textContent = [cfg.business.phone, cfg.business.email].filter(Boolean).join(" · ");
   } catch (e) {}
   let P = await api("/api/billing/plans");
+  let TR = [];
+  try { TR = (await api("/api/trades")).trades; } catch (e) {}
+  $("jTrade").innerHTML += TR.map((t) => `<option value="${esc(t.key)}">${esc(t.label)}</option>`).join("");
+  const wanted = new URLSearchParams(location.search).get("trade");
+  if (wanted) $("jTrade").value = wanted;
   let me = P.company;
   let pack = 5;
   $("mPrice").textContent = usd(P.member_price_cents);
@@ -164,9 +170,14 @@
         <div><div class="small muted">Signed in as</div><div class="big">${esc(me.name)}</div></div>
         <div><div class="small muted">Plan</div><div class="big">${me.member ? `Member${until ? ` <span class="small muted" style="font-weight:500">renews ${esc(until)}</span>` : ""}` : "Pay as you go"}</div></div>
         <div><div class="small muted">Credits</div><div class="big">${me.member ? "Unlimited" : me.credits}</div></div>
+        <div><div class="small muted">Trade</div><select id="myTrade" style="min-height:40px;border-radius:10px"><option value="">Choose…</option>${TR.map((t) => `<option value="${esc(t.key)}" ${me.trade === t.key ? "selected" : ""}>${esc(t.label)}</option>`).join("")}</select></div>
         <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/roof">Order a report</a>${me.stripe_customer ? `<button class="secondary" id="bill">Billing</button>` : ""}</div>
       </div>`;
     if (me.member) { $("mBtn").textContent = "You're a member"; $("mBtn").disabled = true; }
+    const mt = document.getElementById("myTrade");
+    if (mt) mt.addEventListener("change", async () => {
+      try { me = await api("/api/roof/trade", { method: "PUT", json: { trade: mt.value } }); } catch (e) { alert(e.message); }
+    });
     const bill = document.getElementById("bill");
     if (bill) bill.addEventListener("click", async () => {
       try { location.href = (await api("/api/billing/portal", { method: "POST" })).url; } catch (e) { alert(e.message); }
@@ -176,7 +187,7 @@
 
   async function ensureAccount(msgEl) {
     if (me) return true;
-    const body = { name: $("jName").value.trim(), email: $("jEmail").value.trim(), password: $("jPass").value, phone: $("jPhone").value.trim() };
+    const body = { name: $("jName").value.trim(), email: $("jEmail").value.trim(), password: $("jPass").value, phone: $("jPhone").value.trim(), trade: $("jTrade").value || null };
     if (body.name.length < 2 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(body.email) || body.password.length < 8) {
       $("signup").scrollIntoView({ behavior: "smooth", block: "center" });
       $("jMsg").innerHTML = '<span class="err">Fill in your company name, email and a password of 8+ characters first.</span>';

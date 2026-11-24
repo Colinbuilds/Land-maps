@@ -432,12 +432,14 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
                 "facet_polys": _facet_polys(res, used),
                 "_model": (res["planes"], res.get("label_grid"), res.get("grid_x"), res.get("grid_y")),
             })
+            if out_structs[-1]["facet_polys"]:  # the count matches the facet diagram
+                out_structs[-1]["facets"] = len(out_structs[-1]["facet_polys"])
             tree_total += add_trees(out_structs[-1], tree_cover(s, pts, used), res["roof_area_sqft"], res["plan_area_sqft"])
             for k in LINE_TYPES:
                 totals[k] += res["lines"].get(k, 0.0)
             area += res["roof_area_sqft"]
             plan += res["plan_area_sqft"]
-            facets += res["facet_count"]
+            facets += out_structs[-1]["facets"] or 0
             methods.add("lidar")
             continue
         res = analyze_roof(s["geometry_las"], sampler, pitch)
@@ -713,7 +715,9 @@ def _yard(m, parcel) -> dict | None:
     except Exception:
         return None
     keys = ["lot_sqft", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft", "other_hardscape_sqft",
-            "structures_sqft", "beds_sqft", "building_sqft", "tree_count", "tree_canopy_sqft", "frontage_ft"]
+            "structures_sqft", "beds_sqft", "building_sqft", "tree_count", "tree_canopy_sqft", "frontage_ft",
+            "lawn_under_trees_sqft", "home_value", "year_built", "living_sqft",
+            "fence_ft", "fenced_yard", "pool_sqft", "has_pool"]  # fences / pools: beta
     return {**{k: r.get(k) for k in keys}, "photo_jpg": r.get("photo_jpg") or "",
             "quality": (r.get("sources") or {}).get("quality"), "note": (r.get("sources") or {}).get("note")}
 
@@ -749,6 +753,13 @@ def _walls_total(m, env, structs) -> dict | None:
                 tot[k] = round(tot[k] + v, 1)
     if tot:
         tot["elevations"] = _elevations(structs)
+        # stories from the typical outer-wall height (eave above ground)
+        hs = sorted(f["height_ft"] for st in structs for f in ((st.get("walls") or {}).get("facets") or [])
+                    if f.get("kind") == "wall" and f.get("length_ft", 0) >= 8)
+        if hs:
+            h75 = hs[int(0.75 * (len(hs) - 1))]
+            tot["eave_height_ft"] = round(h75, 1)
+            tot["stories"] = 1 if h75 < 13.5 else (2 if h75 < 23 else 3)
         g = tot["gross_wall_sqft"]
         net = tot["est_net_wall_sqft"]
         tot["siding_squares"] = [{"pct": p, "sqft": round(net * (1 + p / 100)),
