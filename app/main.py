@@ -783,7 +783,7 @@ def billing_plans(request: Request):
     p = billing.plans()
     return {"member_price_cents": p["member_price_cents"], "credit_price_cents": p["credit_price_cents"],
             "included_trades": p["included_trades"], "trade_cents": p["trade_cents"],
-            "crm_price_cents": p["crm_price_cents"],
+            "crm_price_cents": p["crm_price_cents"], "annual_discount": p["annual_discount"],
             "list_discount": p["list_discount"], "packs": list(billing.CREDIT_PACKS),
             "stripe": billing.enabled(), "company": c}
 
@@ -807,13 +807,14 @@ def join(body: JoinReq, request: Request):
 
 
 @app.post("/api/billing/member")
-def billing_member(request: Request, c: dict = Depends(roof_company)):
+def billing_member(request: Request, body: dict | None = None, c: dict = Depends(roof_company)):
+    """Start a membership: monthly, or a year up front at the annual discount."""
     if not billing.enabled():
         raise HTTPException(400, "Card payments aren't set up yet. Contact us to join.")
     if c["member"]:
         raise HTTPException(400, "You're already a member.")
     try:
-        return {"checkout_url": billing.member_checkout(c, _base_url(request))}
+        return {"checkout_url": billing.member_checkout(c, _base_url(request), yearly=bool((body or {}).get("yearly")))}
     except Exception as e:
         raise HTTPException(502, f"Payment provider error: {str(e)[:200]}")
 
@@ -1766,12 +1767,13 @@ def _summary(c: dict, st: dict, cs: dict, orders: list[dict]) -> dict:
     from . import trades as T
     now = time.time()
     tl = [(T.label(t) or t).split(" &")[0].split(" (")[0] for t in c.get("trades") or []]
-    mrr = billing.member_price_cents(c.get("trades"), crm=bool(c.get("crm"))) if c["member"] else 0
+    mrr = billing.monthly_value_cents(c)
     paid_orders = [o for o in orders if o["status"] in ("processing", "ready")]
     parts = []
     parts.append((", ".join(tl[:4]) + (" +" + str(len(tl) - 4) if len(tl) > 4 else "") + " company") if tl else "No trades picked yet")
     if c["member"]:
-        parts.append(f"member at ${mrr / 100:,.0f}/mo" + (" with CRM" if c.get("crm") else ""))
+        parts.append((f"member, paid yearly (${mrr * 12 / 100:,.0f}/yr)" if c.get("billing") == "year"
+                      else f"member at ${mrr / 100:,.0f}/mo") + (" with CRM" if c.get("crm") else ""))
     else:
         parts.append(f"pay as you go, {c['credits']} credit{'s' if c['credits'] != 1 else ''} left")
     n = st.get("reports", 0)

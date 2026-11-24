@@ -34,7 +34,9 @@ DEFAULTS = {"member_price_cents": 9900, "credit_price_cents": 2500, "list_discou
             # 2 trades $99, 3 $114, 4 $119, 5 $134, 6 $139 ...
             "included_trades": 2, "trade_cents": [1500, 500],
             # CRM portal add-on (estimates, schedule, photos, money), per month
-            "crm_price_cents": 2500}
+            "crm_price_cents": 2500,
+            # pay a year up front: 12 months less this share (0.25 = 25% off)
+            "annual_discount": 0.25}
 CREDIT_PACKS = (1, 5, 10, 25)
 
 
@@ -63,10 +65,24 @@ def trade_addon_cents(n: int, p: dict | None = None) -> int:
     return int(sum(steps[i % len(steps)] for i in range(extra)))  # the pattern repeats
 
 
-def member_price_cents(trades=None, p: dict | None = None, crm: bool = False) -> int:
+def member_price_cents(trades=None, p: dict | None = None, crm: bool = False, yearly: bool = False) -> int:
+    """Monthly price for these trades (+ CRM); with ``yearly``, the price of
+    a year paid up front (12 months less the annual discount)."""
     p = p or plans()
-    return (int(p["member_price_cents"]) + trade_addon_cents(len(paid_trades(trades)), p)
-            + (int(p["crm_price_cents"]) if crm else 0))
+    month = (int(p["member_price_cents"]) + trade_addon_cents(len(paid_trades(trades)), p)
+             + (int(p["crm_price_cents"]) if crm else 0))
+    if not yearly:
+        return month
+    return int(round(month * 12 * (1 - float(p.get("annual_discount", 0.25)))))
+
+
+def monthly_value_cents(c: dict) -> int:
+    """What a member is worth per month (yearly plans spread over 12)."""
+    if not c.get("member"):
+        return 0
+    yearly = c.get("billing") == "year"
+    v = member_price_cents(c.get("trades"), crm=bool(c.get("crm")), yearly=yearly)
+    return int(round(v / 12)) if yearly else v
 
 
 def _auth():
@@ -100,17 +116,18 @@ def _biz() -> str:
 
 
 # --------------------------------------------------------------- membership
-def member_checkout(c: dict, base_url: str) -> str:
+def member_checkout(c: dict, base_url: str, yearly: bool = False) -> str:
     p = plans()
     data = {
         "mode": "subscription",
         "client_reference_id": str(c["id"]),
         "line_items[0][quantity]": "1",
         "line_items[0][price_data][currency]": "usd",
-        "line_items[0][price_data][unit_amount]": str(member_price_cents(c.get("trades"), p, bool(c.get("crm")))),
-        "line_items[0][price_data][recurring][interval]": "month",
+        "line_items[0][price_data][unit_amount]": str(member_price_cents(c.get("trades"), p, bool(c.get("crm")), yearly)),
+        "line_items[0][price_data][recurring][interval]": "year" if yearly else "month",
         "line_items[0][price_data][product_data][name]": f"{_biz()} membership" + (
-            f" ({', '.join(_trade_label(t) for t in c['trades'])})" if c.get("trades") else ""),
+            f" ({', '.join(_trade_label(t) for t in c['trades'])})" if c.get("trades") else "") + (
+        f" - yearly, {int(round(float(p.get('annual_discount', 0.25)) * 100))}% off" if yearly else ""),
         "success_url": f"{base_url}/join/done?session_id={{CHECKOUT_SESSION_ID}}",
         "cancel_url": f"{base_url}/join?cancelled=1",
         "metadata[company_id]": str(c["id"]),
@@ -130,11 +147,12 @@ def update_member_price(c: dict, trades, crm: bool | None = None) -> int | None:
     nothing to bill."""
     if not (enabled() and c.get("member") and c.get("stripe_sub")):
         return None
-    cents = member_price_cents(trades, crm=bool(c.get("crm")) if crm is None else crm)
     sub = _get(f"/subscriptions/{c['stripe_sub']}")
     item = ((sub.get("items") or {}).get("data") or [None])[0]
     if not item:
         return None
+    interval = ((item.get("price") or {}).get("recurring") or {}).get("interval") or "month"
+    cents = member_price_cents(trades, crm=bool(c.get("crm")) if crm is None else crm, yearly=interval == "year")
     if int((item.get("price") or {}).get("unit_amount") or 0) == cents:
         return cents
     _post(f"/subscriptions/{c['stripe_sub']}", {
@@ -142,7 +160,7 @@ def update_member_price(c: dict, trades, crm: bool | None = None) -> int | None:
         "items[0][price_data][currency]": "usd",
         "items[0][price_data][product]": item["price"]["product"],
         "items[0][price_data][unit_amount]": str(cents),
-        "items[0][price_data][recurring][interval]": "month",
+        "items[0][price_data][recurring][interval]": interval,
         "proration_behavior": "create_prorations",
     })
     return cents
@@ -156,6 +174,10 @@ def _apply_subscription(cid: int, sub: dict) -> dict | None:
         items = (sub.get("items") or {}).get("data") or []
         end = items[0].get("current_period_end") if items else None
     until = float(end) if end else (time.time() + 31 * 86400 if active else time.time())
+    items = (sub.get("items") or {}).get("data") or []
+    interval = ((items[0].get("price") or {}).get("recurring") or {}).get("interval") if items else None
+    if interval in ("month", "year"):
+        accounts.update_company(cid, billing=interval)
     return accounts.set_membership(cid, until if active else time.time(), sub.get("customer"), sub.get("id"), active)
 
 

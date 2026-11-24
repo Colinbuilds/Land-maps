@@ -171,3 +171,11 @@ def test_report_sections_follow_trades():
     gut = trades.filter_report(d, trades.sections_for(["gutters"]))
     assert gut["lines"] and "elevations" not in gut["walls"]
     assert trades.filter_report(d, trades.sections_for([]))["sections"] == list(trades.SECTIONS)
+
+
+def test_yearly_membership_is_25_percent_off():
+    from app import billing
+    assert billing.member_price_cents(["lawn", "snow"], yearly=True) == 9900 * 12 * 3 // 4
+    assert billing.member_price_cents(["lawn", "snow", "gutters", "roofing"], crm=True, yearly=True) == round((11900 + 2500) * 12 * 0.75)
+    assert billing.monthly_value_cents({"member": True, "billing": "year", "trades": ["lawn"]}) == round(9900 * 0.75)
+    assert TestClient(app).get("/api/billing/plans").json()["annual_discount"] == 0.25
