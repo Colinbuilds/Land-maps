@@ -146,6 +146,14 @@
           <div class="row" id="dMult" style="gap:6px"></div>
           <p class="small muted" style="margin:4px 0 0">Each home's price is multiplied by its value band. 1 = normal price, 2 = double.</p>
         </div>
+        <div>
+          <div class="small" style="font-weight:600;margin-bottom:4px">Exclusive ZIP (whole ZIP, locks the measurements bought)</div>
+          <div class="row">
+            <label class="small">First measurement (¢ per property)<input type="number" step="5" id="dExFirst"></label>
+            <label class="small">Each extra measurement (¢ per property)<input type="number" step="5" id="dExExtra"></label>
+            <label class="small">Lock lasts (months)<input type="number" step="1" min="1" max="60" id="dExMonths"></label>
+          </div>
+        </div>
         <button id="dSave">Save pricing</button>
         <div id="dMsg" class="small"></div>
         <div id="dStripe" class="small muted"></div>
@@ -155,6 +163,10 @@
         <p class="small muted" style="margin-top:-6px">Buyers of a ZIP that's already measured download it instantly. Measuring takes about half a second per property.</p>
         <div class="row"><input type="text" id="dZip" placeholder="ZIP" maxlength="5" inputmode="numeric"><button id="dPre" style="flex:0 0 auto">Measure now</button></div>
         <div id="dPreMsg" class="small"></div>
+        <div class="row"><button id="dPreAll" style="flex:0 0 auto">Measure every ZIP we cover</button><button id="dPreStop" class="secondary" style="flex:0 0 auto">Stop</button></div>
+        <div id="dPreAllMsg" class="small muted"></div>
+        <h2 style="margin-top:10px">Exclusive ZIPs</h2>
+        <div class="tablewrap"><table id="dLocks"></table></div>
         <h2 style="margin-top:10px">Measured ZIPs</h2>
         <div class="tablewrap"><table id="dZips"></table></div>
       </div>
@@ -186,6 +198,6 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
 <script src="/static/common.js?v=16"></script>
-<script src="/static/business.js?v=9"></script>
+<script src="/static/business.js?v=10"></script>
 </body>
 </html>

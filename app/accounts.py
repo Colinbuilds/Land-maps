@@ -38,7 +38,7 @@ def init():
         """)
         have = {r[1] for r in con.execute("PRAGMA table_info(companies)")}
         for col, typ in (("plan", "TEXT"), ("member_until", "REAL"), ("stripe_customer", "TEXT"),
-                         ("stripe_sub", "TEXT")):
+                         ("stripe_sub", "TEXT"), ("trade", "TEXT")):
             if col not in have:
                 con.execute(f"ALTER TABLE companies ADD COLUMN {col} {typ}")
 
@@ -154,7 +154,7 @@ def list_companies() -> list[dict]:
 
 
 def update_company(cid: int, **fields) -> dict | None:
-    allowed = {k: v for k, v in fields.items() if k in ("name", "phone", "brand_color") and v is not None}
+    allowed = {k: v for k, v in fields.items() if k in ("name", "phone", "brand_color", "trade") and v is not None}
     if fields.get("password"):
         allowed["pw_hash"] = hash_pw(fields["password"])
     if allowed:

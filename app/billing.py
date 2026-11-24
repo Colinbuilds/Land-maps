@@ -62,6 +62,11 @@ def _get(path: str, params: dict | None = None) -> dict:
     return r.json()
 
 
+def _trade_label(key):
+    from .trades import label
+    return label(key) or key
+
+
 def _biz() -> str:
     return (load_settings().get("business") or {}).get("name") or "Property Data"
 
@@ -76,7 +81,8 @@ def member_checkout(c: dict, base_url: str) -> str:
         "line_items[0][price_data][currency]": "usd",
         "line_items[0][price_data][unit_amount]": str(int(p["member_price_cents"])),
         "line_items[0][price_data][recurring][interval]": "month",
-        "line_items[0][price_data][product_data][name]": f"{_biz()} membership",
+        "line_items[0][price_data][product_data][name]": f"{_biz()} membership" + (
+            f" ({_trade_label(c.get('trade'))})" if c.get("trade") else ""),
         "success_url": f"{base_url}/join/done?session_id={{CHECKOUT_SESSION_ID}}",
         "cancel_url": f"{base_url}/join?cancelled=1",
         "metadata[company_id]": str(c["id"]),

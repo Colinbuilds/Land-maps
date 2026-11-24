@@ -247,7 +247,8 @@ class Measurer:
             bad[1:] = np.asarray(frac) > 0.4
             crowns = crowns & ~bad[lab]
             tops = [t for t in tops if crowns[t[0], t[1]]]
-        return struct, bed, canopy, crowns, tops
+        fence = _fences(np.asarray(smp["obj"], np.float32), np.asarray(smp["veg"], np.float32), ft_px, bldg_m)
+        return struct, bed, canopy, crowns, tops, fence
 
     # --------------------------------------------------------------- measure
     def measure(self, parcel_feature: dict, want_overlay: bool = False, want_photo: bool = False) -> dict:
@@ -523,10 +524,10 @@ class Measurer:
         # dense evergreens and pools.
         yard = parcel_m & ~bldg_m
         lid = self._lidar_layers(mos, env, ft_px, bldg_m) if self.lidar else None
-        struct_m = bed_m = canopy_m = crown_m = np.zeros(hard.shape, bool)
+        struct_m = bed_m = canopy_m = crown_m = fence_m = np.zeros(hard.shape, bool)
         tops = []
         if lid is not None:
-            struct_m, bed_m, canopy_m, crown_m, tops = lid
+            struct_m, bed_m, canopy_m, crown_m, tops, fence_m = lid
             crown_m = crown_m & ~bldg_m
             struct_m &= yard
             canopy_m &= yard & ~struct_m
@@ -569,6 +570,18 @@ class Measurer:
                 parkway_m = _drop_small(parkway_m, 10.0 / sqft_px)
         parkway_sqft = float(parkway_m.sum()) * sqft_px
         structures_sqft = float((struct_m | pool_m).sum()) * sqft_px
+        pool_sqft = float(_drop_small(pool_m, 60.0 / sqft_px).sum()) * sqft_px
+        # Fences: most stand on the lot lines, so walk the lot line and count
+        # the feet with a fence within ~3 ft. "Fenced yard" = fences along most
+        # of the side and back lines (the street side doesn't count).
+        lot_line = parcel_m & ~ndi.binary_erosion(parcel_m, iterations=1)
+        near_fence = ndi.binary_dilation(fence_m, iterations=max(1, int(round(3.0 / ft_px))))
+        fence_px = lot_line & near_fence
+        fence_ft = float(fence_px.sum()) * ft_px * 0.9  # pixel steps along a line run ~10% long
+        street = to_mask(unary_union(frontage).buffer(15.0)) if frontage else np.zeros(hard.shape, bool)
+        back_line = lot_line & ~street
+        fenced_share = float((back_line & near_fence).sum()) / max(1, int(back_line.sum()))
+        fenced_yard = bool(fence_ft >= 40 and fenced_share >= 0.6)
         beds_sqft = float((bed_m | canopy_m).sum()) * sqft_px
         # Trees: a tree belongs to this lot when its trunk (crown top) is on it.
         # Canopy counts every crown over the lot, including a neighbour's
@@ -604,6 +617,10 @@ class Measurer:
             "sidewalk_sqft": round(sidewalk_sqft),
             "other_hardscape_sqft": round(other_sqft),
             "structures_sqft": round(structures_sqft),
+            "pool_sqft": round(pool_sqft),
+            "has_pool": bool(pool_sqft >= 150),  # beta: not sold until validated
+            "fence_ft": round(fence_ft),  # beta: not sold until validated
+            "fenced_yard": fenced_yard,
             "beds_sqft": round(beds_sqft),
             "tree_count": len(lot_tops),
             "tree_canopy_sqft": round(tree_canopy_sqft),
@@ -644,6 +661,7 @@ class Measurer:
             result["overlay"] = _overlay_png(mos, parcel_m, lawn_m | parkway_m, drive_m, other_m, struct_m | pool_m, bed_m | canopy_m,
                                              frontage, sw_stations, self, step, sw_w,
                                              crown_m=crown_m & (parcel_m | parkway_m), tops=lot_tops,
+                                             fence_m=fence_px,
                                              photo=want_photo)
             if want_photo:
                 result["photo_jpg"] = result["overlay"].pop("photo_jpg", "")
@@ -734,6 +752,30 @@ def _trees(veg, ft_px, sqft_px, sparse=False):
 def _disk(rad: int) -> np.ndarray:
     yy, xx = np.ogrid[-rad:rad + 1, -rad:rad + 1]
     return xx * xx + yy * yy <= rad * rad
+
+
+def _fences(obj, veg, ft_px, bldg_m=None):
+    """Thin raised lines 2.5-8.5 ft tall: fences and walls (not sheds, decks,
+    houses, trees or shrubs)."""
+    r = lambda ft: max(1, int(round(ft / ft_px)))
+    raised = (obj > 2.5) & (obj < 8.5)
+    solid = ndi.binary_opening(raised, iterations=r(1.6))          # anything wider than ~3 ft
+    thin = raised & ~ndi.binary_dilation(solid, iterations=r(0.6))
+    thin &= ~ndi.binary_dilation(veg > 2.0, iterations=r(1.0))       # hedges and tree edges
+    if bldg_m is not None:
+        thin &= ~ndi.binary_dilation(bldg_m, iterations=r(1.5))
+    thin = ndi.binary_closing(thin, iterations=r(1.0))              # join posts / gaps
+    lab, n = ndi.label(thin)
+    if n:
+        # keep line-like runs at least ~8 ft long
+        objs = ndi.find_objects(lab)
+        keep = np.zeros(n + 1, bool)
+        for i, sl in enumerate(objs, 1):
+            hgt = (sl[0].stop - sl[0].start) * ft_px
+            wid = (sl[1].stop - sl[1].start) * ft_px
+            keep[i] = max(hgt, wid) >= 8.0
+        thin = keep[lab]
+    return thin
 
 
 def _otsu(v: np.ndarray, bins: int = 64) -> float:
@@ -894,7 +936,7 @@ def _geojson(g):
 
 
 def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, frontage, sw_stations, meas, step, sw_w,
-                 crown_m=None, tops=(), photo=False):
+                 crown_m=None, tops=(), photo=False, fence_m=None):
     h, w = parcel_m.shape
     rgba = np.zeros((h, w, 4), np.uint8)
     rgba[lawn_m] = (34, 197, 94, 110)
@@ -932,6 +974,8 @@ def _overlay_png(mos, parcel_m, lawn_m, drive_m, other_m, struct_m, bed_m, front
         rgba[d2 <= 25] = (20, 83, 45, 255)
     edge = parcel_m ^ ndi.binary_erosion(parcel_m, iterations=2)
     rgba[edge] = (250, 250, 250, 255)
+    if fence_m is not None and fence_m.any():  # fenced stretches of the lot line, drawn over it
+        rgba[ndi.binary_dilation(fence_m, iterations=2)] = (249, 115, 22, 255)
     im = Image.fromarray(rgba, "RGBA")
     buf = io.BytesIO()
     im.save(buf, "PNG", optimize=True)

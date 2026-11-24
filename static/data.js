@@ -35,6 +35,7 @@
       : `<span class="small muted">Measured after purchase. About ${Math.max(5, Math.round(q.count * 0.5 / 60))} minutes; we'll have your download page update itself.</span>`;
     const p = q.pricing;
     buildTypePicker(q.type_catalog || []);
+    markLocks();
     buildValuePicker(q.value_bands || { bands: [], labels: [] });
     updatePrice();
     $("rateLine").textContent = `${p.rate_cents}¢ a home for your first measurement, +${p.extra_type_cents}¢ for each extra one. Pay by card, download a spreadsheet, and quote before you visit.`;
@@ -120,12 +121,39 @@
     box.innerHTML = cat.map((t, i) => `<label class="${picked.includes(t.key) ? "on" : ""}"><input type="checkbox" value="${esc(t.key)}" ${picked.includes(t.key) ? "checked" : ""}><span>${esc(t.label)}</span><span class="c" data-c="${esc(t.key)}"></span></label>`).join("");
     box.addEventListener("change", () => {
       picked = [...box.querySelectorAll("input:checked")].map((x) => x.value);
-      if (!picked.length) { box.querySelector('input[value="lawn"]').checked = true; picked = ["lawn"]; }
+      if (!picked.length) { const f = box.querySelector("input:not(:disabled)"); if (f) { f.checked = true; picked = [f.value]; } }
       box.querySelectorAll("label").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
       try { localStorage.setItem("dataTypes", JSON.stringify(picked)); } catch (e) {}
       updatePrice();
       calc();
     });
+  }
+  // exclusive ZIPs: types another company locked can't be bought here
+  const taken = () => (q && q.taken_types) || [];
+  const held = () => Object.entries((q && q.locks) || {}).filter(([, l]) => l.yours).map(([k]) => k);
+  function markLocks() {
+    const box = $("typePick");
+    const t = taken();
+    box.querySelectorAll("label").forEach((l) => {
+      const inp = l.querySelector("input"), k = inp.value;
+      const isT = t.includes(k);
+      l.classList.toggle("taken", isT); l.classList.toggle("held", held().includes(k));
+      inp.disabled = isT;
+      if (isT) { inp.checked = false; l.classList.remove("on"); }
+    });
+    picked = picked.filter((k) => !t.includes(k));
+    if (!picked.length) {
+      const free = [...box.querySelectorAll("input")].find((x) => !x.disabled);
+      if (free) { free.checked = true; free.closest("label").classList.add("on"); picked = [free.value]; }
+    }
+    const pb = document.querySelector('.prodswitch button[data-prod="premier"]');
+    pb.disabled = t.length > 0;
+    pb.querySelector("span").textContent = t.length ? "Not available: part of this ZIP is exclusive to another company" : "Full report PDF for every home";
+    if (t.length && product === "premier") document.querySelector('.prodswitch button[data-prod="standard"]').click();
+    const months = (q.pricing && q.pricing.exclusive_months) || 12;
+    $("exclMonths").textContent = months;
+    $("exclRate").textContent = `${usd(q.pricing.exclusive_cents || 100)} a home for your first measurement and ${cents(q.pricing.exclusive_extra_cents || 50)} for each extra one`;
+    $("exclLogin").innerHTML = q.logged_in ? "" : 'You need a free account so the lock is tied to your company: <a href="/join">sign up or sign in</a>.';
   }
   // ------------------------------------------------ home-value range
   let vLo = 0, vHi = 8;
@@ -154,20 +182,65 @@
   const selCount = () => (q && q.value_bands && q.value_bands.bands.length)
     ? q.value_bands.bands.slice(vLo, vHi + 1).reduce((a, b) => a + b, 0) : (q ? q.count : 0);
 
+  // trade presets: one tap picks a trade's measurements (or Premier for roof trades)
+  (async () => {
+    let TR = [];
+    try { TR = (await api("/api/trades")).trades.filter((t) => !/beta/i.test(t.label)); } catch (e) { return; }
+    const box = $("tradeChips");
+    if (!box) return;
+    box.innerHTML = TR.map((t) => `<button type="button" data-k="${esc(t.key)}" title="${esc(t.pitch)}">${esc(t.label)}</button>`).join("");
+    box.addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      const t = TR.find((x) => x.key === b.dataset.k);
+      box.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+      const prodBtn = document.querySelector(`.prodswitch button[data-prod="${t.premier ? "premier" : "standard"}"]`);
+      if (!t.premier && t.types.length) {
+        picked = t.types.filter((k) => !taken().includes(k));
+        if (!picked.length) picked = t.types.slice(0, 1);
+        document.querySelectorAll("#typePick input").forEach((x) => { x.checked = picked.includes(x.value); x.closest("label").classList.toggle("on", x.checked); });
+        try { localStorage.setItem("dataTypes", JSON.stringify(picked)); } catch (e2) {}
+      }
+      if (prodBtn) prodBtn.click(); else { updatePrice(); calc(); }
+    });
+  })();
+
   let product = "standard";
   document.querySelectorAll(".prodswitch button").forEach((btn) => btn.addEventListener("click", () => {
     product = btn.dataset.prod;
     document.querySelectorAll(".prodswitch button").forEach((x) => { x.classList.toggle("on", x === btn); x.setAttribute("aria-checked", x === btn); });
-    const prem = product === "premier";
+    const prem = product === "premier", excl = product === "exclusive";
     $("typePick").classList.toggle("hidden", prem);
-    $("stdIntro").classList.toggle("hidden", prem);
+    $("stdIntro").classList.toggle("hidden", prem || excl);
     $("premIntro").classList.toggle("hidden", !prem);
+    $("exclIntro").classList.toggle("hidden", !excl);
+    document.querySelector(".dp .valuepick").classList.toggle("hidden", excl);  // whole ZIP only
+    $("bBtn").textContent = excl ? "Lock this ZIP" : "Buy sheet";
     updatePrice();
   }));
   const perHome = () => product === "premier" ? (pricing.premier_cents || 25)
     : pricing.rate_cents + pricing.extra_type_cents * (Math.max(1, picked.length) - 1);
+  function exclusivePrice() {
+    const p = q.pricing, h = held(), fresh = picked.filter((k) => !h.includes(k));
+    const per = h.length ? (p.exclusive_extra_cents || 50) * fresh.length
+      : fresh.length ? (p.exclusive_cents || 100) + (p.exclusive_extra_cents || 50) * (fresh.length - 1) : 0;
+    const n = q.zip_total;
+    const c = fresh.length ? Math.max(Math.ceil(n * per - 1e-9), Math.round(p.min_order_usd * 100)) : 0;
+    q.count = n; q.price_cents = c;
+    $("qCount").textContent = `${n.toLocaleString()} properties`;
+    $("qPrice").textContent = usd(c);
+    $("qRate").textContent = fresh.length
+      ? `(${fresh.length} measurement${fresh.length === 1 ? "" : "s"} locked × all ${n.toLocaleString()} homes at ${usd(per)} each${h.length ? ", added to your exclusive" : ""})`
+      : "(You already hold these in this ZIP.)";
+    $("memberLine").innerHTML = '<span class="muted">Exclusive pricing is the same for members and non-members.</span>';
+    document.querySelectorAll("#typePick [data-c]").forEach((el) => {
+      const k = el.dataset.c;
+      el.textContent = taken().includes(k) ? "Taken" : h.includes(k) ? "Yours"
+        : (!h.length && fresh[0] === k) ? usd(p.exclusive_cents || 100) : `+${cents(p.exclusive_extra_cents || 50)}`;
+    });
+  }
   function updatePrice() {
     if (!q || !q.zip_total) return;
+    if (product === "exclusive") return exclusivePrice();
     const vb = q.value_bands || { bands: [] };
     const mult = pricing.value_multipliers || [1];
     const n = selCount();
@@ -191,7 +264,7 @@
     // what each unticked option would add
     document.querySelectorAll("#typePick [data-c]").forEach((el) => {
       const on = picked.includes(el.dataset.c);
-      el.textContent = on ? (picked[0] === el.dataset.c ? `${pricing.rate_cents}¢` : `+${pricing.extra_type_cents}¢`) : `+${pricing.extra_type_cents}¢`;
+      el.textContent = taken().includes(el.dataset.c) ? "Taken" : on ? (picked[0] === el.dataset.c ? `${pricing.rate_cents}¢` : `+${pricing.extra_type_cents}¢`) : `+${pricing.extra_type_cents}¢`;
     });
   }
 
@@ -209,7 +282,7 @@
       const r = await api("/api/data/sample", { method: "POST", json: { email, zip: q.zip, classes: $("cls").value.split(",") } });
       $("sMsg").innerHTML = `<span class="ok">Here are ${r.rows.length} properties.</span>`;
       const num = (k) => /_sqft$|_ft$|_count$|^est_/.test(k);
-      const show = ["address", "city", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft", "building_sqft", "lot_sqft", "beds_sqft", "tree_count", "wall_sqft", "est_windows"];
+      const show = ["address", "city", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft", "building_sqft", "lot_sqft", "beds_sqft", "tree_count", "wall_sqft", "est_windows"].filter((k) => r.keys.includes(k));
       const lab = Object.fromEntries(r.columns.map((c) => [c.key, c.label]));
       $("sampleTable").innerHTML = `<thead><tr>${show.map((k) => `<th class="${num(k) ? "num" : ""}">${esc(lab[k])}</th>`).join("")}</tr></thead>
         <tbody>${r.rows.map((row) => `<tr>${show.map((k) => `<td class="${num(k) ? "num" : ""}">${num(k) ? fmt(row[k]) : esc(row[k])}</td>`).join("")}</tr>`).join("")}</tbody>`;

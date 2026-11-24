@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=16">
+<link rel="stylesheet" href="/static/styles.css?v=18">
 <style>
   /* ------------------------------------------------------------------
      Page-scoped design for /data. Everything is under body.dp so the
@@ -345,6 +345,11 @@
   .dp .prodswitch button b { display: block; font-family: var(--display); font-size: 16px; font-weight: 800; }
   .dp .prodswitch button span { font-size: 13px; color: var(--muted); line-height: 1.3; display: block; }
   .dp .prodswitch button.on { border-color: var(--acc-strong); background: var(--acc-soft); }
+  .dp .prodswitch button.excl { grid-column: 1 / -1; }
+  .dp .exclbox { background: #fff7e0; border: 1.5px solid #f2d27a; border-radius: 14px; padding: 12px 14px; margin: 0 0 12px; }
+  .dp .typepick label.taken { opacity: .55; cursor: not-allowed; }
+  .dp .typepick label.taken .c { color: #b45309; font-weight: 600; }
+  .dp .typepick label.held .c { color: var(--acc-strong); font-weight: 600; }
   .dp .valuepick { background: var(--field, #f3f5f0); border-radius: 16px; padding: 12px 14px; margin: 4px 0 14px; }
   .dp .valuepick .vp-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
   .dp .valuepick .vp-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-top: 8px; }
@@ -358,6 +363,12 @@
   .dp .vbar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
   .dp .vbar.in .n, .dp .vbar.in .l { color: var(--ink); font-weight: 600; }
   .dp .vbar .l { color: var(--muted); white-space: nowrap; }
+  .dp .tradepresets { margin: 2px 0 12px; min-width: 0; max-width: 100%; }
+  .dp #result > *, .dp .buy-card, .dp .buy-card > * { min-width: 0; max-width: 100%; }
+  .dp .tradepresets .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+  .dp .tradepresets .chips button { flex: 0 0 auto; min-height: 38px; padding: 7px 13px; font-size: 13.5px; font-weight: 600;
+    background: var(--field, #f3f5f0); color: var(--ink); border-radius: 99px; box-shadow: none; white-space: nowrap; }
+  .dp .tradepresets .chips button.on { background: var(--ink); color: #fff; }
 </style>
 </head>
 <body class="dp">
@@ -443,9 +454,19 @@
               <div class="vbars" id="vBars" aria-label="Homes in this ZIP by assessed value"></div>
               <p class="small muted" style="margin:6px 0 0">Values are the county's assessed values. Higher-value homes cost a little more per home.</p>
             </div>
+            <div class="tradepresets">
+              <div class="small" style="font-weight:600;margin-bottom:6px">I'm in… <span class="muted" style="font-weight:400">(picks the right measurements)</span></div>
+              <div class="chips" id="tradeChips"></div>
+            </div>
             <div class="prodswitch" role="radiogroup" aria-label="List type">
               <button type="button" class="on" data-prod="standard" role="radio" aria-checked="true"><b>Standard sheet</b><span>Spreadsheet, pick your measurements</span></button>
               <button type="button" data-prod="premier" role="radio" aria-checked="false"><b>Premier list</b><span>Full report PDF for every home</span></button>
+              <button type="button" data-prod="exclusive" role="radio" aria-checked="false" class="excl"><b>Exclusive ZIP</b><span>Own the whole ZIP: no other company can buy your measurements here</span></button>
+            </div>
+            <div class="exclbox hidden" id="exclIntro">
+              <b>Lock this ZIP for your company.</b>
+              <p class="small" style="margin:6px 0 0">Every home in the ZIP, <span id="exclRate">$1.00 a home for your first measurement and 50¢ for each extra one</span>. For <span id="exclMonths">12</span> months we won't sell the measurements you lock in this ZIP to anyone else, as a sheet or a Premier list. Measurements you don't lock stay on sale to others. Whole ZIP only (no value filter). Add more measurements later at 50¢ a home each.</p>
+              <p class="small" id="exclLogin" style="margin:6px 0 0"></p>
             </div>
             <p class="small muted" id="stdIntro" style="margin:0">Pick what you want measured. Address, lot size and a quality flag come with every row.</p>
             <div class="typepick" id="typePick" role="group" aria-label="Measurements to include"></div>
@@ -662,8 +683,8 @@
   <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Get 25 free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=16"></script>
-<script src="/static/data.js?v=16"></script>
+<script src="/static/common.js?v=17"></script>
+<script src="/static/data.js?v=17"></script>
 <script>
 // Phone-only sticky "Get 25 free" button: shown once the ZIP box has scrolled
 // away, hidden while the ZIP box or the closing CTA is on screen and once a
