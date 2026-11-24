@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estimate</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { --accent: #15803d; --ink: #0f172a; --muted: #64748b; --line: #e2e8f0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: #f4f6f3; }
+  .bar { background: var(--accent); color: #fff; padding: 18px 16px; }
+  .bar b { font-size: 19px; display: block; }
+  .bar span { opacity: .9; font-size: 14px; }
+  main { max-width: 620px; margin: 0 auto; padding: 16px; }
+  .card { background: #fff; border-radius: 18px; padding: 18px; box-shadow: 0 1px 3px rgba(0,0,0,.06); margin-bottom: 14px; }
+  h1 { font-size: 24px; margin: 0 0 2px; letter-spacing: -.01em; }
+  .muted { color: var(--muted); font-size: 14px; }
+  img.ph { width: 100%; border-radius: 14px; display: block; margin-top: 12px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  td { padding: 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:last-child { text-align: right; font-weight: 700; white-space: nowrap; padding-left: 12px; font-variant-numeric: tabular-nums; }
+  .total { display: flex; justify-content: space-between; font-size: 22px; font-weight: 800; margin-top: 12px; }
+  .btns { display: grid; gap: 8px; margin-top: 16px; }
+  button, a.btn { font: inherit; font-weight: 700; border: 0; border-radius: 14px; padding: 15px; min-height: 54px; cursor: pointer; text-align: center; text-decoration: none; }
+  .yes { background: var(--accent); color: #fff; }
+  .no { background: #eef2f7; color: var(--ink); }
+  .done { background: #dcfce7; color: #166534; border-radius: 14px; padding: 14px; font-weight: 700; text-align: center; }
+  .pay { background: #f8fafc; border-radius: 12px; padding: 12px; white-space: pre-wrap; }
+  .err { color: #b91c1c; }
+</style>
+</head>
+<body>
+<div class="bar"><b id="co">…</b><span id="coLine"></span></div>
+<main id="main"><div class="card muted">Loading…</div></main>
+<script>
+(async function () {
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const usd = (c) => "$" + ((c || 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const [, kind, tok] = location.pathname.split("/");
+  const url = `/api/public/${kind === "e" ? "estimate" : "invoice"}/${encodeURIComponent(tok)}`;
+  let d;
+  async function load(opts) {
+    const r = await fetch(url, opts);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || "This link isn't valid.");
+    return r.json();
+  }
+  try { d = await load(); } catch (e) { document.getElementById("main").innerHTML = `<div class="card err">${esc(e.message)}</div>`; return; }
+  draw();
+  function draw() {
+    const c = d.company, cu = d.customer, est = d.kind === "estimate";
+    document.documentElement.style.setProperty("--accent", c.brand_color || "#15803d");
+    document.title = `${est ? "Estimate" : "Invoice"} from ${c.name || ""}`;
+    document.getElementById("co").textContent = c.name || "";
+    document.getElementById("coLine").textContent = [c.phone, c.email].filter(Boolean).join(" · ");
+    const status = est
+      ? (d.status === "accepted" ? '<div class="done">You accepted this estimate. We\'ll be in touch to schedule.</div>'
+        : d.status === "declined" ? '<div class="done" style="background:#fee2e2;color:#991b1b">You declined this estimate.</div>'
+        : `<div class="btns"><button class="yes" id="yes">Accept estimate</button><button class="no" id="no">No thanks</button>${c.phone ? `<a class="btn no" href="tel:${esc(c.phone)}">Call ${esc(c.name || "us")}</a>` : ""}</div>`)
+      : (d.status === "paid" ? '<div class="done">Paid. Thank you!</div>' : d.status === "void" ? '<div class="done" style="background:#eef2f7;color:#334155">This invoice was cancelled.</div>'
+        : `${c.pay_note ? `<p class="muted" style="margin:16px 0 6px">How to pay</p><div class="pay">${esc(c.pay_note)}</div>` : ""}${c.phone ? `<div class="btns"><a class="btn no" href="tel:${esc(c.phone)}">Call ${esc(c.name || "us")}</a></div>` : ""}`);
+    document.getElementById("main").innerHTML = `<div class="card">
+        <div class="muted">${est ? "Estimate" : "Invoice"} #${d.id} · ${new Date(d.created * 1000).toLocaleDateString(undefined, { dateStyle: "long" })}${!est && d.due ? ` · due ${esc(d.due)}` : ""}</div>
+        <h1>${esc(cu.name || "Hello")}</h1>
+        <div class="muted">${esc([cu.address, cu.city, cu.zip].filter(Boolean).join(", "))}</div>
+        ${d.aerial_jpg ? `<img class="ph" alt="Your property, measured from above" src="data:image/jpeg;base64,${d.aerial_jpg}">
+          <div class="muted" style="margin-top:6px">Measured from aerial photos and LiDAR: no visit needed to price your job.</div>` : ""}
+        <table>${d.items.map((i) => `<tr><td>${esc(i.desc)}${i.qty && i.qty !== 1 ? ` × ${i.qty}` : ""}</td><td>${usd(i.price_cents * (i.qty || 1))}</td></tr>`).join("")}</table>
+        <div class="total"><span>Total</span><span>${usd(d.total_cents)}</span></div>
+        ${d.note ? `<p class="muted" style="white-space:pre-wrap">${esc(d.note)}</p>` : ""}
+        ${status}
+      </div>`;
+    const ans = (accept) => async () => {
+      try { d = await load({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ accept }) }); draw(); }
+      catch (e) { alert(e.message); }
+    };
+    const y = document.getElementById("yes"), n = document.getElementById("no");
+    if (y) y.onclick = ans(true);
+    if (n) n.onclick = ans(false);
+  }
+})();
+</script>
+</body>
+</html>

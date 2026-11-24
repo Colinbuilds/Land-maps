@@ -108,6 +108,7 @@
         <li>2 trades included. 3rd trade +$15, 4th +$5 a month ($20 per extra pair)</li>
         <li>The full Premier report for every trade: roof, walls &amp; elevations, lot &amp; yard, with each trade's numbers up top</li>
         <li>A print-ready postcard of any home you measure, for door-to-door mail</li>
+        <li><b>Add the CRM portal for <span id="crmPrice">$25</span>/mo:</b> estimates in one tap, scheduling, job photos and invoices</li>
         <li>Cancel any time from your billing page</li>
       </ul>
       <button id="mBtn">Become a member</button>
@@ -201,6 +202,7 @@
   let pack = 5;
   $("mPrice").textContent = usd(P.member_price_cents);
   $("cPrice").textContent = usd(P.credit_price_cents);
+  $("crmPrice").textContent = usd(P.crm_price_cents || 2500).replace(".00", "");
   const drawPacks = () => {
     $("packs").innerHTML = P.packs.map((n) => `<button type="button" class="pack ${n === pack ? "on" : ""}" role="radio" aria-checked="${n === pack}" data-n="${n}"><b>${n} credit${n > 1 ? "s" : ""}</b><span>${usd(n * P.credit_price_cents)}</span></button>`).join("");
     $("cBtn").textContent = `Buy ${pack} credit${pack > 1 ? "s" : ""} · ${usd(pack * P.credit_price_cents)}`;
@@ -222,9 +224,18 @@
         <div><div class="small muted">Plan</div><div class="big">${me.member ? `Member${until ? ` <span class="small muted" style="font-weight:500">renews ${esc(until)}</span>` : ""}` : "Pay as you go"}</div></div>
         <div><div class="small muted">Credits</div><div class="big">${me.member ? "Unlimited" : me.credits}</div></div>
         <div><div class="small muted">Trades</div><div class="big" style="font-size:15px">${esc((me.trades || []).map((k) => (TR.find((t) => t.key === k) || {}).label || k).join(", ") || "None yet")}</div></div>
+        ${me.member ? `<div><div class="small muted">CRM portal</div><div class="big" style="font-size:15px">${me.crm ? 'On · <a href="/crm">open</a> · <a href="#" id="crmOff">turn off</a>' : `Off · <a href="#" id="crmOn">add for ${usd(P.crm_price_cents || 2500).replace(".00", "")}/mo</a>`}</div></div>` : ""}
         <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/roof">Order a report</a>${me.stripe_customer ? `<button class="secondary" id="bill">Billing</button>` : ""}</div>
       </div>`;
     if (me.member) { $("mBtn").textContent = "You're a member"; $("mBtn").disabled = true; }
+    const crmSet = (on) => async (e) => {
+      e.preventDefault();
+      if (!confirm(on ? `Add the CRM portal for ${usd(P.crm_price_cents || 2500)} a month? Your card is charged the difference for the rest of this month.` : "Turn off the CRM portal? Your data stays; you can turn it back on any time.")) return;
+      try { me = await api("/api/roof/crm", { method: "PUT", json: { on } }); drawAccount(); if (on) location.href = "/crm"; } catch (x) { alert(x.message); }
+    };
+    const con = document.getElementById("crmOn"), coff = document.getElementById("crmOff");
+    if (con) con.onclick = crmSet(true);
+    if (coff) coff.onclick = crmSet(false);
     const bill = document.getElementById("bill");
     if (bill) bill.addEventListener("click", async () => {
       try { location.href = (await api("/api/billing/portal", { method: "POST" })).url; } catch (e) { alert(e.message); }

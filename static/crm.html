@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CRM</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  :root { --accent: #15803d; --soft: #eef5f0; }
+  body { background: #f4f6f3; padding-bottom: 86px; }
+  .tabbar, .site-nav { display: none !important; }   /* the CRM has its own tabs */
+  header.top { position: sticky; top: 0; z-index: 20; padding: 12px 16px; }
+  header.top .brand { font-size: 16px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 14px 16px 30px; }
+  h1 { font-size: 26px; margin: 4px 0 2px; }
+  .sub { color: var(--muted); font-size: 14px; margin-bottom: 14px; }
+  .kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0 0 16px; }
+  @media (min-width: 640px) { .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  .kpi { background: #fff; border-radius: 16px; padding: 12px 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .kpi .l { font-size: 12.5px; color: var(--muted); }
+  .kpi .v { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .kpi.warn .v { color: #b45309; }
+  .sec { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 18px 0 8px; }
+  .sec h2 { margin: 0; font-size: 17px; }
+  .list { display: grid; gap: 8px; }
+  .item { background: #fff; border-radius: 16px; padding: 12px 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05); display: grid; gap: 6px; }
+  .item.tap { cursor: pointer; }
+  .item .top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+  .item .t { font-weight: 700; font-size: 15.5px; }
+  .item .p { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .item .m { color: var(--muted); font-size: 13.5px; }
+  .item .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+  .item.done { opacity: .62; }
+  .acts button, .acts a.btn, .mini { min-height: 40px; padding: 8px 12px; font-size: 14px; border-radius: 12px; }
+  .pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 99px; background: #eef2f7; color: #334155; }
+  .pill.sent { background: #e0ecff; color: #1d4ed8; } .pill.accepted, .pill.paid, .pill.done { background: #dcfce7; color: #166534; }
+  .pill.declined, .pill.void, .pill.skipped { background: #fee2e2; color: #991b1b; } .pill.unpaid { background: #fef3c7; color: #92400e; }
+  .empty { background: #fff; border-radius: 16px; padding: 18px; color: var(--muted); text-align: center; }
+  .quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .quick button { min-height: 62px; border-radius: 16px; font-size: 14px; line-height: 1.2; }
+  .search2 input { min-height: 46px; font-size: 16px; border-radius: 14px; }
+  .week { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+  .week button { min-height: 40px; }
+  .day h3 { margin: 14px 0 6px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .bars { display: grid; gap: 4px; }
+  .bar { display: grid; grid-template-columns: 70px minmax(0, 1fr) 80px; gap: 8px; align-items: center; font-size: 13px; }
+  .bar i { display: block; height: 10px; border-radius: 5px; background: var(--accent); }
+  .photos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .photos img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; }
+  nav.crmtabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; background: #fff; border-top: 1px solid var(--line);
+    display: grid; grid-template-columns: repeat(5, 1fr); padding-bottom: env(safe-area-inset-bottom); }
+  nav.crmtabs button { background: none; color: var(--muted); border-radius: 0; padding: 8px 2px 10px; font-size: 11.5px; font-weight: 600; display: grid; justify-items: center; gap: 2px; min-height: 58px; }
+  nav.crmtabs button span { font-size: 20px; line-height: 1; }
+  nav.crmtabs button.on { color: var(--accent); }
+  .sheet-bg { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); z-index: 50; display: flex; align-items: flex-end; justify-content: center; }
+  .sheet { background: #fff; width: 100%; max-width: 640px; max-height: 92vh; overflow: auto; border-radius: 20px 20px 0 0; padding: 16px 16px calc(20px + env(safe-area-inset-bottom)); }
+  @media (min-width: 700px) { .sheet-bg { align-items: center; } .sheet { border-radius: 20px; } }
+  .sheet h2 { font-size: 19px; margin: 0 0 4px; }
+  .sheet .x { float: right; background: #eef2f7; color: #0f172a; min-height: 36px; padding: 6px 12px; }
+  .sheet label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .sheet input, .sheet select, .sheet textarea { min-height: 46px; font-size: 16px; border-radius: 12px; color: var(--ink); }
+  .lines .ln { display: grid; grid-template-columns: minmax(0, 1fr) 110px 40px; gap: 6px; margin-top: 6px; }
+  .lines .ln button { background: #fee2e2; color: #991b1b; padding: 0; }
+  .total { display: flex; justify-content: space-between; font-weight: 800; font-size: 18px; margin-top: 12px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .gate { max-width: 520px; margin: 30px auto; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span><span id="coName">CRM</span></div>
+  <div class="contact"><a href="/roof" class="small">Reports</a> · <button class="secondary mini" id="gear" aria-label="Settings">⚙︎</button></div>
+</header>
+
+<div class="wrap" id="gate" hidden></div>
+<div class="wrap" id="app" hidden>
+  <section data-view="today"></section>
+  <section data-view="customers" class="hidden"></section>
+  <section data-view="estimates" class="hidden"></section>
+  <section data-view="schedule" class="hidden"></section>
+  <section data-view="money" class="hidden"></section>
+</div>
+
+<nav class="crmtabs" id="tabs" hidden>
+  <button data-v="today" class="on"><span>🏠</span>Today</button>
+  <button data-v="customers"><span>👥</span>Customers</button>
+  <button data-v="estimates"><span>📝</span>Estimates</button>
+  <button data-v="schedule"><span>📅</span>Schedule</button>
+  <button data-v="money"><span>💵</span>Money</button>
+</nav>
+<input type="file" id="photoIn" accept="image/*" capture="environment" hidden>
+
+<script src="/static/common.js?v=15"></script>
+<script src="/static/crm.js?v=1"></script>
+</body>
+</html>

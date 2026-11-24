@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command Center</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  body { background: #f3f4f1; }
+  .tabbar { display: none !important; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px 16px 60px; }
+  h1 { margin: 6px 0 2px; }
+  .tot { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+  @media (min-width: 760px) { .tot { grid-template-columns: repeat(7, minmax(0, 1fr)); } }
+  .tot div { background: #fff; border-radius: 14px; padding: 10px 12px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .tot .l { font-size: 12px; color: var(--muted); } .tot .v { font-size: 21px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .tools input { max-width: 320px; min-height: 42px; }
+  .tools select { max-width: 200px; min-height: 42px; }
+  .chip { background: #e9efeb; color: var(--ink); border-radius: 99px; padding: 7px 13px; font-size: 13.5px; min-height: 36px; }
+  .chip.on { background: var(--ink); color: #fff; }
+  .lib { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .co { background: #fff; border-radius: 16px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.06); cursor: pointer; display: grid; gap: 6px; border: 2px solid transparent; }
+  .co:hover { border-color: #cbd5e1; }
+  .co .hd { display: flex; gap: 8px; align-items: center; }
+  .co .hd i { width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto; }
+  .co .hd b { font-size: 16px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .co .txt { font-size: 13.5px; color: #334155; }
+  .co .nums { display: flex; gap: 14px; font-size: 12.5px; color: var(--muted); }
+  .co .nums b { color: var(--ink); }
+  .flag { display: inline-block; font-size: 11.5px; font-weight: 700; border-radius: 99px; padding: 2px 8px; margin: 0 4px 2px 0; }
+  .flag.warn { background: #fef3c7; color: #92400e; } .flag.bad { background: #fee2e2; color: #991b1b; }
+  .tag { font-size: 11.5px; font-weight: 700; border-radius: 99px; padding: 2px 8px; background: #dcfce7; color: #166534; }
+  .tag.crm { background: #e0ecff; color: #1d4ed8; } .tag.payg { background: #f1f5f9; color: #475569; }
+  .drawer-bg { position: fixed; inset: 0; background: rgba(15,23,42,.4); z-index: 50; display: flex; justify-content: flex-end; }
+  .drawer { background: #f8faf9; width: min(680px, 100%); height: 100%; overflow: auto; padding: 18px; }
+  .drawer h2 { font-size: 22px; margin: 0; }
+  .box { background: #fff; border-radius: 14px; padding: 14px; margin-top: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .box h3 { margin: 0 0 8px; font-size: 15px; }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 14px; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .tchips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tchips button { background: #eef2f7; color: var(--ink); border-radius: 99px; padding: 6px 11px; font-size: 13px; }
+  .tchips button.on { background: var(--accent); color: #fff; }
+  table.t { width: 100%; font-size: 13.5px; border-collapse: collapse; }
+  table.t td { padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span>Command Center</div>
+  <div class="contact"><a href="/business" class="small">Business</a> · <a href="/demo" class="small">Demo</a></div>
+</header>
+<div class="wrap">
+  <div id="tokBox" class="card stack hidden" style="max-width:420px">
+    <b>Owner access</b><input id="tok" type="password" placeholder="Admin token (ESTIMATOR_ADMIN_TOKEN)"><button id="tokGo">Open</button><div id="tokMsg" class="small"></div>
+  </div>
+  <div id="app" class="hidden">
+    <h1>Your companies</h1>
+    <div class="muted" id="when"></div>
+    <div class="tot" id="tot"></div>
+    <div class="tools">
+      <input id="q" placeholder="Search name, email, trade, notes" aria-label="Search">
+      <span id="filters"></span>
+      <select id="sort" aria-label="Sort"><option value="mrr">Most revenue</option><option value="active">Recently active</option><option value="new">Newest</option><option value="name">Name</option><option value="flags">Needs attention</option></select>
+    </div>
+    <div class="lib" id="lib"></div>
+  </div>
+</div>
+<script src="/static/common.js?v=15"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const usd = (c) => "$" + Math.round((c || 0) / 100).toLocaleString();
+  const ago = (t) => { if (!t) return "never"; const d = (Date.now() / 1000 - t) / 86400; return d < 1 ? "today" : d < 2 ? "yesterday" : d < 30 ? `${Math.floor(d)} days ago` : new Date(t * 1000).toLocaleDateString(); };
+  let L = null, TR = [], filter = "all";
+  try { TR = (await api("/api/trades")).trades; } catch (e) {}
+  const tl = (k) => ((TR.find((t) => t.key === k) || {}).label || k).replace(" (beta)", "");
+
+  async function load() {
+    try { L = await api("/api/admin/library"); }
+    catch (e) {
+      $("tokBox").classList.remove("hidden"); $("app").classList.add("hidden");
+      $("tokMsg").textContent = /401|403|token|Forbidden|Unauthorized/i.test(e.message) ? "" : e.message; return;
+    }
+    $("tokBox").classList.add("hidden"); $("app").classList.remove("hidden");
+    const t = L.totals;
+    $("when").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    $("tot").innerHTML = [["Companies", t.companies], ["Members", t.members], ["With CRM", t.crm], ["Monthly revenue", usd(t.mrr_cents)],
+      ["ZIP list sales", usd(t.orders_cents)], ["Reports (30 days)", t.reports_30d.toLocaleString()], ["Need attention", t.flagged]]
+      .map(([l, v]) => `<div><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
+    $("filters").innerHTML = [["all", "All"], ["member", "Members"], ["crm", "CRM"], ["payg", "Pay as you go"], ["flag", "Needs attention"], ["paused", "Paused"]]
+      .map(([k, l]) => `<button class="chip ${filter === k ? "on" : ""}" data-f="${k}">${l}</button>`).join("");
+    draw();
+  }
+  $("tokGo").onclick = () => { localStorage.setItem("adminToken", $("tok").value.trim()); load(); };
+  $("filters").addEventListener("click", (e) => { const b = e.target.closest("[data-f]"); if (b) { filter = b.dataset.f; load(); } });
+  $("q").oninput = draw; $("sort").onchange = draw;
+
+  function draw() {
+    if (!L) return;
+    const q = $("q").value.trim().toLowerCase();
+    let rows = L.companies.filter((c) => {
+      if (filter === "member" && !c.member) return false;
+      if (filter === "crm" && !(c.crm && c.member)) return false;
+      if (filter === "payg" && c.member) return false;
+      if (filter === "flag" && !c.summary.flags.length) return false;
+      if (filter === "paused" && !c.disabled) return false;
+      if (!q) return true;
+      return `${c.name} ${c.email} ${c.phone} ${(c.trades || []).map(tl).join(" ")} ${c.admin_notes || ""}`.toLowerCase().includes(q);
+    });
+    const s = $("sort").value;
+    rows.sort((a, b) => s === "name" ? a.name.localeCompare(b.name) : s === "new" ? b.created - a.created
+      : s === "active" ? (b.summary.last_active || 0) - (a.summary.last_active || 0) : s === "flags" ? b.summary.flags.length - a.summary.flags.length
+      : (b.summary.mrr_cents + b.summary.orders_cents) - (a.summary.mrr_cents + a.summary.orders_cents));
+    $("lib").innerHTML = rows.map((c) => `<div class="co" data-id="${c.id}" tabindex="0">
+        <div class="hd"><i style="background:${esc(c.brand_color || "#64748b")}"></i><b>${esc(c.name)}</b>
+          ${c.member ? `<span class="tag">Member</span>` : `<span class="tag payg">Credits</span>`}${c.crm && c.member ? '<span class="tag crm">CRM</span>' : ""}</div>
+        <div>${c.summary.flags.map((f) => `<span class="flag ${f.level}">${esc(f.text)}</span>`).join("")}</div>
+        <div class="txt">${esc(c.summary.text)}</div>
+        <div class="nums"><span><b>${usd(c.summary.mrr_cents)}</b>/mo</span><span><b>${(c.stats || {}).reports_30d || 0}</b> reports 30d</span><span>active ${ago(c.summary.last_active)}</span></div>
+      </div>`).join("") || '<div class="muted">No companies match.</div>';
+    $("lib").querySelectorAll(".co").forEach((el) => { el.onclick = () => open(+el.dataset.id); el.onkeydown = (e) => { if (e.key === "Enter") open(+el.dataset.id); }; });
+  }
+
+  async function open(id) {
+    const d = await api(`/api/admin/companies/${id}/detail`);
+    const c = d.company;
+    let trades = (c.trades || []).slice();
+    const bg = document.createElement("div");
+    bg.className = "drawer-bg"; bg.id = "dr";
+    bg.innerHTML = `<div class="drawer">
+      <div class="acts" style="justify-content:space-between"><h2>${esc(c.name)}</h2><button class="secondary" id="dx">Close</button></div>
+      <div>${d.summary.flags.map((f) => `<span class="flag ${f.level}">${esc(f.text)}</span>`).join("")}</div>
+      <p style="margin:6px 0">${esc(d.summary.text)}</p>
+      <div class="acts"><button id="dView">Open their portal</button><a class="btn secondary" href="mailto:${esc(c.email)}">Email</a>${c.phone ? `<a class="btn secondary" href="tel:${esc(c.phone)}">Call</a>` : ""}</div>
+      <div class="box"><h3>Account</h3><div class="kv">
+        <span>Email</span><span>${esc(c.email)}</span><span>Phone</span><span>${esc(c.phone || "–")}</span>
+        <span>Plan</span><span>${c.member ? `Member until ${new Date(c.member_until * 1000).toLocaleDateString()}` : "Pay as you go"}</span>
+        <span>Price if member</span><span>${usd(d.plan_price_cents)}/mo</span>
+        <span>Credits</span><span>${c.credits}</span><span>Joined</span><span>${new Date(c.created * 1000).toLocaleDateString()}</span>
+        <span>Last active</span><span>${ago(d.summary.last_active)}</span><span>Stripe</span><span>${c.stripe_sub ? "subscribed" : "–"}</span></div></div>
+      <div class="box"><h3>Trades</h3><div class="tchips" id="dTr">${TR.map((t) => `<button data-k="${t.key}" class="${trades.includes(t.key) ? "on" : ""}">${esc(tl(t.key))}</button>`).join("")}</div>
+        <div class="small muted" style="margin-top:6px">Changing trades here doesn't change their Stripe price; it's for fixing a mix-up or a comped account.</div></div>
+      <div class="box"><h3>Manage</h3>
+        <div class="acts">
+          <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="dCrm" ${c.crm ? "checked" : ""} style="width:auto"> CRM portal</label>
+          <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="dPause" ${c.disabled ? "checked" : ""} style="width:auto"> Paused (can't sign in)</label>
+        </div>
+        <div class="row" style="margin-top:10px"><select id="dComp"><option value="">Comp a membership…</option><option value="1">Free for 1 month</option><option value="3">Free for 3 months</option><option value="12">Free for 12 months</option><option value="0">End membership now</option></select>
+          <input type="number" id="dCred" placeholder="Add credits (e.g. 5)"></div>
+        <label class="small muted" style="display:block;margin-top:10px">Your notes on this company (only you see these)<textarea id="dNotes">${esc(c.admin_notes || "")}</textarea></label>
+        <button id="dSave" style="margin-top:10px">Save changes</button> <span id="dMsg" class="small"></span></div>
+      ${d.money ? `<div class="box"><h3>Their CRM</h3><div class="kv"><span>Customers</span><span>${d.crm_stats.customers}</span><span>Active jobs</span><span>${d.crm_stats.jobs}</span>
+        <span>Collected this month</span><span>${usd(d.money.paid_this_month)}</span><span>Owed to them</span><span>${usd(d.money.owed)}</span>
+        <span>Open estimates</span><span>${usd(d.money.pipeline)}</span><span>Collected all time</span><span>${usd(d.crm_stats.paid_cents)}</span></div></div>` : ""}
+      <div class="box"><h3>Reports (${d.stats.reports || 0})</h3><table class="t">${d.reports.map((r) => `<tr><td>${new Date(r.created * 1000).toLocaleDateString()}</td><td>${esc(r.address)}</td><td><a href="/r/${r.id}?t=${esc(r.share_token)}" target="_blank">open</a></td></tr>`).join("") || '<tr><td class="muted">None yet</td></tr>'}</table></div>
+      <div class="box"><h3>ZIP orders</h3><table class="t">${d.orders.map((o) => `<tr><td>${new Date(o.created * 1000).toLocaleDateString()}</td><td>ZIP ${esc(o.zip)} · ${esc(o.product || "standard")}</td><td>${usd(o.amount_cents)}</td><td>${esc(o.status.replace("_", " "))}</td></tr>`).join("") || '<tr><td class="muted">None</td></tr>'}</table></div>
+      <div class="box"><h3>Credit history</h3><table class="t">${d.ledger.map((l) => `<tr><td>${new Date(l.ts * 1000).toLocaleDateString()}</td><td>${esc(l.reason)}</td><td>${l.delta > 0 ? "+" : ""}${l.delta}</td></tr>`).join("") || '<tr><td class="muted">None</td></tr>'}</table></div>
+    </div>`;
+    document.body.appendChild(bg);
+    const shut = () => bg.remove();
+    bg.onclick = (e) => { if (e.target === bg) shut(); };
+    $("dx").onclick = shut;
+    $("dTr").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; const k = b.dataset.k;
+      trades = trades.includes(k) ? trades.filter((x) => x !== k) : [...trades, k]; b.classList.toggle("on"); };
+    $("dView").onclick = async () => {
+      if (!confirm(`Open ${c.name}'s portal as them? You'll be signed in as this company in this browser for a day.`)) return;
+      const r = await api(`/api/admin/companies/${id}/view-as`, { method: "POST" }); window.open(r.go, "_blank");
+    };
+    $("dSave").onclick = async () => {
+      try {
+        const body = { trades, crm: $("dCrm").checked, disabled: $("dPause").checked, admin_notes: $("dNotes").value };
+        if ($("dComp").value !== "") body.comp_months = +$("dComp").value;
+        await api(`/api/admin/companies/${id}/manage`, { method: "PATCH", json: body });
+        const cr = +$("dCred").value;
+        if (cr) await api(`/api/admin/companies/${id}/credits`, { method: "POST", json: { delta: cr, reason: "added by owner" } });
+        shut(); await load(); open(id);
+      } catch (e) { $("dMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
+  }
+  load();
+})();
+</script>
+</body>
+</html>

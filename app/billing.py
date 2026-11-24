@@ -32,7 +32,9 @@ DEFAULTS = {"member_price_cents": 9900, "credit_price_cents": 2500, "list_discou
             # with the base price; each further pair of trades is $20 a month
             # (+$15 for the first of the pair, +$5 for the second):
             # 2 trades $99, 3 $114, 4 $119, 5 $134, 6 $139 ...
-            "included_trades": 2, "trade_cents": [1500, 500]}
+            "included_trades": 2, "trade_cents": [1500, 500],
+            # CRM portal add-on (estimates, schedule, photos, money), per month
+            "crm_price_cents": 2500}
 CREDIT_PACKS = (1, 5, 10, 25)
 
 
@@ -61,9 +63,10 @@ def trade_addon_cents(n: int, p: dict | None = None) -> int:
     return int(sum(steps[i % len(steps)] for i in range(extra)))  # the pattern repeats
 
 
-def member_price_cents(trades=None, p: dict | None = None) -> int:
+def member_price_cents(trades=None, p: dict | None = None, crm: bool = False) -> int:
     p = p or plans()
-    return int(p["member_price_cents"]) + trade_addon_cents(len(paid_trades(trades)), p)
+    return (int(p["member_price_cents"]) + trade_addon_cents(len(paid_trades(trades)), p)
+            + (int(p["crm_price_cents"]) if crm else 0))
 
 
 def _auth():
@@ -104,7 +107,7 @@ def member_checkout(c: dict, base_url: str) -> str:
         "client_reference_id": str(c["id"]),
         "line_items[0][quantity]": "1",
         "line_items[0][price_data][currency]": "usd",
-        "line_items[0][price_data][unit_amount]": str(member_price_cents(c.get("trades"), p)),
+        "line_items[0][price_data][unit_amount]": str(member_price_cents(c.get("trades"), p, bool(c.get("crm")))),
         "line_items[0][price_data][recurring][interval]": "month",
         "line_items[0][price_data][product_data][name]": f"{_biz()} membership" + (
             f" ({', '.join(_trade_label(t) for t in c['trades'])})" if c.get("trades") else ""),
@@ -121,12 +124,13 @@ def member_checkout(c: dict, base_url: str) -> str:
     return _post("/checkout/sessions", data)["url"]
 
 
-def update_member_price(c: dict, trades) -> int | None:
-    """Change a member's monthly price after they change trades (prorated
-    by Stripe). Returns the new price, or None when there's nothing to bill."""
+def update_member_price(c: dict, trades, crm: bool | None = None) -> int | None:
+    """Change a member's monthly price after they change trades or the CRM
+    add-on (prorated by Stripe). Returns the new price, or None when there's
+    nothing to bill."""
     if not (enabled() and c.get("member") and c.get("stripe_sub")):
         return None
-    cents = member_price_cents(trades)
+    cents = member_price_cents(trades, crm=bool(c.get("crm")) if crm is None else crm)
     sub = _get(f"/subscriptions/{c['stripe_sub']}")
     item = ((sub.get("items") or {}).get("data") or [None])[0]
     if not item:

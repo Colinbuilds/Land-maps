@@ -108,3 +108,49 @@ def test_exclusive_zip_locks_and_pricing(monkeypatch):
     assert taken == ["lawn"] and rows[0]["lawn_sqft"] == "" and rows[0]["driveway_sqft"] == 600
     ds.release_lock(z, "lawn")
     assert ds.sale_blocked(z, ["lawn"], "standard", b) is None
+
+
+def test_crm_flow_and_command_center():
+    import datetime as dt
+    import secrets
+    from app import accounts
+    cl = TestClient(app)
+    em = f"crm{secrets.token_hex(4)}@x.test"
+    r = cl.post("/api/join", json={"name": "Green Test Co", "email": em, "password": "password123", "trades": ["lawn", "snow"]})
+    assert r.status_code == 200, r.text
+    cid = r.json()["id"]
+    # CRM needs membership
+    assert cl.put("/api/roof/crm", json={"on": True}).status_code == 402
+    accounts.set_membership(cid, __import__("time").time() + 86400 * 30, active=True)
+    assert cl.put("/api/roof/crm", json={"on": True}).json()["crm"] == 1
+    cu = cl.post("/api/crm/customers", json={"name": "Pat Sample", "address": "1 Test St", "phone": "4025550100"}).json()
+    e = cl.post("/api/crm/estimates", json={"customer_id": cu["id"], "items": [{"desc": "Mow", "price": 45}, {"desc": "Edge", "price": 10}]}).json()
+    assert e["total_cents"] == 5500 and e["status"] == "draft"
+    s = cl.post(f"/api/crm/estimates/{e['id']}/send").json()
+    tok = s["link"].rsplit("/", 1)[1]
+    pub = cl.get(f"/api/public/estimate/{tok}").json()
+    assert pub["total_cents"] == 5500 and "company_id" not in pub
+    assert cl.post(f"/api/public/estimate/{tok}", json={"accept": True}).json()["status"] == "accepted"
+    today = dt.date.today().isoformat()
+    jobs = cl.post(f"/api/crm/estimates/{e['id']}/schedule", json={"start": today, "repeat": "weekly"}).json()
+    assert len(jobs) == 2
+    wk = cl.get(f"/api/crm/schedule?start={today}&days=14").json()
+    assert len(wk) == 4  # two jobs, weekly, two weeks
+    v = cl.post("/api/crm/visits", json={"job_id": jobs[0]["id"], "day": today, "status": "done", "invoice": True}).json()
+    assert v["invoice_id"]
+    inv = cl.get("/api/crm/invoices").json()[0]
+    assert inv["total_cents"] == 4500 and inv["status"] == "unpaid"
+    assert cl.put(f"/api/crm/invoices/{inv['id']}", json={"status": "paid", "method": "card"}).json()["status"] == "paid"
+    m = cl.get("/api/crm/money").json()
+    assert m["paid_this_month"] == 4500 and m["win_rate"] == 100
+    # another company can't see these
+    cl2 = TestClient(app)
+    cl2.post("/api/join", json={"name": "Other Co", "email": "o" + em, "password": "password123"})
+    assert cl2.get(f"/api/crm/customers/{cu['id']}").status_code in (402, 404)
+    # owner library has the company with a summary
+    lib = cl.get("/api/admin/library").json()
+    row = next(c for c in lib["companies"] if c["id"] == cid)
+    assert "Lawn" in row["summary"]["text"] and row["summary"]["mrr_cents"] == 9900 + 2500
+    # pausing blocks sign-in
+    cl.patch(f"/api/admin/companies/{cid}/manage", json={"disabled": True})
+    assert cl.get("/api/crm/home").status_code == 401
