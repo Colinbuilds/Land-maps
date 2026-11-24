@@ -180,3 +180,19 @@ def test_yearly_membership_is_25_percent_off():
     assert billing.member_price_cents(["lawn", "snow", "gutters", "roofing"], crm=True, yearly=True) == round((11900 + 2500) * 12 * 0.75)
     assert billing.monthly_value_cents({"member": True, "billing": "year", "trades": ["lawn"]}) == round(9900 * 0.75)
     assert TestClient(app).get("/api/billing/plans").json()["annual_discount"] == 0.25
+
+
+def test_owner_test_drive():
+    cl = TestClient(app)
+    r = cl.post("/api/admin/test-drive", json={"trades": ["siding"], "member": True, "crm": True})
+    assert r.status_code == 200
+    me = cl.get("/api/roof/me").json()
+    assert me["trades"] == ["siding"] and me["member"] and me["crm"]
+    assert cl.get("/api/crm/home").status_code == 200
+    lib = cl.get("/api/admin/library").json()
+    assert not any(c["email"] == "testdrive@owner.invalid" for c in lib["companies"])
+    cl2 = TestClient(app)
+    r = cl2.get("/test-drive?trades=lawn,snow&member=0&crm=0&go=/reports", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/reports"
+    me = cl2.get("/api/roof/me").json()
+    assert me["trades"] == ["lawn", "snow"] and not me["member"] and me["credits"] >= 3
