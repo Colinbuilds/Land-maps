@@ -17,6 +17,15 @@
     if (b.dataset.tab === "roofing") loadRoofing();
     if (b.dataset.tab === "datasales") loadData();
   }));
+  // the command-center path picks which tools show (companies live on /command)
+  const GROUPS = { "/command/data": ["datasales"], "/command/tools": ["bulk", "measure", "leads"], "/command/settings": ["pricing"] };
+  const TITLES = { "/command/data": "ZIP data", "/command/tools": "Measure tools", "/command/settings": "Settings" };
+  const path = location.pathname.replace(/\/+$/, "");
+  const group = GROUPS[path] || ["bulk", "measure", "leads", "pricing", "datasales"];
+  document.querySelectorAll("#tabs button").forEach((b) => { if (!group.includes(b.dataset.tab)) b.remove(); });
+  if (group.length === 1) $("tabs").classList.add("hidden");
+  if (TITLES[path]) { document.title = TITLES[path]; const h = document.querySelector("header.top .brand span:last-child"); if (h) h.textContent = TITLES[path]; }
+  document.querySelector(`#tabs button[data-tab="${group[0]}"]`).click();
 
   // ---------------- bulk
   $("bMeasures").innerHTML = NUM_KEYS.map((k) => `<label><input type="checkbox" value="${k}" ${k === "lot_sqft" || k === "frontage_ft" ? "" : "checked"}> ${esc(LABELS[k])}</label>`).join("");

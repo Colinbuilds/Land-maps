@@ -65,13 +65,34 @@ def healthz():
 
 # ------------------------------------------------------------------- pages
 @app.get("/")
+def page_home():
+    """The customer site's front door (companies: reports, ZIP data, CRM)."""
+    return FileResponse(STATIC / "home.html")
+
+
+@app.get("/estimate")
 def page_customer():
+    """The homeowner lawn-estimate page (embeddable; not in the menus)."""
     return FileResponse(STATIC / "index.html")
 
 
 @app.get("/business")
+@app.get("/command/data")
+@app.get("/command/tools")
+@app.get("/command/settings")
 def page_business():
+    """Owner tools; the path picks the section (ZIP data, measure tools, settings)."""
     return FileResponse(STATIC / "business.html")
+
+
+@app.get("/command/postcards")
+def page_postcards():
+    return FileResponse(STATIC / "postcards.html")
+
+
+@app.get("/reports")
+def page_reports():
+    return FileResponse(STATIC / "roof.html")
 
 
 # --------------------------------------------------------------- public API
@@ -521,25 +542,37 @@ def roof_report_json(rid: str, request: Request):
     chosen = _report_trades(request, comp)
     sums = [{"key": t, "label": trades.label(t), "metrics": trades.metrics(t, rep["data"]),
              "price": trades.report_price(t, comp.get("rates"), rep["data"])} for t in chosen]
-    return {"id": rep["id"], "created": rep["created"], "share_token": rep["share_token"], "data": rep["data"],
+    return {"id": rep["id"], "created": rep["created"], "share_token": rep["share_token"], "data": _visible(rep, comp),
             "company": {k: comp.get(k) for k in ("name", "phone", "email", "brand_color")},
             "company_trades": comp.get("trades") or [], "trades": chosen,
             "trade_summaries": sums, "trade_summary": sums[0] if sums else None}
 
 
 def _report_trades(request: Request, comp: dict) -> list[str]:
-    """Trades to show on a report: ?trades=a,b (or ?trade=a), else the company's."""
+    """Trades to show on a report: ?trades=a,b (or ?trade=a) out of the
+    company's trades, else all of the company's."""
+    mine = _clean_trades(comp.get("trades") or [])
     raw = request.query_params.get("trades") or request.query_params.get("trade")
-    return _clean_trades(raw.split(",")) if raw else _clean_trades(comp.get("trades") or [])
+    if raw:
+        pick = [t for t in _clean_trades(raw.split(",")) if t in mine or not mine]
+        if pick:
+            return pick
+    return mine
+
+
+def _visible(rep: dict, comp: dict) -> dict:
+    """A report as its company may see it: only its trades' sections."""
+    from . import trades
+    return trades.filter_report(rep["data"], trades.sections_for(comp.get("trades")))
 
 
 @app.get("/r/{rid}/pdf")
 def roof_report_pdf(rid: str, request: Request):
     rep, comp = _report_access(rid, request)
-    pdf = render_pdf(rep, comp, trades=_report_trades(request, comp))
-    safe = "".join(ch if ch.isalnum() else "_" for ch in rep["data"].get("address", "roof"))
+    pdf = render_pdf({**rep, "data": _visible(rep, comp)}, comp, trades=_report_trades(request, comp))
+    safe = "".join(ch if ch.isalnum() else "_" for ch in rep["data"].get("address", "property"))
     return Response(pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'inline; filename="Roof_Report_{safe}_{rep["id"]}.pdf"'})
+                    headers={"Content-Disposition": f'inline; filename="Report_{safe}_{rep["id"]}.pdf"'})
 
 
 @app.get("/r/{rid}/postcard.pdf")
@@ -750,7 +783,7 @@ def billing_plans(request: Request):
     p = billing.plans()
     return {"member_price_cents": p["member_price_cents"], "credit_price_cents": p["credit_price_cents"],
             "included_trades": p["included_trades"], "trade_cents": p["trade_cents"],
-            "crm_price_cents": p["crm_price_cents"],
+            "crm_price_cents": p["crm_price_cents"], "annual_discount": p["annual_discount"],
             "list_discount": p["list_discount"], "packs": list(billing.CREDIT_PACKS),
             "stripe": billing.enabled(), "company": c}
 
@@ -774,13 +807,14 @@ def join(body: JoinReq, request: Request):
 
 
 @app.post("/api/billing/member")
-def billing_member(request: Request, c: dict = Depends(roof_company)):
+def billing_member(request: Request, body: dict | None = None, c: dict = Depends(roof_company)):
+    """Start a membership: monthly, or a year up front at the annual discount."""
     if not billing.enabled():
         raise HTTPException(400, "Card payments aren't set up yet. Contact us to join.")
     if c["member"]:
         raise HTTPException(400, "You're already a member.")
     try:
-        return {"checkout_url": billing.member_checkout(c, _base_url(request))}
+        return {"checkout_url": billing.member_checkout(c, _base_url(request), yearly=bool((body or {}).get("yearly")))}
     except Exception as e:
         raise HTTPException(502, f"Payment provider error: {str(e)[:200]}")
 
@@ -841,6 +875,11 @@ _DEMO_EMAIL = "demo@owner.invalid"
 _demo_jobs: dict = {}
 
 
+def _label_of(k):
+    from . import trades as _tr
+    return _tr.label(k)
+
+
 def _demo_company() -> dict:
     """An internal company the owner's demo reports are saved under (free)."""
     c = accounts.company_by_email(_DEMO_EMAIL)
@@ -848,10 +887,11 @@ def _demo_company() -> dict:
         c = accounts.create_company("Demo (owner tests)", _DEMO_EMAIL, secrets.token_urlsafe(24))
     if not c["member"]:
         c = accounts.set_membership(c["id"], time.time() + 3650 * 86400, active=True)
-    if not c.get("rates") or not c.get("trades"):  # every trade, at the suggested prices, so tests show prices
+    if not c.get("rates") or not c.get("trades") or any(r.get("label") == _label_of(k) for k, r in (c.get("rates") or {}).items()):
+        # every trade, at the suggested prices, so tests show prices
         from . import trades as _tr
         c = accounts.update_company(c["id"], trades=[k for k in _tr.TRADE_KEYS if k in _tr.PRICE_RULES],
-                                    rates=_tr.clean_rates({r["key"]: r for r in _tr.price_catalog()}),
+                                    rates=_tr.suggested_rates(),
                                     phone=c.get("phone") or "(402) 555-0100", name="Demo Home Services")
     return c
 
@@ -1727,12 +1767,13 @@ def _summary(c: dict, st: dict, cs: dict, orders: list[dict]) -> dict:
     from . import trades as T
     now = time.time()
     tl = [(T.label(t) or t).split(" &")[0].split(" (")[0] for t in c.get("trades") or []]
-    mrr = billing.member_price_cents(c.get("trades"), crm=bool(c.get("crm"))) if c["member"] else 0
+    mrr = billing.monthly_value_cents(c)
     paid_orders = [o for o in orders if o["status"] in ("processing", "ready")]
     parts = []
     parts.append((", ".join(tl[:4]) + (" +" + str(len(tl) - 4) if len(tl) > 4 else "") + " company") if tl else "No trades picked yet")
     if c["member"]:
-        parts.append(f"member at ${mrr / 100:,.0f}/mo" + (" with CRM" if c.get("crm") else ""))
+        parts.append((f"member, paid yearly (${mrr * 12 / 100:,.0f}/yr)" if c.get("billing") == "year"
+                      else f"member at ${mrr / 100:,.0f}/mo") + (" with CRM" if c.get("crm") else ""))
     else:
         parts.append(f"pay as you go, {c['credits']} credit{'s' if c['credits'] != 1 else ''} left")
     n = st.get("reports", 0)
@@ -1846,7 +1887,138 @@ def admin_view_as(cid: int, request: Request):
     c = accounts.get_company(cid)
     if not c:
         raise HTTPException(404)
-    r = JSONResponse({"ok": True, "go": "/crm" if c.get("crm") else "/roof"})
+    r = JSONResponse({"ok": True, "go": "/crm" if c.get("crm") else "/reports"})
     r.set_cookie(ROOF_COOKIE, accounts.make_session(cid, days=1), max_age=86400, httponly=True, samesite="lax",
                  secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
     return r
+
+
+# ================================================================ postcard studio (owner)
+@app.get("/api/admin/postcards", dependencies=[Depends(admin)])
+def admin_postcards():
+    from . import postcard, trades
+    st = postcard.studio()
+    return {**st, "defaults": {k: {"headline": h, "offer": o} for k, (h, o) in postcard.DEFAULT_COPY.items()},
+            "priced_offer_default": postcard.PRICED_OFFER, "layout_defaults": postcard.LAYOUT_DEFAULTS,
+            "trades": [t for t in trades.catalog() if t["key"] in trades.PRICE_RULES],
+            "samples": [{"id": r["id"], "address": r["address"], "company": r["company"]} for r in accounts.list_reports(None, 30)],
+            "companies": [{"id": c["id"], "name": c["name"]} for c in accounts.list_companies() if c["email"] != _DEMO_EMAIL]}
+
+
+class StudioIn(BaseModel):
+    templates: dict = Field(default_factory=dict)
+    layout: dict = Field(default_factory=dict)
+
+
+@app.put("/api/admin/postcards", dependencies=[Depends(admin)])
+def admin_postcards_save(body: StudioIn):
+    from . import postcard, trades
+    tpl = {}
+    for k, v in body.templates.items():
+        if k in trades.PRICE_RULES and isinstance(v, dict):
+            t = {f: str(v.get(f) or "").strip()[:220] for f in ("headline", "offer", "priced_offer")}
+            if any(t.values()):
+                tpl[k] = t
+    lay = {"photo_side": "right" if body.layout.get("photo_side") == "right" else "left",
+           "show_facts": bool(body.layout.get("show_facts", True)),
+           "show_address_tag": bool(body.layout.get("show_address_tag", True))}
+    s = load_settings()
+    s["postcards"] = {"templates": tpl, "layout": lay}
+    save_settings(s)
+    return postcard.studio()
+
+
+class PreviewIn(BaseModel):
+    report_id: str | None = Field(default=None, max_length=20)
+    trade: str = Field(max_length=40)
+    company_id: int | None = None
+    headline: str | None = Field(default=None, max_length=90)
+    offer: str | None = Field(default=None, max_length=220)
+    layout: dict | None = None
+    side: str = "both"   # front | back | both
+
+
+@app.post("/api/admin/postcards/preview", dependencies=[Depends(admin)])
+def admin_postcard_preview(body: PreviewIn):
+    """A postcard for a sample report, as a company would send it."""
+    from . import postcard, trades
+    rid = body.report_id or (accounts.list_reports(None, 1) or [{}])[0].get("id")
+    rep = accounts.get_report(rid) if rid else None
+    if not rep:
+        raise HTTPException(404, "No reports yet to preview with. Run one on the demo page first.")
+    comp = accounts.get_company(body.company_id) if body.company_id else None
+    if not comp:  # a sample company priced at the suggested rates
+        comp = {"name": "Your Company Name", "phone": "(402) 555-0100", "email": "hello@example.com",
+                "brand_color": "#15803d", "rates": trades.suggested_rates()}
+    lay = {**postcard.studio()["layout"], **(body.layout or {})}
+    pdf = postcard.render_postcard(rep["data"], comp, body.trade if body.trade in trades.PRICE_RULES else None,
+                                   body.headline or None, body.offer or None, layout=lay)
+    if body.side == "pdf":
+        return Response(pdf, media_type="application/pdf")
+    # images for the studio (PDFs don't show inside pages on phones)
+    import base64 as _b64
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(pdf)
+    pages = []
+    for i in range(len(doc)):
+        im = doc[i].render(scale=1.6).to_pil()
+        b = io.BytesIO()
+        im.save(b, "JPEG", quality=85)
+        pages.append("data:image/jpeg;base64," + _b64.b64encode(b.getvalue()).decode())
+    return {"pages": pages, "pdf": "data:application/pdf;base64," + _b64.b64encode(pdf).decode()}
+
+
+@app.get("/api/admin/zip-folders", dependencies=[Depends(admin)])
+def admin_zip_folders():
+    """Every Premier folder on file (whole-ZIP reports), and whether it can make postcards."""
+    import zipfile as _zf
+    from . import premier
+    out = []
+    for m in sorted(premier.PREMIER_DIR.glob("*.json")):
+        try:
+            meta = json.loads(m.read_text())
+        except ValueError:
+            continue
+        z = m.with_suffix(".zip")
+        if meta.get("status") != "ready" or not z.exists():
+            continue
+        try:
+            with _zf.ZipFile(z) as f:
+                mail = sum(1 for n in f.namelist() if n.startswith("mail/data/"))
+        except Exception:
+            mail = 0
+        out.append({"key": m.stem, "zip": m.stem.split("_")[0], "homes": meta.get("reports") or meta.get("total"),
+                    "finished": meta.get("finished"), "size": z.stat().st_size, "postcards": mail})
+    return out
+
+
+class AdminMailIn(MailReq):
+    folder: str = Field(max_length=80, pattern=r"^[A-Za-z0-9_.-]+$")
+    company_id: int | None = None
+
+
+@app.post("/api/admin/postcards/mailing", dependencies=[Depends(admin)])
+def admin_postcard_mailing(body: AdminMailIn):
+    """Postcards for a whole stored ZIP, branded for a company (or your own)."""
+    from . import premier
+    src = premier.PREMIER_DIR / f"{body.folder}.zip"
+    if not src.exists():
+        raise HTTPException(404, "That ZIP folder isn't on file.")
+    base = (accounts.get_company(body.company_id) if body.company_id else None) or {
+        "name": (load_settings().get("business") or {}).get("name"), "phone": (load_settings().get("business") or {}).get("phone")}
+    return _mail_view(_start_mailing(f"admin_{body.folder}_{body.company_id or 0}", src, body, base))
+
+
+@app.get("/api/admin/postcards/mailing/{folder}/{cid}/status", dependencies=[Depends(admin)])
+def admin_postcard_mailing_status(folder: str, cid: int):
+    return _mail_view(_mail_jobs.get(f"admin_{folder}_{cid}"))
+
+
+@app.get("/api/admin/postcards/mailing/{folder}/{cid}.zip")
+def admin_postcard_mailing_zip(folder: str, cid: int, token: str | None = None):
+    if ADMIN_TOKEN and token != ADMIN_TOKEN:
+        raise HTTPException(403)
+    j = _mail_jobs.get(f"admin_{folder}_{cid}")
+    if not j or j["status"] != "ready":
+        raise HTTPException(409, "not ready")
+    return FileResponse(j["path"], media_type="application/zip", filename=f"postcards_{folder}.zip")

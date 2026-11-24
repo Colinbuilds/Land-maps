@@ -1,4 +1,5 @@
-"""PDF version of a roof report (reportlab)."""
+"""PDF version of a property report (reportlab). Pages follow the sections
+the company's trades unlock (see trades.filter_report)."""
 from __future__ import annotations
 
 import base64
@@ -30,7 +31,7 @@ def _header(c, rep, company, page, total):
     c.rect(0, H - 54, W, 54, stroke=0, fill=1)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 15)
-    c.drawString(M, H - 34, company.get("name") or "Roof Report")
+    c.drawString(M, H - 34, company.get("name") or "Property Report")
     c.setFont("Helvetica", 9)
     right = " · ".join(x for x in [company.get("phone"), company.get("email")] if x)
     c.drawRightString(W - M, H - 34, right)
@@ -79,158 +80,163 @@ def render_pdf(rep: dict, company: dict, trades: list[str] | None = None) -> byt
         extra.append("walls")
         if (d["walls"].get("elevations") or {}):
             extra.append("elev")
-    if d.get("yard"):
+    if d.get("yard") and not d["yard"].get("basic"):
         extra.append("yard")
-    total_pages = 3 + len(extra)
+    has_roof = bool(d.get("lines"))
+    first = 3 if has_roof else 1
+    total_pages = first + len(extra)
 
-    # ---------------------------------------------------------------- page 1
-    _header(c, rep, company, 1, total_pages)
-    _title(c, "Property Measurement Report", H - 92)
-    c.setFont("Helvetica", 11)
-    c.setFillColor(colors.HexColor("#334155"))
-    c.drawString(M, H - 110, f"{d['address']}, {(d.get('city') or '').title()} NE {d.get('zip') or ''}".strip()
-                 + (f"  ({d['county_name']})" if d.get("county_name") else ""))
-    c.drawString(M, H - 124, f"Parcel {str(d['pin']).split(':')[-1]} · Report {rep['id']} · {time.strftime('%B %d, %Y', time.localtime(rep['created']))}")
-    img_top = H - 140
-    if d.get("aerial_jpg"):
-        img = ImageReader(io.BytesIO(base64.b64decode(d["aerial_jpg"])))
-        iw, ih = img.getSize()
-        bw, bh = W - 2 * M, 300
-        s = min(bw / iw, bh / ih)
-        c.drawImage(img, M + (bw - iw * s) / 2, img_top - ih * s, iw * s, ih * s)
-        img_bottom = img_top - ih * s
+    if not has_roof:
+        _cover_page(c, rep, company, d, total_pages)
     else:
-        img_bottom = img_top
-    y = img_bottom - 26
-    c.setFillColor(colors.HexColor("#0f172a"))
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(M, y, "Summary")
-    c.drawString(W / 2 + 10, y, "Lengths")
-    y -= 20
-    L = d["lines"]
-    _kv_table(c, [
-        ("Total roof area", f"{d['roof_sqft']:,} sq ft"),
-        ("Squares (no waste)", f"{d['squares']:.2f}"),
-        ("Predominant pitch", d["pitch_label"]),
-        ("Roof facets", d["facets"] or "—"),
-        ("Structures", len(d["structures"])),
-        ("Suggested waste", f"{d['suggested_waste']}%"),
-        ("Under tree canopy", f"{d.get('tree_overhang_sqft', 0):,} sq ft"),
-        ("Squares w/ suggested waste", next(f"{w['squares']:.2f}" for w in d["waste"] if w["suggested"])),
-    ], M, y, col_w=(160, 80))
-    _kv_table(c, [
-        ("Ridges", _ft(L["ridge"])), ("Hips", _ft(L["hip"])), ("Valleys", _ft(L["valley"])),
-        ("Rakes", _ft(L["rake"])), ("Eaves", _ft(L["eave"])), ("Step flashing", _ft(L["step_flashing"])),
-        ("Flashing", _ft(L.get("flashing", 0))),
-        ("Drip edge (eaves + rakes)", _ft(d["derived"]["drip_edge"])),
-        ("Ridge cap (ridges + hips)", _ft(d["derived"]["ridge_cap"])),
-    ], W / 2 + 10, y, col_w=(170, 70))
-    c.showPage()
-
-    # ---------------------------------------------------------------- page 2
-    _header(c, rep, company, 2, total_pages)
-    _title(c, "Length Diagram", H - 92)
-    c.setFont("Helvetica", 9)
-    c.setFillColor(colors.HexColor("#475569"))
-    c.drawString(M, H - 108, "True lengths in feet, using each roof plane's own pitch. North is up.")
-    box = (M, 110, W - 2 * M, H - 240)
-    _draw_diagram(c, d, box)
-    lx, ly = M, 84
-    for k in ORDER:
-        c.setStrokeColor(_hex(LINE_COLORS[k]))
-        c.setLineWidth(3)
-        c.line(lx, ly + 3, lx + 18, ly + 3)
+        # ---------------------------------------------------------------- page 1
+        _header(c, rep, company, 1, total_pages)
+        _title(c, "Property Measurement Report", H - 92)
+        c.setFont("Helvetica", 11)
+        c.setFillColor(colors.HexColor("#334155"))
+        c.drawString(M, H - 110, f"{d['address']}, {(d.get('city') or '').title()} NE {d.get('zip') or ''}".strip()
+                     + (f"  ({d['county_name']})" if d.get("county_name") else ""))
+        c.drawString(M, H - 124, f"Parcel {str(d['pin']).split(':')[-1]} · Report {rep['id']} · {time.strftime('%B %d, %Y', time.localtime(rep['created']))}")
+        img_top = H - 140
+        if d.get("aerial_jpg"):
+            img = ImageReader(io.BytesIO(base64.b64decode(d["aerial_jpg"])))
+            iw, ih = img.getSize()
+            bw, bh = W - 2 * M, 300
+            s = min(bw / iw, bh / ih)
+            c.drawImage(img, M + (bw - iw * s) / 2, img_top - ih * s, iw * s, ih * s)
+            img_bottom = img_top - ih * s
+        else:
+            img_bottom = img_top
+        y = img_bottom - 26
         c.setFillColor(colors.HexColor("#0f172a"))
-        c.setFont("Helvetica", 9)
-        lab = f"{d['line_labels'][k]} {L.get(k, 0):,.0f}'"
-        c.drawString(lx + 22, ly, lab)
-        lx += 30 + c.stringWidth(lab, "Helvetica", 9) + 8
-    if d.get("tree_overhang_sqft"):
-        c.setFillColor(colors.HexColor("#15803d"))
-        c.setFont("Helvetica", 9)
-        c.drawString(M, ly - 18, f"Green hatch: roof under tree canopy ({d['tree_overhang_sqft']:,} sq ft). "
-                                 "Dashed lines run under trees: verify on site.")
-    c.showPage()
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(M, y, "Summary")
+        c.drawString(W / 2 + 10, y, "Lengths")
+        y -= 20
+        L = d["lines"]
+        _kv_table(c, [
+            ("Total roof area", f"{d['roof_sqft']:,} sq ft"),
+            ("Squares (no waste)", f"{d['squares']:.2f}"),
+            ("Predominant pitch", d["pitch_label"]),
+            ("Roof facets", d["facets"] or "—"),
+            ("Structures", len(d["structures"])),
+            ("Suggested waste", f"{d['suggested_waste']}%"),
+            ("Under tree canopy", f"{d.get('tree_overhang_sqft', 0):,} sq ft"),
+            ("Squares w/ suggested waste", next(f"{w['squares']:.2f}" for w in d["waste"] if w["suggested"])),
+        ], M, y, col_w=(160, 80))
+        _kv_table(c, [
+            ("Ridges", _ft(L["ridge"])), ("Hips", _ft(L["hip"])), ("Valleys", _ft(L["valley"])),
+            ("Rakes", _ft(L["rake"])), ("Eaves", _ft(L["eave"])), ("Step flashing", _ft(L["step_flashing"])),
+            ("Flashing", _ft(L.get("flashing", 0))),
+            ("Drip edge (eaves + rakes)", _ft(d["derived"]["drip_edge"])),
+            ("Ridge cap (ridges + hips)", _ft(d["derived"]["ridge_cap"])),
+        ], W / 2 + 10, y, col_w=(170, 70))
+        c.showPage()
 
-    # ---------------------------------------------------------------- page 3
-    _header(c, rep, company, 3, total_pages)
-    _title(c, "Waste Calculation", H - 92)
-    y = H - 122
-    cols = [M, M + 120, M + 260, M + 400]
-    c.setFont("Helvetica-Bold", 10)
-    for x, t in zip(cols, ["Waste %", "Area (sq ft)", "Squares", ""]):
-        c.drawString(x, y, t)
-    y -= 6
-    c.setStrokeColor(colors.HexColor("#cbd5e1"))
-    c.line(M, y, W - M, y)
-    y -= 16
-    for w in d["waste"]:
-        if w["suggested"]:
-            c.setFillColor(colors.HexColor("#dcfce7"))
-            c.rect(M - 4, y - 5, W - 2 * M + 8, 17, stroke=0, fill=1)
-        c.setFillColor(colors.HexColor("#0f172a"))
-        c.setFont("Helvetica-Bold" if w["suggested"] else "Helvetica", 10)
-        c.drawString(cols[0], y, f"{w['pct']}%")
-        c.drawString(cols[1], y, f"{w['area']:,}")
-        c.drawString(cols[2], y, f"{w['squares']:.2f}")
-        if w["suggested"]:
-            c.drawString(cols[3], y, "Suggested")
-        y -= 17
-    c.setFont("Helvetica", 8.5)
-    c.setFillColor(colors.HexColor("#475569"))
-    c.drawString(M, y - 4, "Squares are rounded up to the nearest 1/3 square (one bundle).")
-    y -= 36
-    _title(c, "Areas per Pitch", y)
-    y -= 22
-    c.setFont("Helvetica-Bold", 10)
-    for x, t in zip(cols, ["Pitch", "Area (sq ft)", "% of roof"]):
-        c.drawString(x, y, t)
-    y -= 16
-    c.setFont("Helvetica", 10)
-    for row in d.get("pitch_table", []):
-        c.drawString(cols[0], y, row["pitch"])
-        c.drawString(cols[1], y, f"{row['area']:,}")
-        c.drawString(cols[2], y, f"{row['pct']}%")
-        y -= 15
-    y -= 22
-    _title(c, "Structures", y)
-    y -= 26
-    c.setFont("Helvetica-Bold", 9.5)
-    hdr = ["Structure", "Roof sq ft", "Facets", "Ridges", "Hips", "Valleys", "Rakes", "Eaves"]
-    xs = [M, M + 130, M + 200, M + 250, M + 305, M + 360, M + 420, M + 475]
-    for x, t in zip(xs, hdr):
-        c.drawString(x, y, t)
-    y -= 16
-    c.setFont("Helvetica", 9.5)
-    for s in d["structures"]:
-        vals = [s["name"], f"{s['roof_sqft']:,}", s["facets"] or "—"] + [f"{s['lines'][k]:,.0f}" for k in ("ridge", "hip", "valley", "rake", "eave")]
-        for x, t in zip(xs, vals):
-            c.drawString(x, y, str(t))
-        y -= 15
-    y -= 22
-    _title(c, "Notes", y)
-    y -= 18
-    src = d.get("sources") or {}
-    notes = [
-        "Pitch is measured per roof plane from LiDAR and rounded to the nearest 1/12. Areas and sloped",
-        "lengths (rakes, hips, valleys, step flashing) use each plane's own pitch; ridges and eaves are level.",
-        f"Roof outlines: {src.get('outlines') or 'county building footprints'}.",
-        f"Roof planes and lines: {src.get('lidar') or 'LiDAR'}. Photo: {src.get('imagery') or 'aerial imagery'}.",
-        f"Changes made after the {src.get('lidar_year') or 'LiDAR'} scan are not reflected. Verify on site before ordering.",
-    ]
-    if d.get("method") != "lidar":
-        notes.append("Part of this roof had no usable LiDAR; its edges are counted as eaves from the outline.")
-    if d.get("tree_note"):
-        import textwrap
-        notes += textwrap.wrap(d["tree_note"], 112)
-    c.setFont("Helvetica", 9)
-    c.setFillColor(colors.HexColor("#334155"))
-    for n in notes:
-        c.drawString(M, y, n)
-        y -= 13
-    c.showPage()
+        # ---------------------------------------------------------------- page 2
+        _header(c, rep, company, 2, total_pages)
+        _title(c, "Length Diagram", H - 92)
+        c.setFont("Helvetica", 9)
+        c.setFillColor(colors.HexColor("#475569"))
+        c.drawString(M, H - 108, "True lengths in feet, using each roof plane's own pitch. North is up.")
+        box = (M, 110, W - 2 * M, H - 240)
+        _draw_diagram(c, d, box)
+        lx, ly = M, 84
+        for k in ORDER:
+            c.setStrokeColor(_hex(LINE_COLORS[k]))
+            c.setLineWidth(3)
+            c.line(lx, ly + 3, lx + 18, ly + 3)
+            c.setFillColor(colors.HexColor("#0f172a"))
+            c.setFont("Helvetica", 9)
+            lab = f"{d['line_labels'][k]} {L.get(k, 0):,.0f}'"
+            c.drawString(lx + 22, ly, lab)
+            lx += 30 + c.stringWidth(lab, "Helvetica", 9) + 8
+        if d.get("tree_overhang_sqft"):
+            c.setFillColor(colors.HexColor("#15803d"))
+            c.setFont("Helvetica", 9)
+            c.drawString(M, ly - 18, f"Green hatch: roof under tree canopy ({d['tree_overhang_sqft']:,} sq ft). "
+                                     "Dashed lines run under trees: verify on site.")
+        c.showPage()
+
+        # ---------------------------------------------------------------- page 3
+        _header(c, rep, company, 3, total_pages)
+        _title(c, "Waste Calculation", H - 92)
+        y = H - 122
+        cols = [M, M + 120, M + 260, M + 400]
+        c.setFont("Helvetica-Bold", 10)
+        for x, t in zip(cols, ["Waste %", "Area (sq ft)", "Squares", ""]):
+            c.drawString(x, y, t)
+        y -= 6
+        c.setStrokeColor(colors.HexColor("#cbd5e1"))
+        c.line(M, y, W - M, y)
+        y -= 16
+        for w in d["waste"]:
+            if w["suggested"]:
+                c.setFillColor(colors.HexColor("#dcfce7"))
+                c.rect(M - 4, y - 5, W - 2 * M + 8, 17, stroke=0, fill=1)
+            c.setFillColor(colors.HexColor("#0f172a"))
+            c.setFont("Helvetica-Bold" if w["suggested"] else "Helvetica", 10)
+            c.drawString(cols[0], y, f"{w['pct']}%")
+            c.drawString(cols[1], y, f"{w['area']:,}")
+            c.drawString(cols[2], y, f"{w['squares']:.2f}")
+            if w["suggested"]:
+                c.drawString(cols[3], y, "Suggested")
+            y -= 17
+        c.setFont("Helvetica", 8.5)
+        c.setFillColor(colors.HexColor("#475569"))
+        c.drawString(M, y - 4, "Squares are rounded up to the nearest 1/3 square (one bundle).")
+        y -= 36
+        _title(c, "Areas per Pitch", y)
+        y -= 22
+        c.setFont("Helvetica-Bold", 10)
+        for x, t in zip(cols, ["Pitch", "Area (sq ft)", "% of roof"]):
+            c.drawString(x, y, t)
+        y -= 16
+        c.setFont("Helvetica", 10)
+        for row in d.get("pitch_table", []):
+            c.drawString(cols[0], y, row["pitch"])
+            c.drawString(cols[1], y, f"{row['area']:,}")
+            c.drawString(cols[2], y, f"{row['pct']}%")
+            y -= 15
+        y -= 22
+        _title(c, "Structures", y)
+        y -= 26
+        c.setFont("Helvetica-Bold", 9.5)
+        hdr = ["Structure", "Roof sq ft", "Facets", "Ridges", "Hips", "Valleys", "Rakes", "Eaves"]
+        xs = [M, M + 130, M + 200, M + 250, M + 305, M + 360, M + 420, M + 475]
+        for x, t in zip(xs, hdr):
+            c.drawString(x, y, t)
+        y -= 16
+        c.setFont("Helvetica", 9.5)
+        for s in d["structures"]:
+            vals = [s["name"], f"{s['roof_sqft']:,}", s["facets"] or "—"] + [f"{s['lines'][k]:,.0f}" for k in ("ridge", "hip", "valley", "rake", "eave")]
+            for x, t in zip(xs, vals):
+                c.drawString(x, y, str(t))
+            y -= 15
+        y -= 22
+        _title(c, "Notes", y)
+        y -= 18
+        src = d.get("sources") or {}
+        notes = [
+            "Pitch is measured per roof plane from LiDAR and rounded to the nearest 1/12. Areas and sloped",
+            "lengths (rakes, hips, valleys, step flashing) use each plane's own pitch; ridges and eaves are level.",
+            f"Roof outlines: {src.get('outlines') or 'county building footprints'}.",
+            f"Roof planes and lines: {src.get('lidar') or 'LiDAR'}. Photo: {src.get('imagery') or 'aerial imagery'}.",
+            f"Changes made after the {src.get('lidar_year') or 'LiDAR'} scan are not reflected. Verify on site before ordering.",
+        ]
+        if d.get("method") != "lidar":
+            notes.append("Part of this roof had no usable LiDAR; its edges are counted as eaves from the outline.")
+        if d.get("tree_note"):
+            import textwrap
+            notes += textwrap.wrap(d["tree_note"], 112)
+        c.setFont("Helvetica", 9)
+        c.setFillColor(colors.HexColor("#334155"))
+        for n in notes:
+            c.drawString(M, y, n)
+            y -= 13
+        c.showPage()
     for i, kind in enumerate(extra):
-        pg = 4 + i
+        pg = first + 1 + i
         if kind == "trades":
             _trades_page(c, rep, company, d, trades, pg, total_pages)
         elif kind in ("pitch", "area"):
@@ -602,4 +608,44 @@ def _trades_page(c, rep, company, d, trade_keys, page, total_pages):
             y -= 18
         y = _kv_table(c, [(m["label"], _metric_text(m)) for m in ms], x + 4, y, col_w=(col_w - 90, 82), lh=16)
         ys[i] = y - 16
+    c.showPage()
+
+
+def _cover_page(c, rep, company, d, total_pages):
+    """First page of a report without the roof section: the property, its
+    photo and county facts, and which sections are included."""
+    from .trades import SECTION_LABELS
+    _header(c, rep, company, 1, total_pages)
+    _title(c, "Property Report", H - 92)
+    c.setFont("Helvetica", 11)
+    c.setFillColor(colors.HexColor("#334155"))
+    c.drawString(M, H - 110, f"{d['address']}, {(d.get('city') or '').title()} NE {d.get('zip') or ''}".strip()
+                 + (f"  ({d['county_name']})" if d.get("county_name") else ""))
+    c.drawString(M, H - 124, f"Parcel {str(d['pin']).split(':')[-1]} · Report {rep['id']} · {time.strftime('%B %d, %Y', time.localtime(rep['created']))}")
+    top = H - 140
+    y = top
+    photo = (d.get("yard") or {}).get("photo_jpg") or d.get("aerial_jpg")
+    if photo:
+        img = ImageReader(io.BytesIO(base64.b64decode(photo)))
+        iw, ih = img.getSize()
+        s_ = min((W - 2 * M) / iw, 330 / ih)
+        c.drawImage(img, M + (W - 2 * M - iw * s_) / 2, top - ih * s_, iw * s_, ih * s_)
+        y = top - ih * s_ - 26
+    yd = d.get("yard") or {}
+    n = lambda v, u="": "-" if v in (None, "") else f"{float(v):,.0f}{u}"
+    facts = [("Lot", n(yd.get("lot_sqft"), " sq ft")), ("House (assessor)", n(yd.get("living_sqft"), " sq ft")),
+             ("Year built", str(yd.get("year_built") or "-")),
+             ("Assessed value", "-" if not yd.get("home_value") else f"${float(yd['home_value']):,.0f}"),
+             ("Stories (estimate)", str((d.get("walls") or {}).get("stories") or "-"))]
+    c.setFillColor(colors.HexColor("#0f172a")); c.setFont("Helvetica-Bold", 12)
+    c.drawString(M, y, "Property")
+    c.drawString(W / 2 + 10, y, "In this report")
+    _kv_table(c, facts, M, y - 20, col_w=(150, 90))
+    yy = y - 20
+    c.setFont("Helvetica", 10)
+    for sct in d.get("sections") or []:
+        c.drawString(W / 2 + 10, yy, f"- {SECTION_LABELS.get(sct, sct)}")
+        yy -= 16
+    c.setFont("Helvetica", 8.5); c.setFillColor(colors.HexColor("#64748b"))
+    c.drawString(M, 46, "Measured from aerial photos and LiDAR. Estimates; verify on site before final pricing.")
     c.showPage()

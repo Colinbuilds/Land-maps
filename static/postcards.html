@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Postcard studio</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  body { background: #f3f4f1; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 16px 16px 80px; }
+  .studio { display: grid; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .studio { grid-template-columns: 1fr; } }
+  .panel { background: #fff; border-radius: 16px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .panel h2 { font-size: 16px; margin: 0 0 8px; }
+  .panel label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .panel textarea { min-height: 64px; }
+  .tchips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tchips button { background: #eef2f7; color: var(--ink); border-radius: 99px; padding: 6px 11px; font-size: 13px; }
+  .tchips button.on { background: var(--ink); color: #fff; }
+  .tchips button.custom::after { content: " •"; color: #16a34a; }
+  .preview { background: #fff; border-radius: 16px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.05); position: sticky; top: 12px; }
+  .preview img { width: 100%; display: block; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.12); }
+  .preview .lbl { font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
+  .seg { display: inline-flex; background: #eef2f7; border-radius: 10px; padding: 3px; gap: 3px; }
+  .seg button { background: transparent; color: var(--ink); padding: 6px 12px; border-radius: 8px; font-size: 13px; }
+  .seg button.on { background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.1); }
+  table.t { width: 100%; font-size: 13.5px; border-collapse: collapse; }
+  table.t td, table.t th { padding: 7px 4px; border-bottom: 1px solid var(--line); text-align: left; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span>Postcard studio</div>
+  <div class="contact small muted">Design once: every company's mailers use it</div>
+</header>
+<div class="wrap">
+  <div id="tokBox" class="card stack hidden" style="max-width:420px">
+    <b>Owner access</b><input id="tok" type="password" placeholder="Admin token"><button id="tokGo">Open</button>
+  </div>
+  <div id="app" class="hidden">
+    <div class="studio">
+      <div class="stack">
+        <div class="panel">
+          <h2>Trade</h2>
+          <div class="tchips" id="trades"></div>
+          <p class="small muted" style="margin:8px 0 0">A dot means you've written this trade's wording. Others use the built-in wording.</p>
+        </div>
+        <div class="panel">
+          <h2>Wording for <span id="tName"></span></h2>
+          <label>Front headline<input id="fHead" maxlength="90"></label>
+          <label>Back message (no price set)<textarea id="fOffer" maxlength="220"></textarea></label>
+          <label>Back message (when the company's price is printed)<textarea id="fPriced" maxlength="220"></textarea></label>
+          <div class="row" style="margin-top:10px"><button class="secondary" id="fReset">Use built-in wording</button></div>
+        </div>
+        <div class="panel">
+          <h2>Layout (all trades)</h2>
+          <label>Photo side<span class="seg" id="side"><button data-v="left">Left</button><button data-v="right">Right</button></span></label>
+          <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="lFacts" style="width:auto"> Show extra measurements under the big number</label>
+          <label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="lTag" style="width:auto"> Address tag on the photo</label>
+        </div>
+        <div class="panel">
+          <h2>Preview with</h2>
+          <label>Property<select id="pRep"></select></label>
+          <label>Company (branding and prices)<select id="pCo"><option value="">Sample company (suggested prices)</option></select></label>
+          <div class="row" style="margin-top:12px"><button id="save">Save design</button><span id="msg" class="small" style="align-self:center"></span></div>
+        </div>
+      </div>
+      <div class="preview">
+        <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+          <b>Preview</b> <span class="small muted">9 × 6 in, 1/8 in bleed. Page 1 front, page 2 back.</span>
+          <a class="btn secondary" id="openPdf" target="_blank" style="flex:0 0 auto">Open PDF</a>
+        </div>
+        <div id="pages" class="stack"><p class="muted small"><span class="spinner"></span>Rendering…</p></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Make postcards for a whole ZIP</h2>
+      <p class="small muted" style="margin-top:-4px">From the ZIP data you've stored (Premier folders). Branded for any company, using its prices, or your own business.</p>
+      <div class="tablewrap"><table class="t" id="folders"></table></div>
+      <div class="row" style="margin-top:10px">
+        <select id="mCo"><option value="">Your business</option></select>
+        <select id="mTrade"></select>
+      </div>
+      <div id="mMsg" class="small" style="margin-top:8px"></div>
+    </div>
+  </div>
+</div>
+<script src="/static/common.js?v=17"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  let S = null, trade = null, tpl = {}, layout = {}, timer = null, blobUrl = null;
+  async function load() {
+    try { S = await api("/api/admin/postcards"); }
+    catch (e) { $("tokBox").classList.remove("hidden"); return; }
+    $("tokBox").classList.add("hidden"); $("app").classList.remove("hidden");
+    tpl = JSON.parse(JSON.stringify(S.templates || {}));
+    layout = { ...S.layout_defaults, ...S.layout };
+    trade = trade || S.trades[0].key;
+    $("pRep").innerHTML = S.samples.map((r) => `<option value="${esc(r.id)}">${esc(r.address)} (${esc(r.company)})</option>`).join("") || '<option value="">No reports yet</option>';
+    const coOpts = S.companies.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+    $("pCo").innerHTML = '<option value="">Sample company (suggested prices)</option>' + coOpts;
+    $("mCo").innerHTML = '<option value="">Your business</option>' + coOpts;
+    $("mTrade").innerHTML = S.trades.map((t) => `<option value="${t.key}">${esc(t.label)}</option>`).join("");
+    drawTrades(); drawForm(); drawLayout(); preview(); loadFolders();
+  }
+  $("tokGo").onclick = () => { localStorage.setItem("adminToken", $("tok").value.trim()); load(); };
+  function drawTrades() {
+    $("trades").innerHTML = S.trades.map((t) => `<button data-k="${t.key}" class="${t.key === trade ? "on" : ""} ${tpl[t.key] ? "custom" : ""}">${esc(t.label)}</button>`).join("");
+  }
+  $("trades").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; trade = b.dataset.k; drawTrades(); drawForm(); preview(); };
+  function drawForm() {
+    const t = tpl[trade] || {}, d = S.defaults[trade] || {};
+    $("tName").textContent = (S.trades.find((x) => x.key === trade) || {}).label || trade;
+    $("fHead").value = t.headline || ""; $("fHead").placeholder = d.headline || "";
+    $("fOffer").value = t.offer || ""; $("fOffer").placeholder = d.offer || "";
+    $("fPriced").value = t.priced_offer || ""; $("fPriced").placeholder = S.priced_offer_default;
+  }
+  function drawLayout() {
+    $("side").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === layout.photo_side));
+    $("lFacts").checked = !!layout.show_facts; $("lTag").checked = !!layout.show_address_tag;
+  }
+  const readForm = () => {
+    const t = { headline: $("fHead").value.trim(), offer: $("fOffer").value.trim(), priced_offer: $("fPriced").value.trim() };
+    if (t.headline || t.offer || t.priced_offer) tpl[trade] = t; else delete tpl[trade];
+  };
+  ["fHead", "fOffer", "fPriced"].forEach((id) => $(id).addEventListener("input", () => { readForm(); drawTrades(); later(); }));
+  $("fReset").onclick = () => { delete tpl[trade]; drawForm(); drawTrades(); preview(); };
+  $("side").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; layout.photo_side = b.dataset.v; drawLayout(); preview(); };
+  $("lFacts").onchange = () => { layout.show_facts = $("lFacts").checked; preview(); };
+  $("lTag").onchange = () => { layout.show_address_tag = $("lTag").checked; preview(); };
+  $("pRep").onchange = preview; $("pCo").onchange = preview;
+  const later = () => { clearTimeout(timer); timer = setTimeout(preview, 700); };
+  async function preview() {
+    const t = tpl[trade] || {};
+    try {
+      const tok = localStorage.getItem("adminToken") || "";
+      const r = await fetch("/api/admin/postcards/preview", { method: "POST", headers: { "content-type": "application/json", "x-admin-token": tok },
+        body: JSON.stringify({ report_id: $("pRep").value || null, trade, company_id: +$("pCo").value || null,
+          headline: t.headline || null, offer: null, layout }) });
+      if (!r.ok) throw new Error((await r.json()).detail || "Preview failed");
+      const j = await r.json();
+      $("pages").innerHTML = j.pages.map((src, i) => `<div class="lbl">${i ? "Back" : "Front"}</div><img alt="Postcard ${i ? "back" : "front"} preview" src="${src}">`).join("");
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      blobUrl = URL.createObjectURL(await (await fetch(j.pdf)).blob());
+      $("openPdf").href = blobUrl;
+    } catch (e) { $("msg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  }
+  $("save").onclick = async () => {
+    readForm();
+    try { await api("/api/admin/postcards", { method: "PUT", json: { templates: tpl, layout } }); $("msg").innerHTML = '<span class="ok">Saved. All new postcards use this design.</span>'; }
+    catch (e) { $("msg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  };
+
+  async function loadFolders() {
+    const F = await api("/api/admin/zip-folders");
+    $("folders").innerHTML = `<thead><tr><th>ZIP</th><th>Homes</th><th>Stored</th><th>Size</th><th></th></tr></thead><tbody>${
+      F.map((f) => `<tr><td><b>${esc(f.zip)}</b> <span class="small muted">${esc(f.key)}</span></td><td>${(f.homes || 0).toLocaleString()}</td>
+        <td>${f.finished ? new Date(f.finished * 1000).toLocaleDateString() : ""}</td><td>${(f.size / 1e6).toFixed(0)} MB</td>
+        <td>${f.postcards ? `<button class="secondary" data-f="${esc(f.key)}">Make postcards</button>` : '<span class="small muted">Rebuild to add postcard data</span>'}</td></tr>`).join("")
+      || '<tr><td colspan="5" class="muted">No ZIP folders stored yet. Build one from ZIP data (Premier).</td></tr>'}</tbody>`;
+    $("folders").querySelectorAll("[data-f]").forEach((b) => b.onclick = () => mail(b.dataset.f));
+  }
+  async function mail(folder) {
+    const cid = +$("mCo").value || 0, tok = encodeURIComponent(localStorage.getItem("adminToken") || "");
+    $("mMsg").innerHTML = '<span class="spinner"></span>Making postcards…';
+    try {
+      let j = await api("/api/admin/postcards/mailing", { method: "POST", json: { folder, company_id: cid || null, trade: $("mTrade").value } });
+      while (j.status === "building") {
+        $("mMsg").innerHTML = `<span class="spinner"></span>Making postcards… ${j.done || 0} of ${j.total || "?"}`;
+        await new Promise((r) => setTimeout(r, 2000));
+        j = await api(`/api/admin/postcards/mailing/${folder}/${cid}/status`);
+      }
+      $("mMsg").innerHTML = j.status === "ready"
+        ? `<a class="btn" href="/api/admin/postcards/mailing/${folder}/${cid}.zip?token=${tok}">Download postcards (${(j.homes || 0).toLocaleString()} homes)</a>`
+        : `<span class="err">${esc(j.error || "failed")}</span>`;
+    } catch (e) { $("mMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  }
+  load();
+})();
+</script>
+</body>
+</html>

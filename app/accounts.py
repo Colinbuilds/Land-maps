@@ -1,4 +1,4 @@
-"""Company accounts, credits and stored roof reports (SQLite in the data dir)."""
+"""Company accounts, credits and stored property reports (SQLite in the data dir)."""
 from __future__ import annotations
 
 import hashlib
@@ -40,7 +40,8 @@ def init():
         for col, typ in (("plan", "TEXT"), ("member_until", "REAL"), ("stripe_customer", "TEXT"),
                          ("stripe_sub", "TEXT"), ("trade", "TEXT"), ("trades", "TEXT"), ("rates", "TEXT"),
                          ("crm", "INTEGER"), ("disabled", "INTEGER"), ("last_seen", "REAL"),
-                         ("admin_notes", "TEXT"), ("pay_note", "TEXT")):
+                         ("admin_notes", "TEXT"), ("pay_note", "TEXT"),
+                         ("billing", "TEXT")):  # "month" or "year" (paid a year up front)
             if col not in have:
                 con.execute(f"ALTER TABLE companies ADD COLUMN {col} {typ}")
 
@@ -168,7 +169,7 @@ def update_company(cid: int, **fields) -> dict | None:
     if isinstance(fields.get("rates"), dict):
         fields["rates"] = json.dumps(fields["rates"])
     allowed = {k: v for k, v in fields.items() if k in ("name", "phone", "brand_color", "trade", "trades", "rates",
-               "crm", "disabled", "admin_notes", "pay_note", "credits") and v is not None}
+               "crm", "disabled", "admin_notes", "pay_note", "credits", "billing") and v is not None}
     if fields.get("password"):
         allowed["pw_hash"] = hash_pw(fields["password"])
     if allowed:

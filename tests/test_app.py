@@ -154,3 +154,28 @@ def test_crm_flow_and_command_center():
     # pausing blocks sign-in
     cl.patch(f"/api/admin/companies/{cid}/manage", json={"disabled": True})
     assert cl.get("/api/crm/home").status_code == 401
+
+
+def test_report_sections_follow_trades():
+    from app import trades
+    d = {"pin": "x", "address": "1 Test St", "lines": {"eave": 100}, "squares": 20, "waste": [], "structures": [
+        {"name": "House", "plan_sqft": 1500, "lines": {"eave": 100}, "facet_polys": [{"down": [0, -1], "pitch": 6, "area_sqft": 900}]}],
+        "walls": {"gross_wall_sqft": 2000, "elevations": {"North": []}, "gutter_ft": 150},
+        "yard": {"lawn_sqft": 5000, "lot_sqft": 9000, "year_built": 1990, "photo_jpg": "x"}}
+    lawn = trades.filter_report(d, trades.sections_for(["lawn", "snow"]))
+    assert lawn["sections"] == ["yard"] and "lines" not in lawn and "walls" not in lawn
+    assert "facet_polys" not in lawn["structures"][0] and lawn["yard"]["lawn_sqft"] == 5000
+    siding = trades.filter_report(d, trades.sections_for(["siding"]))
+    assert siding["walls"]["gross_wall_sqft"] == 2000 and "elevations" in siding["walls"]
+    assert siding["yard"]["basic"] and "lawn_sqft" not in siding["yard"] and siding["yard"]["year_built"] == 1990
+    gut = trades.filter_report(d, trades.sections_for(["gutters"]))
+    assert gut["lines"] and "elevations" not in gut["walls"]
+    assert trades.filter_report(d, trades.sections_for([]))["sections"] == list(trades.SECTIONS)
+
+
+def test_yearly_membership_is_25_percent_off():
+    from app import billing
+    assert billing.member_price_cents(["lawn", "snow"], yearly=True) == 9900 * 12 * 3 // 4
+    assert billing.member_price_cents(["lawn", "snow", "gutters", "roofing"], crm=True, yearly=True) == round((11900 + 2500) * 12 * 0.75)
+    assert billing.monthly_value_cents({"member": True, "billing": "year", "trades": ["lawn"]}) == round(9900 * 0.75)
+    assert TestClient(app).get("/api/billing/plans").json()["annual_discount"] == 0.25

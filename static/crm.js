@@ -248,7 +248,7 @@
     const reps = await api("/api/roof/reports");
     sheet(`<h2>Estimate from a report</h2><div class="sub">Pick a home you've measured. It becomes a customer and an estimate priced from your rates.</div>
       <div class="list">${reps.slice(0, 40).map((r) => `<div class="item tap" data-r="${esc(r.id)}"><div class="t">${esc(r.address)}</div><div class="m">${new Date(r.created * 1000).toLocaleDateString()} · report ${esc(r.id)}</div></div>`).join("")
-        || '<div class="empty">No reports yet. <a href="/roof">Order one</a> first.</div>'}</div>`, () => {
+        || '<div class="empty">No reports yet. <a href="/reports">Order one</a> first.</div>'}</div>`, () => {
       document.querySelectorAll("[data-r]").forEach((el) => el.onclick = async () => {
         el.innerHTML = '<span class="spinner"></span>Pricing…';
         try { const e = await api("/api/crm/estimates/from-report", { method: "POST", json: { report_id: el.dataset.r } }); estimateSheet(e); }
@@ -426,7 +426,7 @@
     <label>How customers pay you (shown on invoices)<textarea id="sPay" placeholder="Venmo @greenacres · Zelle 402-555-0142 · checks to Green Acres Lawn Co.">${esc(me.pay_note || "")}</textarea></label>
     <div class="two"><label>Phone<input id="sPhone" value="${esc(me.phone || "")}"></label><label>Brand color<input id="sColor" type="color" value="${esc(me.brand_color || "#15803d")}"></label></div>
     <button id="sSave" style="width:100%;margin-top:14px">Save</button>
-    <p class="small muted">Your prices per trade are on the <a href="/roof">Reports</a> page under <b>Your prices</b>. Membership and CRM billing: <a href="/join">Membership</a>.</p>
+    <p class="small muted">Your prices per trade are on the <a href="/reports">Reports</a> page under <b>Your prices</b>. Membership and CRM billing: <a href="/join">Membership</a>.</p>
     <div id="sMsg" class="small"></div>`, () => {
     $("sSave").onclick = async () => {
       try { me = await api("/api/roof/profile", { method: "PUT", json: { pay_note: $("sPay").value, phone: $("sPhone").value, brand_color: $("sColor").value } }); toast("Saved"); close(); }

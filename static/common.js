@@ -156,17 +156,28 @@ function measurementCards(r, keys, labels) {
 }
 
 // ---------------------------------------------------------------- site menu
-// Same three links on every page: in the header, and as a bottom tab bar on phones.
+// Two sites: the owner's command center, and the customer side (companies
+// that buy reports, ZIP data and the CRM). Header links, and a bottom tab
+// bar on phones.
 (function siteMenu() {
-  const links = [
-    { href: "/", label: "Estimate", icon: "🏡" },
-    { href: "/business", label: "Business", icon: "📊" },
-    { href: "/roof", label: "Reports", icon: "📐" },
+  const here = location.pathname.replace(/\/+$/, "") || "/";
+  const owner = /^\/(command|business|demo)(\/|$)/.test(here);
+  const links = owner ? [
+    { href: "/command", label: "Companies", icon: "🏢" },
+    { href: "/command/data", label: "ZIP data", icon: "🗂️" },
+    { href: "/command/postcards", label: "Postcards", icon: "✉️" },
+    { href: "/command/tools", label: "Measure", icon: "📏" },
+    { href: "/demo", label: "Demo", icon: "🧪" },
+    { href: "/command/settings", label: "Settings", icon: "⚙️" },
+  ] : [
+    { href: "/", label: "Home", icon: "🏠" },
+    { href: "/reports", label: "Reports", icon: "📐" },
     { href: "/data", label: "Buy data", icon: "📄" },
+    { href: "/crm", label: "CRM", icon: "📋" },
     { href: "/join", label: "Membership", icon: "⭐" },
   ];
-  const here = location.pathname.replace(/\/+$/, "") || "/";
-  const isActive = (h) => (h === "/" ? here === "/" : here === h || here.startsWith(h + "/") || (h === "/roof" && here.startsWith("/r/")));
+  const isActive = (h) => (h === "/" ? here === "/" : h === "/command" ? here === "/command"
+    : here === h || here.startsWith(h + "/") || (h === "/reports" && (here === "/roof" || here.startsWith("/r/"))));
   const build = () => {
     const header = document.querySelector("header.top");
     if (header && !header.querySelector(".site-nav")) {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Roof Measurement Report</title>
+<title>Property Report</title>
 <link rel="stylesheet" href="/static/styles.css?v=9">
 <style>
   :root { --accent: #1d4ed8; }
@@ -27,7 +27,7 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand" id="co">Roof Report</div>
+  <div class="brand" id="co">Property Report</div>
   <div class="contact" id="coContact"></div>
 </header>
 <main class="stack" id="main"><p class="muted"><span class="spinner"></span>Loading report…</p></main>
@@ -48,12 +48,12 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
   catch (e) { document.getElementById("main").innerHTML = `<div class="card err">${esc(e.message)}</div>`; return; }
   const d = r.data, c = r.company, L = d.lines;
   document.documentElement.style.setProperty("--accent", c.brand_color || "#1d4ed8");
-  document.getElementById("co").textContent = c.name || "Roof Report";
+  document.getElementById("co").textContent = c.name || "Property Report";
   document.getElementById("coContact").textContent = [c.phone, c.email].filter(Boolean).join(" · ");
   document.title = `Property Report – ${d.address}`;
   const ft = (v) => `${Math.round(v).toLocaleString()} ft`;
   const share = `${location.origin}/r/${r.id}?t=${r.share_token}`;
-  const sug = d.waste.find((w) => w.suggested);
+  const sug = (d.waste || []).find((w) => w.suggested);
   document.getElementById("main").innerHTML = `
     <div class="actions">
       <a class="btn" href="/r/${r.id}/pdf${qs}" target="_blank">Download PDF</a>
@@ -67,7 +67,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
       <div class="muted">${esc(d.address)}, ${esc((d.city || "").toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase()))} NE ${esc(d.zip || "")} · Parcel ${esc(String(d.pin).split(':').pop())}${d.county_name ? ` · ${esc(d.county_name)}` : ''} · Report ${esc(r.id)} · ${new Date(r.created * 1000).toLocaleDateString(undefined, { dateStyle: "long" })}</div>
     </div>
     ${(r.trade_summaries || []).length ? `<div class="tradegrid">${r.trade_summaries.map(tradeCard).join("")}</div>` : tradeCard(r.trade_summary)}
-    <div class="cover">
+    ${d.lines ? `<div class="cover">
       <div class="card">${d.aerial_jpg ? `<img alt="Aerial photo of the property" src="data:image/jpeg;base64,${d.aerial_jpg}">` : ""}</div>
       <div class="card">
         <div class="muted small">Total roof area</div>
@@ -110,7 +110,7 @@ const ORDER = ["ridge", "hip", "valley", "rake", "eave", "step_flashing", "flash
         </tbody></table></div>
         <p class="small muted">Pitch measured per roof plane from LiDAR, rounded to the nearest 1/12. Roof outlines: ${esc(d.sources?.outlines || "county building footprints")}. Roof planes and lines: ${esc(d.sources?.lidar || "LiDAR")}. Photo: ${esc(d.sources?.imagery || "aerial imagery")}. Changes after the ${esc(d.sources?.lidar_year || "LiDAR")} scan are not reflected. Verify on site before ordering material.</p>
       </div>
-    </div>
+    </div>` : coverCard(d)}
     ${facetCard(d, "pitch")}
     ${facetCard(d, "area")}
     ${wallsCard(d)}
@@ -218,10 +218,31 @@ function elevationsCard(d) {
     </div>`;
 }
 
+// ---------------------------------------------------------- cover without roof
+function coverCard(d) {
+  const y = d.yard || {}, n = (v, u = "") => (v == null || v === "" ? "–" : `${Math.round(v).toLocaleString()}${u}`);
+  const photo = y.photo_jpg || d.aerial_jpg;
+  const LAB = { roof: "Roof", walls: "Walls & siding", elevations: "Elevations", yard: "Lot & yard" };
+  return `<div class="cover">
+      <div class="card">${photo ? `<img alt="Aerial photo of the property" src="data:image/jpeg;base64,${photo}">` : ""}</div>
+      <div class="card">
+        <div class="muted small">Property</div>
+        <table class="kv" style="margin-top:6px">
+          <tr><td>Lot</td><td>${n(y.lot_sqft, " sq ft")}</td></tr>
+          <tr><td>House (assessor)</td><td>${n(y.living_sqft, " sq ft")}</td></tr>
+          <tr><td>Year built</td><td>${esc(y.year_built || "–")}</td></tr>
+          <tr><td>Assessed value</td><td>${y.home_value ? "$" + n(y.home_value) : "–"}</td></tr>
+          ${d.walls && d.walls.stories ? `<tr><td>Stories (estimate)</td><td>${d.walls.stories}</td></tr>` : ""}
+        </table>
+        <div class="muted small" style="margin-top:12px">In this report: ${(d.sections || []).map((x) => esc(LAB[x] || x)).join(" · ")}</div>
+      </div>
+    </div>`;
+}
+
 // ---------------------------------------------------------- lot & yard
 function yardCard(d) {
   const y = d.yard;
-  if (!y) return "";
+  if (!y || y.basic) return "";
   const n = (v) => (v == null ? "–" : Math.round(v).toLocaleString());
   const rows = [["#22c55e", "Lawn (grass only)", y.lawn_sqft], ["#86efac", "Parkway grass", y.parkway_sqft], ["#3b82f6", "Driveway", y.driveway_sqft],
     ["#ec4899", "Public sidewalk", y.sidewalk_sqft], ["#eab308", "Patios & walks", y.other_hardscape_sqft], ["#ef4444", "Decks, sheds, play sets", y.structures_sqft],
