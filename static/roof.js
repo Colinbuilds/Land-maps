@@ -13,10 +13,62 @@
     document.documentElement.style.setProperty("--accent", me.brand_color || "#1d4ed8");
     member = !!me.member;
     showCredits(me.credits);
+    drawTradeBar();
+    drawRates();
     if (!map) initMap();
     loadReports();
   }
   let member = false;
+  // trades whose numbers the reports show (any of the company's trades)
+  let TR = [], showTr = [];
+  async function drawTradeBar() {
+    if (!TR.length) { try { TR = (await api("/api/trades")).trades; } catch (e) {} }
+    const mine = (me.trades && me.trades.length) ? me.trades : [];
+    try { showTr = JSON.parse(localStorage.getItem("showTrades") || "null") || mine; } catch (e) { showTr = mine; }
+    showTr = showTr.filter((k) => mine.includes(k));
+    if (!showTr.length) showTr = mine.slice();
+    const lab = (k) => ((TR.find((t) => t.key === k) || {}).label || k).replace(" (beta)", "");
+    $("tradeBar").innerHTML = mine.length
+      ? mine.map((k) => `<button type="button" class="${showTr.includes(k) ? "on" : ""}" data-k="${esc(k)}">${esc(lab(k))}</button>`).join("")
+      : '<span class="small muted">No trades picked yet. <a href="/join">Pick your trades</a> to see each one\'s numbers on every report.</span>';
+    $("tradeBar").onclick = (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      const k = b.dataset.k;
+      showTr = showTr.includes(k) ? showTr.filter((x) => x !== k) : [...showTr, k];
+      if (!showTr.length) showTr = [k];
+      try { localStorage.setItem("showTrades", JSON.stringify(showTr)); } catch (x) {}
+      drawTradeBar(); if (lastRows) drawReports(lastRows);
+    };
+  }
+  // ---- the company's prices: one rule per trade, applied to every home
+  let RULES = [];
+  async function drawRates() {
+    if (!RULES.length) { try { RULES = (await api("/api/pricing-rules")).rules; } catch (e) { return; } }
+    const mine = (me.trades || []).filter((k) => RULES.some((r) => r.key === k));
+    const list = mine.length ? RULES.filter((r) => mine.includes(r.key)) : RULES.slice(0, 3);
+    const rt = me.rates || {};
+    $("ratesBox").innerHTML = list.map((r) => {
+      const v = rt[r.key] || {};
+      return `<div class="rate" data-k="${esc(r.key)}">
+        <div class="rt"><b>${esc(r.label)}</b><div class="small muted">Priced on ${esc(r.measured)}, $ ${esc(r.basis)}</div></div>
+        <label>$ ${esc(r.basis)}<input type="number" step="0.01" min="0" data-f="rate" value="${v.rate ?? ""}" placeholder="${r.rate}"></label>
+        <label>Minimum $<input type="number" step="1" min="0" data-f="min" value="${v.min ?? ""}" placeholder="${r.min}"></label>
+        <label>Shown as<input type="text" maxlength="30" data-f="label" value="${esc(v.label || "")}" placeholder="${esc(r.price_label)}"></label>
+      </div>`;
+    }).join("") + (mine.length ? "" : '<p class="small muted">Pick your trades on the <a href="/join">membership page</a> to price each of them.</p>');
+  }
+  $("ratesSave").addEventListener("click", async () => {
+    const rates = {};
+    document.querySelectorAll("#ratesBox .rate").forEach((row) => {
+      const g = (f) => row.querySelector(`[data-f="${f}"]`).value.trim();
+      if (g("rate") || g("min")) rates[row.dataset.k] = { rate: +g("rate") || 0, min: +g("min") || 0, label: g("label") };
+    });
+    try { me = await api("/api/roof/rates", { method: "PUT", json: { rates } }); $("ratesMsg").innerHTML = '<span class="ok">Saved. Reports, sheets and postcards now show your price.</span>'; }
+    catch (e) { $("ratesMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  });
+  const tq = () => showTr.length ? `?trades=${encodeURIComponent(showTr.join(","))}` : "";
+  const pcq = () => showTr.length ? `?trade=${encodeURIComponent(showTr[0])}` : "";
+  let lastRows = null;
   const showCredits = (n) => {
     $("credits").innerHTML = member ? `Member · unlimited reports`
       : `${n} credit${n === 1 ? "" : "s"} <a href="/join" style="margin-left:8px;font-weight:600">Get more</a>`;
@@ -115,8 +167,8 @@
       ids.forEach((i) => { if (edited[i]) ed[String(i)] = edited[i]; });
       const r = await api("/api/roof/report", { method: "POST", json: { pin: current.pin, structure_ids: ids, edited: ed } });
       showCredits(r.credits);
-      $("orderMsg").innerHTML = `<span class="ok">Done.</span> <a href="/r/${r.id}" target="_blank">Open report ${esc(r.id)}</a> · <a href="/r/${r.id}/pdf" target="_blank">PDF</a>`;
-      window.open(`/r/${r.id}`, "_blank");
+      $("orderMsg").innerHTML = `<span class="ok">Done.</span> <a href="/r/${r.id}${tq()}" target="_blank">Open report ${esc(r.id)}</a> · <a href="/r/${r.id}/pdf${tq()}" target="_blank">PDF</a> · <a href="/r/${r.id}/postcard.pdf${pcq()}" target="_blank">Postcard</a>`;
+      window.open(`/r/${r.id}${tq()}`, "_blank");
       loadReports();
     } catch (e) {
       $("orderMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
@@ -124,10 +176,15 @@
   }
 
   async function loadReports() {
-    const rows = await api("/api/roof/reports");
+    drawReports(await api("/api/roof/reports"));
+  }
+  function drawReports(rows) {
+    lastRows = rows;
     $("reports").innerHTML = `<thead><tr><th>Date</th><th>Address</th><th>Report</th></tr></thead><tbody>${
       rows.map((r) => `<tr><td>${new Date(r.created * 1000).toLocaleDateString()}</td><td>${esc(r.address)}</td>
-        <td><a href="/r/${r.id}" target="_blank">${esc(r.id)}</a> · <a href="/r/${r.id}/pdf" target="_blank">PDF</a></td></tr>`).join("")
+        <td><a href="/r/${r.id}${tq()}" target="_blank">${esc(r.id)}</a> · <a href="/r/${r.id}/pdf${tq()}" target="_blank">PDF</a>
+          · <a href="/r/${r.id}/postcard.pdf${pcq()}" target="_blank" title="Print-ready 9x6 postcard for this home">Postcard</a>
+          · <a href="/r/${r.id}/photo.jpg" target="_blank" title="High-resolution aerial photo">Photo</a></td></tr>`).join("")
       || '<tr><td colspan="3" class="muted">No reports yet.</td></tr>'}</tbody>`;
   }
 

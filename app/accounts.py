@@ -38,7 +38,7 @@ def init():
         """)
         have = {r[1] for r in con.execute("PRAGMA table_info(companies)")}
         for col, typ in (("plan", "TEXT"), ("member_until", "REAL"), ("stripe_customer", "TEXT"),
-                         ("stripe_sub", "TEXT"), ("trade", "TEXT")):
+                         ("stripe_sub", "TEXT"), ("trade", "TEXT"), ("trades", "TEXT"), ("rates", "TEXT")):
             if col not in have:
                 con.execute(f"ALTER TABLE companies ADD COLUMN {col} {typ}")
 
@@ -94,6 +94,12 @@ def _public(row) -> dict:
     d = dict(row)
     d.pop("pw_hash", None)
     d["member"] = is_member(d)
+    # every trade the company picked (older accounts: the single `trade`)
+    d["trades"] = [t for t in (d.get("trades") or d.get("trade") or "").split(",") if t]
+    try:  # the company's prices per trade (see trades.PRICE_RULES)
+        d["rates"] = json.loads(d.get("rates") or "{}")
+    except ValueError:
+        d["rates"] = {}
     return d
 
 
@@ -154,7 +160,12 @@ def list_companies() -> list[dict]:
 
 
 def update_company(cid: int, **fields) -> dict | None:
-    allowed = {k: v for k, v in fields.items() if k in ("name", "phone", "brand_color", "trade") and v is not None}
+    if isinstance(fields.get("trades"), (list, tuple)):
+        fields["trade"] = fields["trades"][0] if fields["trades"] else ""
+        fields["trades"] = ",".join(fields["trades"])
+    if isinstance(fields.get("rates"), dict):
+        fields["rates"] = json.dumps(fields["rates"])
+    allowed = {k: v for k, v in fields.items() if k in ("name", "phone", "brand_color", "trade", "trades", "rates") and v is not None}
     if fields.get("password"):
         allowed["pw_hash"] = hash_pw(fields["password"])
     if allowed:

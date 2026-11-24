@@ -81,6 +81,7 @@
       <div class="actions">
         <a class="btn" id="oReport" target="_blank">Open full report</a>
         <a class="btn secondary" id="oPdf" target="_blank">Download PDF</a>
+        <a class="btn secondary" id="oCard" target="_blank">Postcard</a>
       </div>
       <div class="pics" style="margin-top:14px">
         <figure><img id="oAerial" alt="Aerial photo with the measured roof outline"><figcaption>Roof outline used for the measurements</figcaption></figure>
@@ -156,10 +157,12 @@
     $("oReport").scrollIntoView({ behavior: "smooth", block: "center" });
   }
   function drawTrades() {
+    $("oCard").href = `/r/${current.id}/postcard.pdf?t=${encodeURIComponent(current.token)}&trade=${tradeSel === "all" ? "lawn" : tradeSel}`;
     const list = current.summaries.filter((t) => tradeSel === "all" || t.key === tradeSel);
     $("tgrid").innerHTML = list.map((t) => `<div class="tcard">
         <h3>${esc(t.label)}</h3>
         <div class="sub">${t.premier ? '<span class="pill">Full report</span>' : '<span class="pill">Sheet + full report</span>'}</div>
+        ${t.price ? `<div style="margin:2px 0 8px"><b style="font-size:20px">${esc(t.price.text.split(" ")[0])}</b> <span class="muted small">${esc(t.price.label)} · demo price</span></div>` : ""}
         <table>${t.metrics.map((m) => `<tr><td>${esc(m.label)}${m.beta ? '<span class="beta">beta</span>' : ""}</td><td>${fmt(m)}</td></tr>`).join("") || '<tr><td class="muted">No data for this property</td><td></td></tr>'}</table>
       </div>`).join("");
   }
@@ -184,7 +187,19 @@
         if (s.status === "ready") {
           const tok = encodeURIComponent(localStorage.getItem("adminToken") || "");
           $("pMsg").innerHTML = `<b>Ready</b>: ${(s.size / 1e6).toFixed(1)} MB. <a class="btn" style="margin-left:6px" href="/api/demo/premier/${j.job}/zip?token=${tok}">Download test package</a>
-            <div class="small muted" style="margin-top:6px">${(s.rows || []).map((r) => `${esc(r.address)}: ${esc(r.status)}`).join(" · ")}</div>`;
+            <div class="small muted" style="margin-top:6px">${(s.rows || []).map((r) => `${esc(r.address)}: ${esc(r.status)}`).join(" · ")}</div>
+            <div style="margin-top:10px"><button class="secondary" id="mailTest">Test postcards for these homes</button> <span id="mailMsg" class="small"></span></div>`;
+          document.getElementById("mailTest").onclick = async () => {
+            const trade = tradeSel && tradeSel !== "all" ? tradeSel : "lawn";
+            $("mailMsg").innerHTML = '<span class="spinner"></span>Making postcards…';
+            try {
+              let m = await api(`/api/demo/premier/${j.job}/mailing`, { method: "POST", json: { trade } });
+              while (m.status === "building") { await new Promise((r) => setTimeout(r, 1500)); m = await api(`/api/demo/premier/${j.job}/mailing`); }
+              $("mailMsg").innerHTML = m.status === "ready"
+                ? `<a class="btn" href="/api/demo/premier/${j.job}/mailing.zip?token=${tok}">Download postcards (${m.homes})</a> <span class="muted">trade: ${esc(trade)}</span>`
+                : `<span class="err">${esc(m.error || "failed")}</span>`;
+            } catch (e) { $("mailMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+          };
           $("pRun").disabled = false;
         } else if (s.status === "failed") {
           $("pMsg").innerHTML = `<span class="err">${esc(s.error || "failed")}</span>`; $("pRun").disabled = false;

@@ -27,7 +27,12 @@ from . import accounts
 from .pricing import load_settings
 
 API = "https://api.stripe.com/v1"
-DEFAULTS = {"member_price_cents": 9900, "credit_price_cents": 2500, "list_discount": 0.5}
+DEFAULTS = {"member_price_cents": 9900, "credit_price_cents": 2500, "list_discount": 0.5,
+            # membership by number of trades: the first `included_trades` come
+            # with the base price; each further pair of trades is $20 a month
+            # (+$15 for the first of the pair, +$5 for the second):
+            # 2 trades $99, 3 $114, 4 $119, 5 $134, 6 $139 ...
+            "included_trades": 2, "trade_cents": [1500, 500]}
 CREDIT_PACKS = (1, 5, 10, 25)
 
 
@@ -39,6 +44,26 @@ def plans() -> dict:
     p = dict(DEFAULTS)
     p.update({k: v for k, v in (load_settings().get("membership") or {}).items() if k in DEFAULTS})
     return p
+
+
+def paid_trades(trades) -> list[str]:
+    """Trades that count toward the membership price (beta trades are free)."""
+    from .trades import TRADES
+    beta = {k for k, l, *_ in TRADES if "beta" in l.lower()}
+    return [t for t in (trades or []) if t not in beta]
+
+
+def trade_addon_cents(n: int, p: dict | None = None) -> int:
+    """Monthly add-on for a membership covering ``n`` (paid) trades."""
+    p = p or plans()
+    extra = max(0, n - int(p["included_trades"]))
+    steps = list(p["trade_cents"]) or [0]
+    return int(sum(steps[i % len(steps)] for i in range(extra)))  # the pattern repeats
+
+
+def member_price_cents(trades=None, p: dict | None = None) -> int:
+    p = p or plans()
+    return int(p["member_price_cents"]) + trade_addon_cents(len(paid_trades(trades)), p)
 
 
 def _auth():
@@ -79,10 +104,10 @@ def member_checkout(c: dict, base_url: str) -> str:
         "client_reference_id": str(c["id"]),
         "line_items[0][quantity]": "1",
         "line_items[0][price_data][currency]": "usd",
-        "line_items[0][price_data][unit_amount]": str(int(p["member_price_cents"])),
+        "line_items[0][price_data][unit_amount]": str(member_price_cents(c.get("trades"), p)),
         "line_items[0][price_data][recurring][interval]": "month",
         "line_items[0][price_data][product_data][name]": f"{_biz()} membership" + (
-            f" ({_trade_label(c.get('trade'))})" if c.get("trade") else ""),
+            f" ({', '.join(_trade_label(t) for t in c['trades'])})" if c.get("trades") else ""),
         "success_url": f"{base_url}/join/done?session_id={{CHECKOUT_SESSION_ID}}",
         "cancel_url": f"{base_url}/join?cancelled=1",
         "metadata[company_id]": str(c["id"]),
@@ -94,6 +119,29 @@ def member_checkout(c: dict, base_url: str) -> str:
     else:
         data["customer_email"] = c["email"]
     return _post("/checkout/sessions", data)["url"]
+
+
+def update_member_price(c: dict, trades) -> int | None:
+    """Change a member's monthly price after they change trades (prorated
+    by Stripe). Returns the new price, or None when there's nothing to bill."""
+    if not (enabled() and c.get("member") and c.get("stripe_sub")):
+        return None
+    cents = member_price_cents(trades)
+    sub = _get(f"/subscriptions/{c['stripe_sub']}")
+    item = ((sub.get("items") or {}).get("data") or [None])[0]
+    if not item:
+        return None
+    if int((item.get("price") or {}).get("unit_amount") or 0) == cents:
+        return cents
+    _post(f"/subscriptions/{c['stripe_sub']}", {
+        "items[0][id]": item["id"],
+        "items[0][price_data][currency]": "usd",
+        "items[0][price_data][product]": item["price"]["product"],
+        "items[0][price_data][unit_amount]": str(cents),
+        "items[0][price_data][recurring][interval]": "month",
+        "proration_behavior": "create_prorations",
+    })
+    return cents
 
 
 def _apply_subscription(cid: int, sub: dict) -> dict | None:

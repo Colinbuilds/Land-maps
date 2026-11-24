@@ -26,7 +26,8 @@ MAX_AGE_DAYS = 365
 _lock = threading.Lock()
 _building: dict = {}
 
-INDEX_COLS = [("address", "Address"), ("city", "City"), ("zip", "ZIP"), ("file", "Report file"),
+INDEX_COLS = [("address", "Address"), ("city", "City"), ("zip", "ZIP"), ("owner", "Owner name"),
+              ("owner_mailing", "Owner mailing address"), ("file", "Report file"),
               ("roof_sqft", "Roof sq ft"), ("squares", "Squares"), ("pitch", "Predominant pitch"),
               ("wall_sqft", "Wall area sq ft"), ("gutter_ft", "Gutters ft"),
               ("lawn_sqft", "Lawn sq ft"), ("driveway_sqft", "Driveway sq ft"), ("sidewalk_sqft", "Sidewalk sq ft"),
@@ -86,31 +87,73 @@ def _company() -> dict:
             "email": b.get("email") or "", "brand_color": b.get("accent") or "#1d4ed8"}
 
 
+def slim(d: dict) -> dict:
+    """The parts of a report the trade numbers and postcards need (kept per
+    home in the folder so buyers' mail files build without re-measuring)."""
+    out = {k: d.get(k) for k in ("pin", "address", "city", "zip", "county_name", "roof_sqft", "squares",
+                                 "pitch_label", "facets", "lines", "tree_overhang_sqft", "walls", "yard")}
+    if out.get("walls"):
+        out["walls"] = {k: v for k, v in out["walls"].items() if k != "elevations"}
+    if out.get("yard"):
+        out["yard"] = {k: v for k, v in out["yard"].items() if k != "photo_jpg"}
+    out["structures"] = [{"facet_polys": [{k: fp.get(k) for k in ("down", "pitch", "area_sqft")}
+                                          for fp in st.get("facet_polys") or []]} for st in d.get("structures") or []]
+    return out
+
+
 def _one(cid, f):
-    """Build one home's report and PDF. Returns (row, pdf_bytes|None)."""
+    """Build one home's report and PDF, plus its mail photo. Returns
+    (row, pdf_bytes|None, extras: {"photo": jpg, "data": slim report})."""
     from .counties import make_pid
     from .measure import measurer_for
     from .roofpdf import render_pdf
     from .roofreport import build_report, list_structures
     m = measurer_for(cid)
     a = m.parcel_attrs(f["attributes"])
+    from .bulk import owner_info
     row = {"address": (a.get("address") or "").strip(), "city": a.get("city"), "zip": a.get("zip"),
-           "pin": make_pid(cid, a["pin"]), "status": "ok"}
+           "pin": make_pid(cid, a["pin"]), "status": "ok", **owner_info(m, f)}
     try:
         info = list_structures(row["pin"])
         ids = [s["id"] for s in info["structures"] if s["id"] == 0 or s["plan_sqft"] >= 250]
         d = build_report(row["pin"], ids or None)
         rep = {"data": d, "id": a["pin"][-8:], "created": time.time()}
         pdf = render_pdf(rep, _company())
+        extras = {"data": {**slim(d), "owner": row.get("owner") or "", "owner_mailing": row.get("owner_mailing") or ""}}
+        try:
+            from .postcard import PH, PHOTO_FRAC, PW, property_photo
+            extras["photo"] = property_photo(d, None, aspect=PW * PHOTO_FRAC / PH, min_px=1500)
+        except Exception:
+            pass
         w, y = d.get("walls") or {}, d.get("yard") or {}
         row.update({"roof_sqft": d.get("roof_sqft"), "squares": d.get("squares"), "pitch": d.get("pitch_label"),
                     "wall_sqft": w.get("gross_wall_sqft"), "gutter_ft": w.get("gutter_ft"),
                     "lawn_sqft": y.get("lawn_sqft"), "driveway_sqft": y.get("driveway_sqft"),
                     "sidewalk_sqft": y.get("sidewalk_sqft"), "lot_sqft": y.get("lot_sqft")})
-        return row, pdf
+        return row, pdf, extras
     except Exception as e:
         row["status"] = f"not measured ({str(e)[:60]})"
-        return row, None
+        return row, None, {}
+
+
+def add_home(zf, row: dict, pdf, extras: dict, used: set) -> None:
+    """Write one home into a Premier folder: its report PDF, and for mail
+    files its photo and slim data."""
+    if not pdf:
+        return
+    base = _safe(f"{row['address']} {row.get('city') or ''}")
+    name, k = f"{base}.pdf", 2
+    while name in used:
+        name, k = f"{base} ({k}).pdf", k + 1
+    used.add(name)
+    row["file"] = name
+    stem = name[:-4]
+    zf.writestr(f"reports/{name}", pdf)
+    if extras.get("photo"):
+        zf.writestr(f"mail/photos/{stem}.jpg", extras["photo"])
+        row["photo"] = f"{stem}.jpg"
+    if extras.get("data"):
+        zf.writestr(f"mail/data/{stem}.json", json.dumps(extras["data"]), compress_type=zipfile.ZIP_DEFLATED)
 
 
 def build(zip_code: str, classes: list[str], bands=None) -> None:
@@ -135,16 +178,9 @@ def build(zip_code: str, classes: list[str], bands=None) -> None:
     zlock = threading.Lock()
     with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as zf:  # PDFs are already compressed
         with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-            for i, (row, pdf) in enumerate(ex.map(lambda it: _one(*it), items), 1):
-                if pdf:
-                    base = _safe(f"{row['address']} {row.get('city') or ''}")
-                    name, k = f"{base}.pdf", 2
-                    while name in used:
-                        name, k = f"{base} ({k}).pdf", k + 1
-                    used.add(name)
-                    row["file"] = name
-                    with zlock:
-                        zf.writestr(f"reports/{name}", pdf)
+            for i, (row, pdf, extras) in enumerate(ex.map(lambda it: _one(*it), items), 1):
+                with zlock:
+                    add_home(zf, row, pdf, extras, used)
                 rows.append(row)
                 if i % 10 == 0 or i == total:
                     m.update(done=i)

@@ -6,6 +6,7 @@ Business page:  http://localhost:8000/business
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import threading
@@ -515,21 +516,56 @@ def _report_access(rid: str, request: Request) -> tuple[dict, dict]:
 def roof_report_json(rid: str, request: Request):
     rep, comp = _report_access(rid, request)
     from . import trades
-    trade = request.query_params.get("trade") or comp.get("trade")
-    summary = ({"key": trade, "label": trades.label(trade), "metrics": trades.metrics(trade, rep["data"])}
-               if trade in trades.TRADE_KEYS else None)
+    chosen = _report_trades(request, comp)
+    sums = [{"key": t, "label": trades.label(t), "metrics": trades.metrics(t, rep["data"]),
+             "price": trades.report_price(t, comp.get("rates"), rep["data"])} for t in chosen]
     return {"id": rep["id"], "created": rep["created"], "share_token": rep["share_token"], "data": rep["data"],
             "company": {k: comp.get(k) for k in ("name", "phone", "email", "brand_color")},
-            "trade_summary": summary}
+            "company_trades": comp.get("trades") or [], "trades": chosen,
+            "trade_summaries": sums, "trade_summary": sums[0] if sums else None}
+
+
+def _report_trades(request: Request, comp: dict) -> list[str]:
+    """Trades to show on a report: ?trades=a,b (or ?trade=a), else the company's."""
+    raw = request.query_params.get("trades") or request.query_params.get("trade")
+    return _clean_trades(raw.split(",")) if raw else _clean_trades(comp.get("trades") or [])
 
 
 @app.get("/r/{rid}/pdf")
 def roof_report_pdf(rid: str, request: Request):
     rep, comp = _report_access(rid, request)
-    pdf = render_pdf(rep, comp)
+    pdf = render_pdf(rep, comp, trades=_report_trades(request, comp))
     safe = "".join(ch if ch.isalnum() else "_" for ch in rep["data"].get("address", "roof"))
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="Roof_Report_{safe}_{rep["id"]}.pdf"'})
+
+
+@app.get("/r/{rid}/postcard.pdf")
+def roof_report_postcard(rid: str, request: Request, trade: str | None = None,
+                         headline: str | None = None, offer: str | None = None):
+    """Print-ready 9x6 in postcard (with 1/8 in bleed) for door-to-door mail."""
+    from . import postcard
+    rep, comp = _report_access(rid, request)
+    t = (_clean_trades([trade]) or _report_trades(request, comp) or [None])[0]
+    pdf = postcard.render_postcard(rep["data"], comp, t, (headline or "")[:90] or None, (offer or "")[:220] or None)
+    safe = "".join(ch if ch.isalnum() else "_" for ch in rep["data"].get("address", "home"))
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="Postcard_{safe}_{rep["id"]}.pdf"'})
+
+
+@app.get("/r/{rid}/photo.jpg")
+def roof_report_photo(rid: str, request: Request, trade: str | None = None, lines: int = 1):
+    """High-resolution aerial photo of the property (for your own mail design)."""
+    from . import postcard
+    rep, comp = _report_access(rid, request)
+    t = (_clean_trades([trade]) or _report_trades(request, comp) or [None])[0]
+    try:
+        jpg = postcard.property_photo(rep["data"], t, aspect=1.25, lines=bool(lines), min_px=2400)
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't get the aerial photo: {str(e)[:120]}")
+    safe = "".join(ch if ch.isalnum() else "_" for ch in rep["data"].get("address", "home"))
+    return Response(jpg, media_type="image/jpeg",
+                    headers={"Content-Disposition": f'inline; filename="Aerial_{safe}.jpg"'})
 
 
 # ------------------------------------------------------------- owner (admin)
@@ -630,6 +666,7 @@ class JoinReq(BaseModel):
     password: str = Field(min_length=8, max_length=200)
     phone: str = Field(default="", max_length=40)
     trade: str | None = Field(default=None, max_length=40)
+    trades: list[str] | None = Field(default=None, max_length=30)
 
 
 @app.get("/api/trades")
@@ -642,12 +679,61 @@ class TradeReq(BaseModel):
     trade: str = Field(max_length=40)
 
 
+def _clean_trades(raw) -> list[str]:
+    from . import trades
+    out = []
+    for t in raw or []:
+        if t in trades.TRADE_KEYS and t not in out:
+            out.append(t)
+    return out
+
+
 @app.put("/api/roof/trade")
 def set_trade(body: TradeReq, c: dict = Depends(roof_company)):
+    return set_trades(TradesReq(trades=[body.trade]), c)
+
+
+class TradesReq(BaseModel):
+    trades: list[str] = Field(max_length=30)
+
+
+@app.put("/api/roof/trades")
+def set_trades(body: TradesReq, c: dict = Depends(roof_company)):
+    """Pick the trades your reports are set up for. Members: the monthly
+    price follows the number of trades (2 included)."""
+    ts = _clean_trades(body.trades)
+    if not ts:
+        raise HTTPException(400, "Pick at least one trade.")
+    try:
+        billing.update_member_price(c, ts)
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't update your membership price: {str(e)[:200]}")
+    return accounts.update_company(c["id"], trades=ts)
+
+
+@app.get("/api/pricing-rules")
+def pricing_rules():
+    """What each trade's price is based on, with suggested starting rates."""
     from . import trades
-    if body.trade not in trades.TRADE_KEYS:
-        raise HTTPException(400, "unknown trade")
-    return accounts.update_company(c["id"], trade=body.trade)
+    return {"rules": trades.price_catalog()}
+
+
+class RatesReq(BaseModel):
+    rates: dict
+
+
+@app.put("/api/roof/rates")
+def set_rates(body: RatesReq, c: dict = Depends(roof_company)):
+    """Your prices per trade. Every report, sheet and postcard prices each home from them."""
+    from . import trades
+    return accounts.update_company(c["id"], rates=trades.clean_rates(body.rates))
+
+
+@app.get("/api/billing/trade-price")
+def trade_price(trades: str = ""):
+    ts = _clean_trades(trades.split(","))
+    return {"trades": ts, "paid_trades": billing.paid_trades(ts), "price_cents": billing.member_price_cents(ts),
+            "addon_cents": billing.trade_addon_cents(len(billing.paid_trades(ts)))}
 
 
 @app.get("/join")
@@ -661,6 +747,7 @@ def billing_plans(request: Request):
     c = _session_company(request)
     p = billing.plans()
     return {"member_price_cents": p["member_price_cents"], "credit_price_cents": p["credit_price_cents"],
+            "included_trades": p["included_trades"], "trade_cents": p["trade_cents"],
             "list_discount": p["list_discount"], "packs": list(billing.CREDIT_PACKS),
             "stripe": billing.enabled(), "company": c}
 
@@ -671,8 +758,9 @@ def join(body: JoinReq, request: Request):
         raise HTTPException(409, "There's already an account with that email. Log in instead.")
     c = accounts.create_company(body.name, body.email, body.password, 0, body.phone)
     from . import trades as _tr
-    if body.trade in _tr.TRADE_KEYS:
-        c = accounts.update_company(c["id"], trade=body.trade)
+    ts = _clean_trades((body.trades or []) + ([body.trade] if body.trade else []))
+    if ts:
+        c = accounts.update_company(c["id"], trades=ts)
     from . import mailer
     mailer.notify_owner(f"New company sign-up: {c['name']}",
                         f"{c['name']} ({c['email']}, {body.phone or 'no phone'}) created an account.", reply_to=c["email"])
@@ -757,6 +845,11 @@ def _demo_company() -> dict:
         c = accounts.create_company("Demo (owner tests)", _DEMO_EMAIL, secrets.token_urlsafe(24))
     if not c["member"]:
         c = accounts.set_membership(c["id"], time.time() + 3650 * 86400, active=True)
+    if not c.get("rates") or not c.get("trades"):  # every trade, at the suggested prices, so tests show prices
+        from . import trades as _tr
+        c = accounts.update_company(c["id"], trades=[k for k in _tr.TRADE_KEYS if k in _tr.PRICE_RULES],
+                                    rates=_tr.clean_rates({r["key"]: r for r in _tr.price_catalog()}),
+                                    phone=c.get("phone") or "(402) 555-0100", name="Demo Home Services")
     return c
 
 
@@ -794,7 +887,7 @@ def demo_report(body: DemoReq):
         if st.get("edited"):
             checks.append(f"{st['name']}: outline was adjusted by hand")
     return {"id": rid, "token": rep["share_token"], "address": d.get("address"), "city": d.get("city"),
-            "zip": d.get("zip"), "county": d.get("county_name"), "summaries": trades.summaries(d), "checks": checks,
+            "zip": d.get("zip"), "county": d.get("county_name"), "summaries": [{**x, "price": trades.report_price(x["key"], c.get("rates"), d)} for x in trades.summaries(d)], "checks": checks,
             "yard_photo": y.get("photo_jpg") or "", "aerial": d.get("aerial_jpg") or "",
             "roof_sqft": d.get("roof_sqft"), "structures": [s_["name"] for s_ in d.get("structures") or []]}
 
@@ -830,10 +923,9 @@ def demo_premier(body: DemoPremierReq):
         rows = []
         try:
             with _zf.ZipFile(out, "w") as zf, ThreadPoolExecutor(max_workers=4) as ex:
-                for i, (row, pdf) in enumerate(ex.map(lambda it: premier._one(*it), items), 1):
-                    if pdf:
-                        row["file"] = f"{premier._safe(row['address'] + ' ' + (row.get('city') or ''))}.pdf"
-                        zf.writestr(f"reports/{row['file']}", pdf)
+                used = set()
+                for i, (row, pdf, extras) in enumerate(ex.map(lambda it: premier._one(*it), items), 1):
+                    premier.add_home(zf, row, pdf, extras, used)
                     rows.append(row)
                     _demo_jobs[jid]["done"] = i
                 buf = _io.StringIO()
@@ -917,7 +1009,8 @@ def data_sample(body: SampleReq, request: Request):
     if why:
         raise HTTPException(429, why)
     try:
-        rows = datastore.take_sample(body.email, _client_ip(request), z, _classes(body.classes))
+        rows = datastore.add_owners(datastore.take_sample(body.email, _client_ip(request), z, _classes(body.classes)),
+                                    z, _classes(body.classes))
     except LookupError as e:
         raise HTTPException(404, str(e))
     c = _session_company(request)
@@ -1003,9 +1096,121 @@ def data_order_csv(oid: str, t: str | None = None):
     if o["status"] != "ready" and not (o["status"] == "processing" and datastore.dataset_ready(o["zip"], classes)):
         raise HTTPException(409, "Your sheet isn't ready yet.")
     rows = datastore.rows_in_bands(datastore.read_dataset(o["zip"], classes), *datastore.order_bands(o))
+    rows = datastore.add_owners(rows, o["zip"], classes)
     cols = datastore.columns_for(datastore.order_types(o))  # only what they paid for
+    buyer = accounts.company_by_email(o["email"])
+    if buyer:
+        rows, cols = datastore.add_prices(rows, cols, (accounts.get_company(buyer["id"]) or {}).get("rates"))
     return Response(datastore.to_csv(rows, cols), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="properties_{o["zip"]}_{o["id"]}.csv"'})
+
+
+# ---- postcard mail files (Premier lists)
+_mail_jobs: dict = {}
+
+
+class MailReq(BaseModel):
+    trade: str | None = Field(default=None, max_length=40)
+    headline: str | None = Field(default=None, max_length=90)
+    offer: str | None = Field(default=None, max_length=220)
+    name: str | None = Field(default=None, max_length=120)
+    phone: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=200)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+
+
+def _start_mailing(key: str, src, body: MailReq, base: dict) -> dict:
+    """Build a branded postcard mail file from a Premier folder in the background."""
+    from . import postcard
+    comp = {"name": body.name or base.get("name") or "", "phone": body.phone or base.get("phone") or "",
+            "email": body.email or base.get("email") or "", "brand_color": body.color or base.get("brand_color") or "#1d4ed8",
+            "rates": base.get("rates") or {}}
+    trade = (_clean_trades([body.trade]) or _clean_trades(base.get("trades") or []) or [None])[0]
+    sig = hashlib.sha1(json.dumps([comp, trade, body.headline, body.offer], sort_keys=True).encode()).hexdigest()[:10]
+    out = postcard._mail_dir() / f"{key}_{sig}.zip"
+    j = _mail_jobs.get(key)
+    if j and j.get("sig") == sig and j["status"] in ("building", "ready"):
+        return j
+    j = {"status": "ready" if out.exists() else "building", "sig": sig, "path": str(out), "done": 0, "total": 0}
+    _mail_jobs[key] = j
+    if j["status"] == "ready":
+        return j
+
+    def run():
+        try:
+            r = postcard.build_mailing(src, out, comp, trade, body.headline, body.offer,
+                                       progress=lambda i, n: j.update(done=i, total=n))
+            if not r["homes"]:
+                j.update(status="failed", error="This list was built before postcards were added. Ask us to rebuild it.")
+                return
+            j.update(status="ready", **r)
+        except Exception as e:
+            j.update(status="failed", error=str(e)[:200])
+    threading.Thread(target=run, daemon=True, name=f"mail-{key}").start()
+    return j
+
+
+def _mail_view(j: dict | None) -> dict:
+    return {k: v for k, v in (j or {"status": "none"}).items() if k not in ("path", "sig")}
+
+
+def _premier_order(oid: str, t: str | None) -> tuple[dict, object]:
+    from . import premier
+    o = _order_access(oid, t)
+    if (o.get("product") or "") != "premier":
+        raise HTTPException(400, "Postcard mail files come with Premier lists.")
+    classes = o["classes"].split(",") if o["classes"] else ["R"]
+    bands = datastore.order_bands(o)
+    if not premier.ready(o["zip"], classes, bands):
+        raise HTTPException(409, "Your Premier list isn't ready yet.")
+    return o, premier.path(o["zip"], classes, bands)
+
+
+@app.post("/api/data/order/{oid}/mailing")
+def data_order_mailing(oid: str, body: MailReq, t: str | None = None):
+    o, src = _premier_order(oid, t)
+    base = accounts.company_by_email(o["email"]) or {}
+    if base:
+        base = accounts.get_company(base["id"]) or {}
+    return _mail_view(_start_mailing(f"order_{o['id']}", src, body, base))
+
+
+@app.get("/api/data/order/{oid}/mailing")
+def data_order_mailing_status(oid: str, t: str | None = None):
+    o = _order_access(oid, t)
+    return _mail_view(_mail_jobs.get(f"order_{o['id']}"))
+
+
+@app.get("/api/data/order/{oid}/mailing.zip")
+def data_order_mailing_zip(oid: str, t: str | None = None):
+    o = _order_access(oid, t)
+    j = _mail_jobs.get(f"order_{o['id']}")
+    if not j or j["status"] != "ready":
+        raise HTTPException(409, "Your mail file isn't ready yet.")
+    return FileResponse(j["path"], media_type="application/zip", filename=f"postcards_{o['zip']}_{o['id']}.zip")
+
+
+@app.post("/api/demo/premier/{jid}/mailing", dependencies=[Depends(admin)])
+def demo_premier_mailing(jid: str, body: MailReq):
+    j = _demo_jobs.get(jid)
+    if not j or j.get("status") != "ready":
+        raise HTTPException(409, "Build a Premier test first.")
+    return _mail_view(_start_mailing(f"demo_{jid}", j["path"], body, _demo_company()))
+
+
+@app.get("/api/demo/premier/{jid}/mailing", dependencies=[Depends(admin)])
+def demo_premier_mailing_status(jid: str):
+    return _mail_view(_mail_jobs.get(f"demo_{jid}"))
+
+
+@app.get("/api/demo/premier/{jid}/mailing.zip")
+def demo_premier_mailing_zip(jid: str, token: str | None = None):
+    if ADMIN_TOKEN and token != ADMIN_TOKEN:
+        raise HTTPException(403)
+    j = _mail_jobs.get(f"demo_{jid}")
+    if not j or j["status"] != "ready":
+        raise HTTPException(409, "not ready")
+    return FileResponse(j["path"], media_type="application/zip", filename=f"demo_postcards_{jid}.zip")
 
 
 # ---- owner

@@ -34,10 +34,12 @@ SAMPLE_SIZE = 25
 SAMPLES_PER_IP_PER_DAY = 3
 DATASET_MAX_AGE_DAYS = 365
 
-# Columns sold. No owner names or mailing addresses (several states restrict
-# their use for solicitation).
+# Columns sold. Owner names come from the county assessor and are filled in at
+# download time (bulk.zip_owners); counties where marketing use of public-record
+# names isn't allowed (Kansas) leave them blank.
 COLUMNS = [
     ("address", "Address"), ("city", "City"), ("zip", "ZIP"), ("county", "County"),
+    ("owner", "Owner name"), ("owner_mailing", "Owner mailing address"),
     ("lot_sqft", "Lot sq ft"), ("home_value", "Assessed value $"), ("year_built", "Year built"),
     ("living_sqft", "House sq ft"), ("lawn_sqft", "Lawn sq ft (grass only)"),
     ("parkway_sqft", "Parkway grass sq ft"), ("building_sqft", "Building footprint sq ft"),
@@ -65,7 +67,7 @@ MEASURE_TYPES = [
     ("walls", "House walls & windows (siding)", ["wall_sqft", "est_windows"]),
 ]
 TYPE_KEYS = [k for k, _, _ in MEASURE_TYPES]
-BASE_HEAD = ["address", "city", "zip", "county", "lot_sqft", "home_value", "year_built", "living_sqft"]
+BASE_HEAD = ["address", "city", "zip", "county", "owner", "owner_mailing", "lot_sqft", "home_value", "year_built", "living_sqft"]
 BASE_TAIL = ["quality", "notes", "lat", "lon", "pin"]
 
 DEFAULT_PRICING = {
@@ -375,6 +377,34 @@ def to_csv(rows: list[dict], cols: list[tuple[str, str]] | None = None) -> str:
     for r in rows:
         w.writerow([r.get(k, "") if r.get(k) is not None else "" for k, _ in cols])
     return buf.getvalue()
+
+
+def add_owners(rows: list[dict], zip_code: str, classes: list[str]) -> list[dict]:
+    """Fill owner name and mailing address into sheet rows (by property id)."""
+    try:
+        own = bulk.zip_owners(zip_code, classes)
+    except Exception:
+        return rows
+    for r in rows:
+        o = own.get(str(r.get("pin") or ""))
+        if o:
+            r.update(o)
+    return rows
+
+
+def add_prices(rows: list[dict], cols: list[tuple[str, str]], rates: dict | None):
+    """Add a "your price" column per trade the buyer has rates for (when the
+    sheet has the measurements that trade is priced from)."""
+    from . import trades
+    keys = [k for k in (rates or {}) if trades.PRICE_RULES.get(k, (0,) * 7)[6]
+            and all(c in {k_ for k_, _ in cols} for c in trades.PRICE_RULES[k][6])]
+    for k in keys:
+        col = f"price_{k}"
+        cols = cols + [(col, f"Your price: {trades.label(k)} ({rates[k].get('label') or trades.PRICE_RULES[k][3]})")]
+        for r in rows:
+            p = trades.sheet_price(k, rates, r)
+            r[col] = p["price"] if p else ""
+    return rows, cols
 
 
 def read_dataset(zip_code: str, classes: list[str]) -> list[dict]:
