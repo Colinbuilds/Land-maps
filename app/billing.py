@@ -214,7 +214,7 @@ def portal_url(c: dict, base_url: str) -> str:
     if not c.get("stripe_customer"):
         raise RuntimeError("no billing account yet")
     return _post("/billing_portal/sessions", {"customer": c["stripe_customer"],
-                                              "return_url": f"{base_url}/roof"})["url"]
+                                              "return_url": f"{base_url}/reports"})["url"]
 
 
 # ------------------------------------------------------------ credit packs

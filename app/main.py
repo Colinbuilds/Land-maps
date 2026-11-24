@@ -92,7 +92,7 @@ def page_postcards():
 
 @app.get("/reports")
 def page_reports():
-    return FileResponse(STATIC / "roof.html")
+    return FileResponse(STATIC / "reports.html")
 
 
 # --------------------------------------------------------------- public API
@@ -433,14 +433,9 @@ def roof_company(request: Request) -> dict:
     return c
 
 
-@app.get("/roof")
-def page_roof():
-    return FileResponse(STATIC / "roof.html")
-
-
 @app.get("/r/{rid}")
-def page_roof_report(rid: str):
-    return FileResponse(STATIC / "roof-report.html")
+def page_report(rid: str):
+    return FileResponse(STATIC / "report.html")
 
 
 class RoofLogin(BaseModel):

@@ -5,6 +5,7 @@ from app.main import app
 
 
 def test_pages_and_health():
+    assert TestClient(app).get("/roof").status_code == 404  # removed: reports live at /reports
     c = TestClient(app)
     assert c.get("/healthz").json() == {"ok": True}
     assert c.get("/").status_code == 200
