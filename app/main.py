@@ -91,6 +91,18 @@ def page_postcards():
     return FileResponse(STATIC / "postcards.html")
 
 
+@app.get("/signin")
+def page_signin():
+    """One sign-in for the customer site: companies go to their reports or
+    CRM; "admin" + the admin key goes to the command center."""
+    return FileResponse(STATIC / "signin.html")
+
+
+@app.get("/api/admin/check", dependencies=[Depends(admin)])
+def admin_check():
+    return {"ok": True, "open": not ADMIN_TOKEN}
+
+
 @app.get("/reports")
 def page_reports():
     return FileResponse(STATIC / "reports.html")

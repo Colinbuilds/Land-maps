@@ -225,3 +225,13 @@ def test_zip_totals_by_value_band(tmp_path, monkeypatch):
     b = {r["band"]: r for r in t["bands"]}
     assert b[0]["homes"] == 1 and b[1]["homes"] == 2 and b[1]["lawn_sqft"] == 13000
     assert ds.totals_all()["all"]["driveway_sqft"] == 2100
+
+
+def test_signin_page_and_admin_check(monkeypatch):
+    import app.main as m
+    cl = TestClient(app)
+    assert cl.get("/signin").status_code == 200
+    assert cl.get("/api/admin/check").json()["open"] is True  # no key set
+    monkeypatch.setattr(m, "ADMIN_TOKEN", "owner-key-123")
+    assert cl.get("/api/admin/check", headers={"x-admin-token": "nope"}).status_code == 401
+    assert cl.get("/api/admin/check", headers={"x-admin-token": "owner-key-123"}).json() == {"ok": True, "open": False}
