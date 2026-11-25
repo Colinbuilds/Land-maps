@@ -1333,6 +1333,19 @@ def admin_data():
             "prebuild_all": datastore.prebuild_status()}
 
 
+@app.get("/api/admin/data/totals", dependencies=[Depends(admin)])
+def admin_data_totals(key: str | None = None):
+    """Square feet measured: every stored ZIP, or one ZIP by value band."""
+    if key:
+        if not key.replace("_", "").isalnum():
+            raise HTTPException(400)
+        t = datastore.totals_for_key(key)
+        if not t:
+            raise HTTPException(404, "That ZIP isn't measured yet.")
+        return t
+    return datastore.totals_all()
+
+
 class DataPricing(BaseModel):
     rate_cents: float = Field(ge=0.5, le=100)          # first measurement type, per property
     extra_type_cents: float = Field(ge=0, le=100)      # each extra type, per property
