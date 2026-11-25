@@ -162,13 +162,26 @@ function measurementCards(r, keys, labels) {
 (function siteMenu() {
   const here = location.pathname.replace(/\/+$/, "") || "/";
   const owner = /^\/(command|business|demo)(\/|$)/.test(here);
+  // The command center is one page (/command) with a tab per section; the
+  // other owner pages open inside it. Opened on their own, they forward there.
+  const OWNER_TAB = { "/command/data": "data", "/command/postcards": "postcards", "/command/tools": "measure",
+    "/command/settings": "settings", "/demo": "demo", "/business": "measure" };
+  let embedded = false;
+  try { embedded = window.top !== window.self; } catch (e) { embedded = true; }
+  if (owner && here !== "/command") {
+    if (!embedded) { location.replace("/command#" + (OWNER_TAB[here] || "companies")); return; }
+    const st = document.createElement("style");  // inside the command center: its own menu is enough
+    st.textContent = "header.top, .tabbar, .site-nav { display: none !important; } body { padding-bottom: 0 !important; }";
+    document.head.appendChild(st);
+    return;
+  }
   const links = owner ? [
-    { href: "/command", label: "Companies", icon: "🏢" },
-    { href: "/command/data", label: "ZIP data", icon: "🗂️" },
-    { href: "/command/postcards", label: "Postcards", icon: "✉️" },
-    { href: "/command/tools", label: "Measure", icon: "📏" },
-    { href: "/demo", label: "Demo", icon: "🧪" },
-    { href: "/command/settings", label: "Settings", icon: "⚙️" },
+    { href: "/command#companies", label: "Companies", icon: "🏢" },
+    { href: "/command#data", label: "ZIP data", icon: "🗂️" },
+    { href: "/command#postcards", label: "Postcards", icon: "✉️" },
+    { href: "/command#measure", label: "Measure", icon: "📏" },
+    { href: "/command#demo", label: "Demo", icon: "🧪" },
+    { href: "/command#settings", label: "Settings", icon: "⚙️" },
   ] : [
     { href: "/", label: "Home", icon: "🏠" },
     { href: "/reports", label: "Reports", icon: "📐" },
@@ -176,7 +189,8 @@ function measurementCards(r, keys, labels) {
     { href: "/crm", label: "CRM", icon: "📋" },
     { href: "/join", label: "Membership", icon: "⭐" },
   ];
-  const isActive = (h) => (h === "/" ? here === "/" : h === "/command" ? here === "/command"
+  const tabNow = (location.hash || "#companies").slice(1);
+  const isActive = (h) => (h === "/" ? here === "/" : h.startsWith("/command#") ? h.slice(9) === tabNow
     : here === h || here.startsWith(h + "/") || (h === "/reports" && here.startsWith("/r/")));
   const build = () => {
     const header = document.querySelector("header.top");
