@@ -201,9 +201,11 @@ def test_owner_test_drive():
 def test_admin_key_signs_in_on_customer_site(monkeypatch):
     import app.main as m
     cl = TestClient(app)
-    assert cl.post("/api/roof/login", json={"email": "admin", "password": ""}).status_code == 401  # no key set: off
+    r = cl.post("/api/roof/login", json={"email": "admin", "password": ""})
+    assert r.status_code == 401 and "isn't set" in r.json()["detail"]  # no key set: off, and says so
     monkeypatch.setattr(m, "ADMIN_TOKEN", "owner-key-123")
     assert cl.post("/api/roof/login", json={"email": "admin", "password": "wrong"}).status_code == 401
-    r = cl.post("/api/roof/login", json={"email": "admin", "password": "owner-key-123"})
+    assert "isn't the admin key" in cl.post("/api/roof/login", json={"email": "admin", "password": "nope"}).json()["detail"]
+    r = cl.post("/api/roof/login", json={"email": " Admin ", "password": " owner-key-123 "})  # phone spaces/caps
     assert r.status_code == 200 and r.json()["crm"] and r.json()["member"]
     assert cl.get("/api/crm/home").status_code == 200
