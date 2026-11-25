@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in</title>
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  body { background: #f6f7f2; padding-bottom: 80px; }
+  .box { max-width: 420px; margin: 48px auto; padding: 0 16px; }
+  .box h1 { font-size: 30px; margin: 0 0 4px; }
+  .box .card { border-radius: 20px; padding: 20px; }
+  .box input { min-height: 50px; font-size: 16px; border-radius: 14px; }
+  .box button { width: 100%; min-height: 52px; border-radius: 99px; font-size: 16px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span><span>Home Service Info</span></div>
+  <div class="contact"></div>
+</header>
+<div class="box">
+  <h1>Sign in</h1>
+  <p class="muted" style="margin:0 0 16px">Your company account. New here? <a href="/join">Join</a>.</p>
+  <div class="card stack">
+    <input id="email" type="text" inputmode="email" autocapitalize="none" autocomplete="username" placeholder="Email" aria-label="Email">
+    <input id="pass" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password">
+    <button id="go">Sign in</button>
+    <div id="msg" class="small"></div>
+  </div>
+</div>
+<script src="/static/common.js?v=18"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  async function signIn() {
+    const email = $("email").value.trim(), password = $("pass").value.trim();
+    if (!password) { $("msg").innerHTML = '<span class="err">Enter your password.</span>'; return; }
+    $("go").disabled = true;
+    $("msg").innerHTML = '<span class="spinner"></span>Signing in…';
+    try {
+      if (["", "admin"].includes(email.toLowerCase())) {
+        // the owner: the password is the admin key; check it, keep it in this browser, open the command center
+        const r = await fetch("/api/admin/check", { headers: { "x-admin-token": password } });
+        if (!r.ok) throw new Error("That isn't the admin key. Use the exact value of ESTIMATOR_ADMIN_TOKEN from Railway.");
+        if ((await r.json()).open) throw new Error("Owner sign-in is off: ESTIMATOR_ADMIN_TOKEN isn't set on the server. Add it in Railway (Variables) and wait for the redeploy.");
+        try { localStorage.setItem("adminToken", password); } catch (e) {}
+        location.href = "/command";
+        return;
+      }
+      const me = await api("/api/roof/login", { method: "POST", json: { email, password } });
+      location.href = me.crm ? "/crm" : "/reports";
+    } catch (e) {
+      $("msg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+      $("go").disabled = false;
+    }
+  }
+  $("go").onclick = signIn;
+  $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") signIn(); });
+})();
+</script>
+</body>
+</html>

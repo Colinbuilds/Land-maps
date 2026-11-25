@@ -852,3 +852,63 @@ def resume_prebuild():
 
 
 init()
+
+
+# ------------------------------------------------------- totals (owner)
+TOTAL_KEYS = [("lot_sqft", "Lot"), ("lawn_sqft", "Lawn"), ("parkway_sqft", "Parkway"), ("driveway_sqft", "Driveway"),
+              ("sidewalk_sqft", "Sidewalk"), ("other_hardscape_sqft", "Patios & walks"), ("beds_sqft", "Beds"),
+              ("building_sqft", "Building footprint"), ("wall_sqft", "House walls"), ("tree_canopy_sqft", "Tree canopy"),
+              ("living_sqft", "House size (assessor)")]
+_totals_cache: dict = {}
+
+
+def totals_for_key(key: str) -> dict | None:
+    """Square feet measured in one stored ZIP sheet, in total and per
+    assessed-value band ($250k steps). Cached until the sheet changes."""
+    from .bulk import VALUE_EDGES, band_label, band_of
+    p = ZIPS_DIR / f"{key}.csv"
+    if not p.exists():
+        return None
+    mt = p.stat().st_mtime
+    hit = _totals_cache.get(key)
+    if hit and hit[0] == mt:
+        return hit[1]
+    bands = {i: {"band": i, "label": band_label(i), "homes": 0, **{k: 0.0 for k, _ in TOTAL_KEYS}}
+             for i in range(len(VALUE_EDGES) + 1)}
+    with open(p, newline="") as fh:
+        for r in csv.DictReader(fh):
+            if r.get("lawn_sqft") in (None, "") or not (r.get("address") or "").strip():
+                continue
+            b = bands[band_of(r.get("home_value"))]
+            b["homes"] += 1
+            for k, _ in TOTAL_KEYS:
+                try:
+                    b[k] += float(r.get(k) or 0)
+                except ValueError:
+                    pass
+    rows = [b for b in bands.values() if b["homes"]]
+    allrow = {"band": None, "label": "All homes", "homes": sum(b["homes"] for b in rows),
+              **{k: sum(b[k] for b in rows) for k, _ in TOTAL_KEYS}}
+    for b in rows + [allrow]:
+        for k, _ in TOTAL_KEYS:
+            b[k] = round(b[k])
+    out = {"key": key, "zip": key.split("_")[0], "bands": rows, "all": allrow,
+           "columns": [{"key": k, "label": l} for k, l in TOTAL_KEYS]}
+    _totals_cache[key] = (mt, out)
+    return out
+
+
+def totals_all() -> dict:
+    """Every stored ZIP's totals, plus a grand total across them."""
+    zips = []
+    for m in sorted(ZIPS_DIR.glob("*.json")):
+        try:
+            if json.loads(m.read_text()).get("status") != "ready":
+                continue
+        except ValueError:
+            continue
+        t = totals_for_key(m.stem)
+        if t:
+            zips.append({"key": t["key"], "zip": t["zip"], **{k: v for k, v in t["all"].items() if k not in ("band", "label")}})
+    grand = {"homes": sum(z["homes"] for z in zips), **{k: sum(z[k] for z in zips) for k, _ in TOTAL_KEYS}}
+    return {"zips": zips, "all": grand, "columns": [{"key": k, "label": l} for k, l in TOTAL_KEYS]}

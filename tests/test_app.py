@@ -209,3 +209,29 @@ def test_admin_key_signs_in_on_customer_site(monkeypatch):
     r = cl.post("/api/roof/login", json={"email": " Admin ", "password": " owner-key-123 "})  # phone spaces/caps
     assert r.status_code == 200 and r.json()["crm"] and r.json()["member"]
     assert cl.get("/api/crm/home").status_code == 200
+
+
+def test_zip_totals_by_value_band(tmp_path, monkeypatch):
+    from app import datastore as ds
+    monkeypatch.setattr(ds, "ZIPS_DIR", tmp_path)
+    rows = [{"address": "1 A St", "pin": "1", "home_value": 200000, "lawn_sqft": 5000, "driveway_sqft": 600, "lot_sqft": 9000},
+            {"address": "2 A St", "pin": "2", "home_value": 300000, "lawn_sqft": 7000, "driveway_sqft": 800, "lot_sqft": 11000},
+            {"address": "3 A St", "pin": "3", "home_value": 320000, "lawn_sqft": 6000, "driveway_sqft": 700, "lot_sqft": 10000}]
+    (tmp_path / "99999_R.csv").write_text(ds.to_csv(rows, [(k, k) for k, _ in ds.COLUMNS]).replace(
+        ",".join(k for k, _ in ds.COLUMNS), ",".join(k for k, _ in ds.COLUMNS), 1))
+    (tmp_path / "99999_R.json").write_text('{"status": "ready"}')
+    t = ds.totals_for_key("99999_R")
+    assert t["all"]["homes"] == 3 and t["all"]["lawn_sqft"] == 18000
+    b = {r["band"]: r for r in t["bands"]}
+    assert b[0]["homes"] == 1 and b[1]["homes"] == 2 and b[1]["lawn_sqft"] == 13000
+    assert ds.totals_all()["all"]["driveway_sqft"] == 2100
+
+
+def test_signin_page_and_admin_check(monkeypatch):
+    import app.main as m
+    cl = TestClient(app)
+    assert cl.get("/signin").status_code == 200
+    assert cl.get("/api/admin/check").json()["open"] is True  # no key set
+    monkeypatch.setattr(m, "ADMIN_TOKEN", "owner-key-123")
+    assert cl.get("/api/admin/check", headers={"x-admin-token": "nope"}).status_code == 401
+    assert cl.get("/api/admin/check", headers={"x-admin-token": "owner-key-123"}).json() == {"ok": True, "open": False}

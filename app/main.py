@@ -91,6 +91,18 @@ def page_postcards():
     return FileResponse(STATIC / "postcards.html")
 
 
+@app.get("/signin")
+def page_signin():
+    """One sign-in for the customer site: companies go to their reports or
+    CRM; "admin" + the admin key goes to the command center."""
+    return FileResponse(STATIC / "signin.html")
+
+
+@app.get("/api/admin/check", dependencies=[Depends(admin)])
+def admin_check():
+    return {"ok": True, "open": not ADMIN_TOKEN}
+
+
 @app.get("/reports")
 def page_reports():
     return FileResponse(STATIC / "reports.html")
@@ -1331,6 +1343,19 @@ def admin_data():
     return {"pricing": datastore.pricing(), "orders": datastore.list_orders(), "zips": zips,
             "stripe": datastore.stripe_enabled(), "locks": datastore.all_locks(),
             "prebuild_all": datastore.prebuild_status()}
+
+
+@app.get("/api/admin/data/totals", dependencies=[Depends(admin)])
+def admin_data_totals(key: str | None = None):
+    """Square feet measured: every stored ZIP, or one ZIP by value band."""
+    if key:
+        if not key.replace("_", "").isalnum():
+            raise HTTPException(400)
+        t = datastore.totals_for_key(key)
+        if not t:
+            raise HTTPException(404, "That ZIP isn't measured yet.")
+        return t
+    return datastore.totals_all()
 
 
 class DataPricing(BaseModel):
