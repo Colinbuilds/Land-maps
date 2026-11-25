@@ -33,7 +33,7 @@ from .pricing import DATA_DIR, estimate, load_settings, save_settings
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 LEADS = DATA_DIR / "leads.jsonl"
-ADMIN_TOKEN = os.environ.get("ESTIMATOR_ADMIN_TOKEN", "")
+ADMIN_TOKEN = os.environ.get("ESTIMATOR_ADMIN_TOKEN", "").strip()  # pasted values often carry a space or newline
 
 app = FastAPI(title="Property Estimator")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -54,8 +54,8 @@ async def no_stale_pages(request: Request, call_next):
 def admin(request: Request):
     if not ADMIN_TOKEN:
         return  # dev mode: open. Set ESTIMATOR_ADMIN_TOKEN in production.
-    tok = request.headers.get("x-admin-token") or request.query_params.get("token")
-    if tok != ADMIN_TOKEN:
+    tok = (request.headers.get("x-admin-token") or request.query_params.get("token") or "").strip()
+    if not hmac.compare_digest(tok.encode(), ADMIN_TOKEN.encode()):
         raise HTTPException(401, "admin token required")
 
 
@@ -447,8 +447,14 @@ class RoofLogin(BaseModel):
 @app.post("/api/roof/login")
 def roof_login(body: RoofLogin, request: Request):
     c = accounts.login(body.email, body.password)
-    if not c and ADMIN_TOKEN and hmac.compare_digest(body.password.encode(), ADMIN_TOKEN.encode()):
+    owner = (body.email or "").strip().lower() in ("", "admin")
+    if not c and ADMIN_TOKEN and hmac.compare_digest(body.password.strip().encode(), ADMIN_TOKEN.encode()):
         c = _owner_login(body.email)
+    if not c and owner:  # the owner signing in: say what's wrong
+        if not ADMIN_TOKEN:
+            raise HTTPException(401, "Owner sign-in is off: ESTIMATOR_ADMIN_TOKEN isn't set on the server. "
+                                     "Add it in Railway (Variables) and wait for the redeploy.")
+        raise HTTPException(401, "That isn't the admin key. Use the exact value of ESTIMATOR_ADMIN_TOKEN from Railway.")
     if not c:
         raise HTTPException(401, "wrong email or password")
     r = JSONResponse(c)
