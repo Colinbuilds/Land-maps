@@ -812,10 +812,11 @@ def _save_pre(st: dict):
     PREBUILD_STATE.write_text(json.dumps(st))
 
 
-def prebuild_all(classes: list[str] | None = None, start: bool = True) -> dict:
-    """Measure every ZIP in the service area, one at a time, so lists are
-    ready to download the moment someone buys. Skips ZIPs already measured
-    in the last year; resumes after a restart."""
+def prebuild_all(classes: list[str] | None = None, start: bool = True, zips: list[str] | None = None) -> dict:
+    """Measure every ZIP in the service area (or the ``zips`` given, e.g. a
+    new metro), one at a time, so lists are ready to download the moment
+    someone buys. Skips ZIPs already measured in the last year; resumes
+    after a restart. ZIPs added while a run is going join its queue."""
     if not start:
         _pre["stop"] = True
         if not (_pre["thread"] and _pre["thread"].is_alive()) and PREBUILD_STATE.exists():
@@ -824,11 +825,18 @@ def prebuild_all(classes: list[str] | None = None, start: bool = True) -> dict:
                 st.update(status="stopped", current=None); _save_pre(st)
         return prebuild_status()
     if _pre["thread"] and _pre["thread"].is_alive():
+        st = _pre.get("st")
+        if zips and st is not None:  # join the running queue
+            for z in zips:
+                if z not in st["zips"]:
+                    st["zips"].append(z)
+            _save_pre(st)
         return prebuild_status()
     classes = classes or ["R"]
-    zips = service_zips()
+    zips = list(dict.fromkeys((zips or []) + service_zips())) if zips else service_zips()
     st = {"status": "running", "classes": classes, "zips": zips, "done": [], "failed": [],
           "started": time.time(), "current": None}
+    _pre["st"] = st
     if PREBUILD_STATE.exists():  # keep what an earlier run finished
         old = json.loads(PREBUILD_STATE.read_text())
         st["done"] = [z for z in old.get("done", []) if z in zips]
@@ -836,7 +844,7 @@ def prebuild_all(classes: list[str] | None = None, start: bool = True) -> dict:
     _pre["stop"] = False
 
     def run():
-        for z in zips:
+        for z in st["zips"]:  # the list can grow while running
             if _pre["stop"]:
                 st.update(status="stopped", current=None); _save_pre(st)
                 return
@@ -868,7 +876,7 @@ def resume_prebuild():
     try:
         if PREBUILD_STATE.exists() and json.loads(PREBUILD_STATE.read_text()).get("status") == "running":
             st = json.loads(PREBUILD_STATE.read_text())
-            prebuild_all(st.get("classes"))
+            prebuild_all(st.get("classes"), zips=st.get("zips"))
     except Exception:
         pass
 

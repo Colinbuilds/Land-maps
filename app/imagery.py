@@ -33,12 +33,18 @@ class Mosaic:
         tx1, ty1 = int(X1 // 256), int(Y1 // 256)
         w, h = (tx1 - self.tx0 + 1) * 256, (ty1 - self.ty0 + 1) * 256
         img = Image.new("RGB", (w, h), (0, 0, 0))
-        jobs = {}
-        for ty in range(self.ty0, ty1 + 1):
-            for tx in range(self.tx0, tx1 + 1):
-                url = tile_url.format(z=zoom, y=ty, x=tx)
-                jobs[(tx, ty)] = _pool.submit(get_bytes, url)
         self.missing = 0
+        if tile_url.startswith("export:"):
+            # An image service (e.g. USDA NAIP) rendered on exactly the tile
+            # grid, in blocks, so every caller sees the same pixels as tiles.
+            self._export(tile_url[7:], img, zoom, self.tx0, self.ty0, w, h)
+            jobs = {}
+        else:
+            jobs = {}
+            for ty in range(self.ty0, ty1 + 1):
+                for tx in range(self.tx0, tx1 + 1):
+                    url = tile_url.format(z=zoom, y=ty, x=tx)
+                    jobs[(tx, ty)] = _pool.submit(get_bytes, url)
         for (tx, ty), fut in jobs.items():
             data = fut.result()
             if not data:
@@ -56,6 +62,28 @@ class Mosaic:
         m_per_px = 156543.03392 * math.cos(math.radians(lat)) / (2 ** zoom)
         self.ft_per_px = m_per_px / 0.3048
         self.sqft_per_px = self.ft_per_px ** 2
+
+    def _export(self, service: str, img, zoom: int, tx0: int, ty0: int, w: int, h: int, block: int = 2048):
+        """Fill ``img`` from an ArcGIS ImageServer exportImage, in Web Mercator,
+        aligned to the zoom's tile grid (bands 0,1,2 = natural colour)."""
+        size = 2 * math.pi * 6378137.0
+        res = size / (256 * 2 ** zoom)  # metres per pixel at this zoom
+        jobs = {}
+        for oy in range(0, h, block):
+            for ox in range(0, w, block):
+                bw, bh = min(block, w - ox), min(block, h - oy)
+                X0, Y0 = tx0 * 256 + ox, ty0 * 256 + oy
+                xmin, xmax = X0 * res - size / 2, (X0 + bw) * res - size / 2
+                ymax, ymin = size / 2 - Y0 * res, size / 2 - (Y0 + bh) * res
+                url = (f"{service}/exportImage?bbox={xmin:.3f},{ymin:.3f},{xmax:.3f},{ymax:.3f}&bboxSR=3857&imageSR=3857"
+                       f"&size={bw},{bh}&format=jpg&bandIds=0,1,2&interpolation=RSP_BilinearInterpolation&f=image")
+                jobs[(ox, oy)] = _pool.submit(get_bytes, url)
+        for (ox, oy), fut in jobs.items():
+            data = fut.result()
+            try:
+                img.paste(Image.open(io.BytesIO(data)).convert("RGB"), (ox, oy))
+            except Exception:
+                self.missing += 1
 
     @property
     def bounds_wgs(self):

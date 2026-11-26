@@ -125,3 +125,10 @@ header.top { gap: 12px; flex-wrap: wrap; }
   body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
 }
 @media print { .tabbar, .site-nav { display: none !important; } }
+
+/* owner menu has more tabs than fit: scroll sideways */
+@media (max-width: 760px) {
+  .tabbar.many { display: flex; overflow-x: auto; scrollbar-width: none; }
+  .tabbar.many::-webkit-scrollbar { display: none; }
+  .tabbar.many a { flex: 0 0 auto; min-width: 74px; }
+}

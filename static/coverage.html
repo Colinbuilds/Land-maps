@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coverage</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/styles.css?v=10">
+<style>
+  body { background: #f3f4f1; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px 16px 60px; }
+  .tot { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+  @media (min-width: 760px) { .tot { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+  .tot div { background: #fff; border-radius: 14px; padding: 10px 12px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .tot .l { font-size: 12px; color: var(--muted); } .tot .v { font-size: 22px; font-weight: 800; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0 12px; }
+  .chip { background: #e9efeb; color: var(--ink); border-radius: 99px; padding: 7px 13px; font-size: 13.5px; min-height: 36px; }
+  .chip.on { background: var(--ink); color: #fff; }
+  .panel { background: #fff; border-radius: 16px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  table.t { width: 100%; font-size: 13.5px; border-collapse: collapse; }
+  table.t td, table.t th { padding: 8px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: #eef2f7; color: #334155; }
+  .pill.live { background: #dcfce7; color: #166534; } .pill.found { background: #fef3c7; color: #92400e; }
+  .pill.not_found, .pill.error { background: #fee2e2; color: #991b1b; } .pill.mapped { background: #e0ecff; color: #1d4ed8; }
+  .bg { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 50; display: flex; justify-content: flex-end; }
+  .dr { background: #f8faf9; width: min(820px, 100%); height: 100%; overflow: auto; padding: 18px; }
+  .cand { background: #fff; border-radius: 14px; padding: 12px; margin-top: 10px; border: 2px solid transparent; }
+  .cand.sel { border-color: var(--accent); }
+  .cand .fm { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px; margin-top: 8px; }
+  .cand .fm label { font-size: 12px; color: var(--muted); display: grid; gap: 2px; }
+  .cand .fm input { min-height: 34px; font-size: 13px; padding: 4px 8px; }
+  .smp { font-size: 12px; background: #f8fafc; border-radius: 8px; padding: 6px 8px; margin-top: 6px; overflow-x: auto; white-space: nowrap; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="top"><div class="brand"><span class="dot"></span>Coverage</div></header>
+<div class="wrap">
+  <div id="tokBox" class="card stack hidden" style="max-width:420px"><b>Owner access</b><input id="tok" type="password" placeholder="Admin key"><button id="tokGo">Open</button></div>
+  <div id="app" class="hidden">
+    <h1 style="margin:4px 0">Coverage</h1>
+    <p class="muted" style="margin:0">Every US metro over 150,000 people, the ZIPs within 15 miles of its main city, and the counties they're in. Each county needs one thing set up: its property records. Approve a county and its metro's ZIPs start measuring on their own. This runs by itself every day.</p>
+    <div class="tot" id="tot"></div>
+    <div class="bar">
+      <button id="run">Run now: map metros &amp; search counties</button><button class="secondary" id="stop">Stop</button>
+      <span id="worker" class="small muted"></span>
+    </div>
+    <div class="bar" id="tabs"></div>
+    <div class="panel"><div class="tablewrap"><table class="t" id="list"></table></div></div>
+  </div>
+</div>
+<script src="/static/common.js?v=20"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  let D = null, tab = "approve", timer = null;
+  const LAB = { live: "Live", found: "Needs approval", not_found: "No records found", new: "Not searched yet", error: "Error", mapped: "Mapped" };
+  async function load() {
+    try { D = await api("/api/admin/coverage"); } catch (e) { $("tokBox").classList.remove("hidden"); return; }
+    $("tokBox").classList.add("hidden"); $("app").classList.remove("hidden");
+    const s = D.summary, by = s.by_status || {}, q = D.queue || {};
+    $("tot").innerHTML = [["Metros (150k+)", s.metros], ["Mapped", s.mapped], ["ZIPs in circles", (s.zips || 0).toLocaleString()],
+      ["Counties live", by.live || 0], ["Need approval", by.found || 0], ["Measuring queue", q.zips ? `${(q.done || []).length}/${q.zips.length}` : "–"]]
+      .map(([l, v]) => `<div><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
+    $("worker").textContent = D.worker.running ? `Working: ${D.worker.now || "…"}` : "Idle. Runs again by itself every day.";
+    const counts = { approve: by.found || 0, metros: D.metros.length, notfound: (by.not_found || 0) + (by.error || 0), live: by.live || 0, all: D.counties.length };
+    $("tabs").innerHTML = [["approve", "Needs approval"], ["metros", "Metros"], ["notfound", "No records found"], ["live", "Live counties"], ["all", "All counties"]]
+      .map(([k, l]) => `<button class="chip ${tab === k ? "on" : ""}" data-t="${k}">${l} (${counts[k]})</button>`).join("");
+    draw();
+    clearTimeout(timer); if (D.worker.running) timer = setTimeout(load, 8000);
+  }
+  $("tokGo").onclick = () => { localStorage.setItem("adminToken", $("tok").value.trim()); load(); };
+  $("tabs").onclick = (e) => { const b = e.target.closest("[data-t]"); if (b) { tab = b.dataset.t; load(); } };
+  $("run").onclick = async () => { await api("/api/admin/coverage/run", { method: "POST" }); load(); };
+  $("stop").onclick = async () => { await api("/api/admin/coverage/stop", { method: "POST" }); load(); };
+
+  function draw() {
+    if (tab === "metros") {
+      const live = new Set(D.counties.filter((c) => c.status === "live").map((c) => c.fips));
+      $("list").innerHTML = `<thead><tr><th>Metro</th><th>People</th><th>ZIPs</th><th>Counties live</th><th>Status</th><th></th></tr></thead><tbody>${D.metros.map((m) => {
+        const cs = Array.isArray(m.counties) ? m.counties : [], n = cs.filter((f) => live.has(f)).length;
+        return `<tr><td><b>${esc(m.name)}</b><div class="small muted">${esc(m.note || "")}</div></td><td>${(m.pop || 0).toLocaleString()}</td>
+          <td>${Array.isArray(m.zips) ? m.zips.length : "–"}</td><td>${cs.length ? `${n} of ${cs.length}` : "–"}</td><td><span class="pill ${esc(m.status)}">${esc(LAB[m.status] || m.status)}</span></td>
+          <td>${m.status === "new" || m.status === "error" ? `<button class="secondary" data-map="${m.cbsa}">Map</button>` : cs.length && n === cs.length && m.status !== "live" ? `<button data-pull="${m.cbsa}">Pull data</button>` : ""}</td></tr>`;
+      }).join("")}</tbody>`;
+      $("list").querySelectorAll("[data-map]").forEach((b) => b.onclick = async () => { b.disabled = true; b.textContent = "Mapping…"; try { await api(`/api/admin/coverage/metro/${b.dataset.map}/map`, { method: "POST" }); } catch (e) { alert(e.message); } load(); });
+      $("list").querySelectorAll("[data-pull]").forEach((b) => b.onclick = async () => { try { const r = await api(`/api/admin/coverage/metro/${b.dataset.pull}/pull`, { method: "POST" }); alert(`${r.queued} ZIPs added to the measuring queue.`); } catch (e) { alert(e.message); } load(); });
+      return;
+    }
+    const want = { approve: ["found"], notfound: ["not_found", "error"], live: ["live"], all: null }[tab];
+    const rows = D.counties.filter((c) => !want || want.includes(c.status));
+    $("list").innerHTML = `<thead><tr><th>County</th><th>Metros</th><th>Status</th><th></th></tr></thead><tbody>${rows.map((c) => `<tr>
+      <td><b>${esc(c.name)}, ${esc(c.state)}</b><div class="small muted">${esc(c.note || "")}</div></td>
+      <td class="small">${(Array.isArray(c.metros) ? c.metros : []).map((cb) => esc((D.metros.find((m) => m.cbsa === cb) || {}).name || cb)).join("<br>")}</td>
+      <td><span class="pill ${esc(c.status)}">${esc(LAB[c.status] || c.status)}</span></td>
+      <td>${c.status === "live" ? "" : `<button class="${c.status === "found" ? "" : "secondary"}" data-open="${c.fips}">${c.status === "found" ? "Review" : "Set up"}</button>`}</td></tr>`).join("")
+      || '<tr><td colspan="4" class="muted">Nothing here. Tap Run now to map metros and search counties.</td></tr>'}</tbody>`;
+    $("list").querySelectorAll("[data-open]").forEach((b) => b.onclick = () => open(b.dataset.open));
+  }
+
+  function open(fips) {
+    const c = D.counties.find((x) => x.fips === fips);
+    let cands = Array.isArray(c.candidates) ? c.candidates : [], sel = 0;
+    const bg = document.createElement("div"); bg.className = "bg";
+    const KEYS = ["pin", "address", "city", "zip", "owner", "home_value", "year_built", "bldg_sqft", "lot_sqft", "lot_acres", "class", "mail_address"];
+    const render = () => {
+      bg.innerHTML = `<div class="dr">
+        <div class="bar" style="justify-content:space-between;margin:0"><h2 style="margin:0">${esc(c.name)}, ${esc(c.state)}</h2><button class="secondary" id="x">Close</button></div>
+        <p class="small muted">Pick the layer that is the county's own parcel (property records) map: check the sample rows. Fix any field names, set the residential filter, choose photos, then approve.${c.state === "KS" ? " <b>Kansas:</b> owner names stay off (K.S.A. 45-230)." : ""}</p>
+        <div class="bar"><button class="secondary" id="search">Search again</button><input id="paste" placeholder="Or paste a parcel layer URL (…/FeatureServer/0 or …/MapServer/3)" style="flex:1;min-width:240px"><button class="secondary" id="test">Test it</button></div>
+        <div id="msg" class="small"></div>
+        ${cands.map((k, i) => `<div class="cand ${i === sel ? "sel" : ""}" data-i="${i}">
+          <div class="bar" style="margin:0;justify-content:space-between"><div><b>${esc(k.item || k.name || "Layer")}</b> <span class="small muted">score ${k.score} · found parcels at ${k.coverage} of ${k.points} test spots · by ${esc(k.owner_org || "?")}</span>
+            <div class="small" style="word-break:break-all"><a href="${esc(k.url)}" target="_blank">${esc(k.url)}</a></div></div>
+            <button class="${i === sel ? "" : "secondary"}" data-use="${i}">${i === sel ? "Selected" : "Use this one"}</button></div>
+          <div class="smp">${(k.samples || []).map((s) => esc(Object.entries(s).map(([a, b]) => `${a}: ${b ?? ""}`).join(" · "))).join("<br>")}</div>
+          ${i === sel ? `<div class="fm">${KEYS.map((f) => `<label>${f}<input data-f="${f}" value="${esc((k.fields || {})[f] || "")}"></label>`).join("")}</div>` : ""}
+        </div>`).join("") || '<p class="muted">No candidates yet. Search again, or paste a layer URL from the county\'s GIS website.</p>'}
+        ${cands.length ? `<div class="panel" style="margin-top:12px">
+          <b>Homes only</b> <span class="small muted">(which parcels are houses)</span>
+          <div class="bar"><button class="secondary" id="cls">Show class values</button><input id="where" placeholder="e.g. Class='R'  (blank = every parcel)" style="flex:1;min-width:220px"></div>
+          <div id="clsList" class="small"></div>
+          <b>Aerial photos</b>
+          <div class="bar"><label class="small"><input type="radio" name="img" value="" checked style="width:auto"> USDA NAIP (free, public domain, ~2 ft)</label>
+            <label class="small"><input type="radio" name="img" value="esri" style="width:auto"> Esri World Imagery (sharp ~1 ft; needs an Esri account for commercial use)</label>
+            <label class="small"><input type="radio" name="img" value="custom" style="width:auto"> County photos (tile URL)</label></div>
+          <input id="imgUrl" class="hidden" placeholder="https://…/MapServer/tile/{z}/{y}/{x}">
+          <div class="bar" style="margin-top:12px"><button id="approve">Approve and go live</button><span id="amsg" class="small"></span></div></div>` : ""}
+      </div>`;
+      bg.querySelector("#x").onclick = () => { bg.remove(); load(); };
+      bg.querySelectorAll("[data-use]").forEach((b) => b.onclick = () => { sel = +b.dataset.use; render(); });
+      bg.querySelector("#search").onclick = async () => {
+        bg.querySelector("#msg").innerHTML = '<span class="spinner"></span>Searching and testing layers (about a minute)…';
+        try { cands = (await api(`/api/admin/coverage/county/${fips}/discover`, { method: "POST" })).candidates; sel = 0; render(); }
+        catch (e) { bg.querySelector("#msg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+      };
+      bg.querySelector("#test").onclick = async () => {
+        bg.querySelector("#msg").innerHTML = '<span class="spinner"></span>Testing…';
+        try { const r = await api(`/api/admin/coverage/county/${fips}/test`, { method: "POST", json: { url: bg.querySelector("#paste").value.trim() } }); cands = r.candidates.concat(cands); sel = 0; render(); }
+        catch (e) { bg.querySelector("#msg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+      };
+      if (!cands.length) return;
+      const k = cands[sel];
+      bg.querySelectorAll('input[name="img"]').forEach((r) => r.onchange = () => bg.querySelector("#imgUrl").classList.toggle("hidden", r.value !== "custom" || !r.checked));
+      bg.querySelector("#cls").onclick = async () => {
+        const f = bg.querySelector('[data-f="class"]').value.trim();
+        if (!f) { bg.querySelector("#clsList").textContent = "Type the class / land-use field name first."; return; }
+        try {
+          const vals = await api(`/api/admin/coverage/classes?url=${encodeURIComponent(k.url)}&field=${encodeURIComponent(f)}`);
+          bg.querySelector("#clsList").innerHTML = "Tick the house classes: " + vals.map((v) => `<label style="margin-right:10px"><input type="checkbox" data-v="${esc(v.value)}" style="width:auto"> ${esc(v.value)} <span class="muted">(${(v.n || 0).toLocaleString()})</span></label>`).join("");
+          bg.querySelectorAll("#clsList input").forEach((cb) => cb.onchange = () => {
+            const on = [...bg.querySelectorAll("#clsList input:checked")].map((x) => `'${x.dataset.v.replace(/'/g, "''")}'`);
+            bg.querySelector("#where").value = on.length ? `${f} IN (${on.join(",")})` : "";
+          });
+        } catch (e) { bg.querySelector("#clsList").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+      };
+      bg.querySelector("#approve").onclick = async () => {
+        const fields = {}; bg.querySelectorAll("[data-f]").forEach((i) => { if (i.value.trim()) fields[i.dataset.f] = i.value.trim(); });
+        if (!fields.pin || !fields.address) { bg.querySelector("#amsg").innerHTML = '<span class="err">Parcel id and address fields are required.</span>'; return; }
+        const img = (bg.querySelector('input[name="img"]:checked') || {}).value;
+        const imagery_url = img === "esri" ? "esri" : img === "custom" ? bg.querySelector("#imgUrl").value.trim() : null;
+        bg.querySelector("#amsg").innerHTML = '<span class="spinner"></span>Setting up (LiDAR, photos, footprints)…';
+        try {
+          const r = await api(`/api/admin/coverage/county/${fips}/approve`, { method: "POST", json: { url: k.url, fields, oid: k.oid || "OBJECTID",
+            residential_where: bg.querySelector("#where").value.trim() || null, imagery_url } });
+          bg.querySelector("#amsg").innerHTML = `<span class="ok">Live: ${esc(r.name)}. LiDAR: ${esc(r.lidar || "none found")}.</span>`;
+        } catch (e) { bg.querySelector("#amsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+      };
+    };
+    render();
+    document.body.appendChild(bg);
+  }
+  load();
+})();
+</script>
+</body>
+</html>

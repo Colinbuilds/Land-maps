@@ -286,6 +286,12 @@ class Measurer:
         neigh = [g.buffer(0) for g in neigh if g.intersects(ctx_box)]
         # Stacked condo parcels can duplicate this lot's shape; drop those.
         neigh = [g for g in neigh if not (g.intersection(P).area > 0.8 * P.area)]
+        if self.c["parcels"].get("row_parcels"):
+            # Some counties map the street right-of-way as parcels too: long,
+            # thin and much bigger than a lot. They aren't neighbours, so the
+            # street side of the lot can still be found.
+            neigh = [g for g in neigh
+                     if not (g.area > 2.0 * P.area and 4 * math.pi * g.area / max(g.length, 1.0) ** 2 < 0.08)]
         if rest_of_lot is not None and not rest_of_lot.is_empty:
             neigh.append(rest_of_lot)
         N = unary_union(neigh) if neigh else None
