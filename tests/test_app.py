@@ -355,3 +355,38 @@ def test_assessed_value_addon_and_totals(tmp_path, monkeypatch):
     (tmp_path / "99997_R.csv").write_text(ds.to_csv(rows, [(k, k) for k, _ in ds.COLUMNS]))
     t = ds.totals_for_key("99997_R")
     assert t["all"]["home_value"] == 500000 and any(c["key"] == "home_value" for c in t["columns"])
+
+
+def test_coverage_fields_approve_and_reload(tmp_path, monkeypatch):
+    from app import coverage as cv, counties
+    g = cv.guess_fields([{"name": n} for n in ["FID", "ParcelId", "FullAddres", "City", "Zip", "TotalValue", "LandValue",
+                                                "LotSqFt", "Class", "DataOwner", "OWN_NAME", "YrBuilt"]])
+    assert g["pin"] == "ParcelId" and g["address"] == "FullAddres" and g["home_value"] == "TotalValue"
+    assert g["owner"] == "OWN_NAME" and g["year_built"] == "YrBuilt" and g["lot_sqft"] == "LotSqFt"
+    monkeypatch.setattr(cv, "CFG_DIR", tmp_path)
+    monkeypatch.setattr(cv, "base_config", lambda fips: {"id": "test_xx", "name": "Test County, XX", "fips": "99999",
+                                                         "crs": "EPSG:3857", "imagery": {"tile_url": "export:x"}})
+    monkeypatch.setattr(cv, "auto_pull", lambda: [])
+    cv._set("counties", "fips", "99999", name="Test County", state="XX", status="found")
+    cfg = cv.approve("99999", "https://example.test/FeatureServer/0", {"pin": "PIN", "address": "ADDR", "lot_acres": "ACRES"},
+                     "Class='R'", "esri")
+    assert cfg["parcels"]["fields"]["lot_sqft"] == ("ACRES", 43560.0) and cfg["parcels"]["classes"]["R"] == "Class='R'"
+    assert cfg["parcels"]["row_parcels"] and "World_Imagery" in cfg["imagery"]["tile_url"] and cfg["imagery"]["print_ok"] is False
+    assert "test_xx" in counties.COUNTIES and cv.county("99999")["status"] == "live"
+    counties.COUNTIES.pop("test_xx")
+    assert cv.load_saved_configs() == 1 and counties.COUNTIES["test_xx"]["parcels"]["fields"]["lot_sqft"] == ("ACRES", 43560.0)
+    counties.COUNTIES.pop("test_xx")
+
+
+def test_zip_heat_counts_paid_purchases(monkeypatch):
+    from app import datastore as ds
+    monkeypatch.setattr(ds, "service_zips", lambda: ["99990", "99991"])
+    monkeypatch.setattr(ds, "zip_shapes", lambda zs: {z: {"type": "Point", "coordinates": [0, 0]} for z in zs})
+    monkeypatch.setattr(ds, "list_orders", lambda n: [
+        {"zip": "99990", "status": "ready", "amount_cents": 2500, "created": 1, "paid": 2},
+        {"zip": "99990", "status": "processing", "amount_cents": 3000, "created": 1, "paid": 3},
+        {"zip": "99991", "status": "awaiting_payment", "amount_cents": 2500, "created": 1}])
+    h = ds.zip_heat()
+    p = {f["properties"]["zip"]: f["properties"] for f in h["features"]}
+    assert p["99990"]["paid"] == 2 and p["99990"]["cents"] == 5500 and p["99991"]["paid"] == 0 and p["99991"]["pending"] == 1
+    assert h["totals"]["bought"] == 1

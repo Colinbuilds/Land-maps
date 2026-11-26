@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZIP map</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/static/styles.css?v=10">
+<style>
+  html, body { height: 100%; }
+  body { background: #f3f4f1; margin: 0; }
+  .shell { display: grid; grid-template-columns: minmax(0, 1fr) 300px; height: calc(100vh - 56px); }
+  @media (max-width: 860px) { .shell { grid-template-columns: 1fr; grid-template-rows: 62vh auto; height: auto; } }
+  #map { height: 100%; min-height: 360px; border-radius: 0; border: 0; }
+  .side { background: #fff; overflow: auto; padding: 14px; border-left: 1px solid var(--line); }
+  .side h2 { font-size: 16px; margin: 0 0 6px; }
+  .kp { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+  .kp div { background: #f8faf9; border-radius: 12px; padding: 8px 10px; }
+  .kp .l { font-size: 11.5px; color: var(--muted); } .kp .v { font-size: 19px; font-weight: 800; }
+  .leg { font-size: 12.5px; display: grid; gap: 5px; margin: 8px 0 14px; }
+  .leg i { display: inline-block; width: 22px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
+  .hot { display: grid; gap: 4px; }
+  .hot button { display: grid; grid-template-columns: 54px 1fr auto; gap: 6px; text-align: left; background: #f8faf9; color: var(--ink); padding: 7px 9px; border-radius: 10px; font-weight: 500; font-size: 13px; }
+  .hot button b { font-weight: 800; }
+  .muted { color: var(--muted); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="top"><div class="brand"><span class="dot"></span>ZIP map</div><div class="contact small muted" id="upd"></div></header>
+<div id="tokBox" class="card stack hidden" style="max-width:420px;margin:20px auto"><b>Owner access</b><input id="tok" type="password" placeholder="Admin key"><button id="tokGo">Open</button></div>
+<div class="shell" id="app">
+  <div id="map"></div>
+  <div class="side">
+    <h2>Every ZIP we cover</h2>
+    <div class="kp" id="kp"></div>
+    <div class="leg">
+      <div><i style="background:#e2e8f0;border:1px solid #64748b"></i>Covered, not bought yet</div>
+      <div><i style="background:rgba(234,88,12,.25)"></i><i style="background:rgba(234,88,12,.5)"></i><i style="background:rgba(220,38,38,.8)"></i>Each purchase tints it darker</div>
+      <div><i style="background:#fff;border:2px solid #16a34a"></i>Measured (ready to download)</div>
+      <div><i style="background:#fff;border:3px solid #7c3aed"></i>Exclusive (locked by a company)</div>
+      <div><i style="background:#fff;border:2px dashed #ea580c"></i>Order waiting for payment</div>
+    </div>
+    <h2>Hottest ZIPs</h2>
+    <div class="hot" id="hot"></div>
+  </div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/common.js?v=21"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const usd = (c) => "$" + Math.round((c || 0) / 100).toLocaleString();
+  const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([41.25, -96.0], 9);
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    { maxZoom: 16, attribution: "Esri, HERE, Garmin, © OpenStreetMap contributors" }).addTo(map);
+  let layer = null, first = true, byZip = {};
+  // each paid purchase adds a little more colour, capped so the map stays readable
+  const tint = (n) => n ? Math.min(0.85, 0.18 + 0.12 * (n - 1)) : 0.12;
+  const color = (n) => n >= 6 ? "#dc2626" : n >= 3 ? "#ea580c" : n ? "#f97316" : "#94a3b8";
+  function style(f) {
+    const p = f.properties;
+    return { fillColor: p.paid ? color(p.paid) : "#cbd5e1", fillOpacity: tint(p.paid),
+             color: p.locked ? "#7c3aed" : p.measured ? "#16a34a" : p.pending ? "#ea580c" : "#64748b",
+             weight: p.locked ? 3 : p.measured || p.pending ? 2 : 0.8, dashArray: p.pending && !p.locked && !p.measured ? "5 4" : null };
+  }
+  function popup(p) {
+    return `<b style="font-size:15px">ZIP ${p.zip}</b><br>${p.paid} purchase${p.paid === 1 ? "" : "s"} · ${usd(p.cents)}
+      ${p.pending ? `<br>${p.pending} waiting for payment` : ""}${p.last ? `<br>Last bought ${new Date(p.last * 1000).toLocaleDateString()}` : ""}
+      <br>${p.measured ? "✅ Measured" : "Not measured yet"}${p.locked ? "<br>🔒 Exclusive (locked)" : ""}
+      <br><a href="/data?zip=${p.zip}" target="_blank">Open on the buy page</a>`;
+  }
+  async function load() {
+    let G;
+    try { G = await api("/api/admin/zipmap"); } catch (e) { $("tokBox").classList.remove("hidden"); $("app").classList.add("hidden"); return; }
+    $("tokBox").classList.add("hidden"); $("app").classList.remove("hidden");
+    if (layer) map.removeLayer(layer);
+    byZip = {};
+    layer = L.geoJSON(G, { style, onEachFeature: (f, l) => { byZip[f.properties.zip] = l; l.bindPopup(popup(f.properties)); l.bindTooltip(f.properties.zip, { sticky: true }); } }).addTo(map);
+    if (first && G.features.length) { map.fitBounds(layer.getBounds(), { padding: [10, 10] }); first = false; }
+    const t = G.totals;
+    $("kp").innerHTML = [["ZIPs covered", t.zips], ["Bought at least once", t.bought], ["Measured", t.measured], ["Revenue", usd(t.cents)]]
+      .map(([l, v]) => `<div><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
+    const hot = G.features.map((f) => f.properties).filter((p) => p.paid).sort((a, b) => b.paid - a.paid || b.cents - a.cents).slice(0, 15);
+    $("hot").innerHTML = hot.map((p) => `<button data-z="${p.zip}"><b>${p.zip}</b><span>${p.paid} purchase${p.paid === 1 ? "" : "s"}${p.locked ? " · 🔒" : ""}</span><span>${usd(p.cents)}</span></button>`).join("")
+      || '<p class="small muted">No purchases yet. ZIPs darken as they sell.</p>';
+    $("hot").querySelectorAll("[data-z]").forEach((b) => b.onclick = () => { const l = byZip[b.dataset.z]; if (l) { map.fitBounds(l.getBounds(), { maxZoom: 12 }); l.openPopup(); } });
+    $("upd").textContent = `Live · updated ${new Date().toLocaleTimeString()}`;
+  }
+  $("tokGo").onclick = () => { localStorage.setItem("adminToken", $("tok").value.trim()); load(); };
+  await load();
+  setInterval(load, 60000);  // live: picks up new purchases every minute
+  setTimeout(() => map.invalidateSize(), 300);
+})();
+</script>
+</body>
+</html>

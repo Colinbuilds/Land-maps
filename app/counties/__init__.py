@@ -50,9 +50,8 @@ def boundaries() -> dict:
         if _bounds:
             return _bounds
         path = CACHE_DIR / "county_bounds.json"
-        if path.exists():
-            raw = json.loads(path.read_text())
-        else:
+        raw = json.loads(path.read_text()) if path.exists() else {}
+        if any(c["fips"] not in raw for c in COUNTIES.values()):  # a county was added: fetch its outline
             fips = ",".join(f"'{c['fips']}'" for c in COUNTIES.values())
             d = get_json(_TIGER + "/query", {"where": f"GEOID IN ({fips})", "outFields": "GEOID",
                                              "outSR": 4326, "geometryPrecision": 5, "f": "json"}, ttl=365 * 86400)
@@ -62,6 +61,19 @@ def boundaries() -> dict:
             if c["fips"] in raw:
                 _bounds[c["id"]] = shape(raw[c["fips"]])
         return _bounds
+
+
+def register(cfg: dict) -> None:
+    """Add (or update) a county at runtime, e.g. one approved in the
+    command center's Coverage tab. Measurers and outlines refresh."""
+    with _lock:
+        COUNTIES[cfg["id"]] = cfg
+        _bounds.clear()
+    try:
+        from ..measure import _measurers
+        _measurers.pop(cfg["id"], None)
+    except Exception:
+        pass
 
 
 def county_at(lon: float, lat: float) -> str | None:

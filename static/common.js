@@ -168,7 +168,7 @@ function measurementCards(r, keys, labels) {
   // The command center is one page (/command) with a tab per section; the
   // other owner pages open inside it. Opened on their own, they forward there.
   const OWNER_TAB = { "/command/data": "data", "/command/postcards": "postcards", "/command/tools": "measure",
-    "/command/settings": "settings", "/demo": "demo", "/business": "measure", "/command/marketing": "marketing", "/command/safety": "safety" };
+    "/command/settings": "settings", "/demo": "demo", "/business": "measure", "/command/marketing": "marketing", "/command/safety": "safety", "/command/coverage": "coverage", "/command/map": "map" };
   let embedded = false;
   try { embedded = window.top !== window.self; } catch (e) { embedded = true; }
   if (owner && here !== "/command") {
@@ -180,7 +180,9 @@ function measurementCards(r, keys, labels) {
   }
   const links = owner ? [
     { href: "/command#companies", label: "Companies", icon: "🏢" },
+    { href: "/command#map", label: "Map", icon: "🗺️" },
     { href: "/command#data", label: "ZIP data", icon: "🗂️" },
+    { href: "/command#coverage", label: "Coverage", icon: "🌎" },
     { href: "/command#postcards", label: "Postcards", icon: "✉️" },
     { href: "/command#marketing", label: "Marketing", icon: "🎬" },
     { href: "/command#measure", label: "Measure", icon: "📏" },
@@ -215,7 +217,7 @@ function measurementCards(r, keys, labels) {
     }
     if (!document.querySelector(".tabbar")) {
       const bar = document.createElement("nav");
-      bar.className = "tabbar";
+      bar.className = "tabbar" + (links.length > 6 ? " many" : "");
       bar.setAttribute("aria-label", "Site");
       bar.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""}"><span aria-hidden="true">${l.icon}</span>${l.label}</a>`).join("");
       document.body.appendChild(bar);

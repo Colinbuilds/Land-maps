@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import io
 import json
+import re
 import threading
 import secrets
 import os
@@ -1543,7 +1544,11 @@ def admin_data_release_lock(zip_code: str, type_key: str):
 
 @app.on_event("startup")
 def _resume_prebuild():
+    from . import coverage
+    coverage.load_saved_configs()  # counties approved in the Coverage tab
     datastore.resume_prebuild()
+    if os.environ.get("COVERAGE_AUTO", "1") != "0":
+        coverage.start_continuous()  # daily: new metros, county searches, auto-pull
 
 
 # ================================================================ CRM portal
@@ -2410,3 +2415,131 @@ def page_reset():
 @app.get("/refunds")
 def page_legal():
     return FileResponse(STATIC / "legal.html")
+
+
+
+# ================================================================ coverage (owner): grow nationwide
+@app.get("/command/coverage")
+def page_coverage():
+    return FileResponse(STATIC / "coverage.html")
+
+
+@app.get("/api/admin/coverage", dependencies=[Depends(admin)])
+def cov_overview():
+    from . import coverage as cv
+    builtin = {c["fips"]: c["id"] for c in counties.COUNTIES.values()}
+    cos = cv.counties()
+    for c in cos:
+        if c["fips"] in builtin:
+            c["status"] = "live"
+        c.pop("config", None)
+    return {"summary": cv.summary(), "worker": cv.status(), "metros": cv.metros(), "counties": cos,
+            "queue": datastore.prebuild_status()}
+
+
+@app.post("/api/admin/coverage/run", dependencies=[Depends(admin)])
+def cov_run(limit: int | None = None):
+    """Load the metro list, map every metro and search every county (background)."""
+    from . import coverage as cv
+    return cv.run_all(limit)
+
+
+@app.post("/api/admin/coverage/stop", dependencies=[Depends(admin)])
+def cov_stop():
+    from . import coverage as cv
+    cv.stop()
+    return cv.status()
+
+
+@app.post("/api/admin/coverage/metro/{cbsa}/map", dependencies=[Depends(admin)])
+def cov_map_metro(cbsa: str):
+    from . import coverage as cv
+    if not cv.metro(cbsa):
+        raise HTTPException(404)
+    return cv.map_metro(cbsa)
+
+
+@app.post("/api/admin/coverage/county/{fips}/discover", dependencies=[Depends(admin)])
+def cov_discover(fips: str):
+    from . import coverage as cv
+    if not cv.county(fips):
+        raise HTTPException(404)
+    return {"candidates": cv.discover(fips)}
+
+
+class CovTest(BaseModel):
+    url: str = Field(max_length=500, pattern=r"^https://")
+
+
+@app.post("/api/admin/coverage/county/{fips}/test", dependencies=[Depends(admin)])
+def cov_test(fips: str, body: CovTest):
+    """Test a parcel layer URL you found yourself."""
+    from . import coverage as cv
+    g = cv._county_geom(fips)
+    out = []
+    for lurl, meta in cv._layer_candidates(body.url.rstrip("/")):
+        r = cv.test_layer(lurl, meta, g)
+        if r:
+            out.append(r)
+    if not out:
+        raise HTTPException(400, "That layer didn't work: it needs parcel polygons with a parcel id and an address, inside this county.")
+    c = cv.county(fips)
+    cands = (c.get("candidates") or []) if isinstance(c.get("candidates"), list) else []
+    cv._set("counties", "fips", fips, candidates=json.dumps(out + cands), status="found")
+    return {"candidates": out}
+
+
+@app.get("/api/admin/coverage/classes", dependencies=[Depends(admin)])
+def cov_classes(url: str, field: str):
+    from . import coverage as cv
+    if not url.startswith("https://") or not field.replace("_", "").isalnum():
+        raise HTTPException(400)
+    return cv.class_values(url, field)
+
+
+class CovApprove(BaseModel):
+    url: str = Field(max_length=500, pattern=r"^https://")
+    fields: dict
+    oid: str = Field(default="OBJECTID", max_length=60)
+    residential_where: str | None = Field(default=None, max_length=1000)
+    imagery_url: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/api/admin/coverage/county/{fips}/approve", dependencies=[Depends(admin)])
+def cov_approve(fips: str, body: CovApprove):
+    """Make the county live with this parcel layer."""
+    from . import coverage as cv
+    if not cv.county(fips):
+        raise HTTPException(404)
+    if body.imagery_url and body.imagery_url != "esri" and not re.match(r"^https://[^ ]+\{z\}[^ ]*\{y\}[^ ]*\{x\}", body.imagery_url):
+        raise HTTPException(400, "Imagery must be a tile URL with {z}, {y} and {x} in it.")
+    if body.residential_where and re.search(r";|--|\b(drop|delete|insert|update)\b", body.residential_where, re.I):
+        raise HTTPException(400, "That filter isn't allowed.")
+    cfg = cv.approve(fips, body.url, {k: v for k, v in body.fields.items() if isinstance(v, str)},
+                     body.residential_where, body.imagery_url, body.oid)
+    return {"id": cfg["id"], "name": cfg["name"], "lidar": (cfg.get("lidar") or {}).get("source")}
+
+
+@app.post("/api/admin/coverage/metro/{cbsa}/pull", dependencies=[Depends(admin)])
+def cov_pull(cbsa: str):
+    """Measure every ZIP within 15 miles of the metro (once its counties are live)."""
+    from . import coverage as cv
+    zs = cv.metro_ready_zips(cbsa)
+    if not zs:
+        raise HTTPException(409, "Every county in this metro's 15-mile circle has to be live first.")
+    datastore.prebuild_all(["R"], zips=zs)
+    cv._set("metros", "cbsa", cbsa, status="live", note=f"Measuring {len(zs)} ZIPs")
+    return {"queued": len(zs), "queue": datastore.prebuild_status()}
+
+
+
+# ================================================================ owner ZIP map
+@app.get("/command/map")
+def page_zipmap():
+    return FileResponse(STATIC / "zipmap.html")
+
+
+@app.get("/api/admin/zipmap", dependencies=[Depends(admin)])
+def admin_zipmap():
+    """Every covered ZIP with purchases, revenue, measured and locked."""
+    return datastore.zip_heat()
