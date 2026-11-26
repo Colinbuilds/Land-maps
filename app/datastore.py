@@ -65,15 +65,19 @@ MEASURE_TYPES = [
     ("trees", "Trees (count, canopy, lawn under trees)", ["tree_count", "tree_canopy_sqft", "lawn_under_trees_sqft"]),
     ("building", "Building footprint", ["building_sqft"]),
     ("walls", "House walls & windows (siding)", ["wall_sqft", "est_windows"]),
+    # add-on, not a measurement: each home's assessed value as a column (+5c)
+    ("value", "Assessed home value (per house)", ["home_value"]),
 ]
+ADDONS = {"value"}  # priced on their own, never the "first measurement", never locked
 TYPE_KEYS = [k for k, _, _ in MEASURE_TYPES]
-BASE_HEAD = ["address", "city", "zip", "county", "owner", "owner_mailing", "lot_sqft", "home_value", "year_built", "living_sqft"]
+BASE_HEAD = ["address", "city", "zip", "county", "owner", "owner_mailing", "lot_sqft", "year_built", "living_sqft"]
 BASE_TAIL = ["quality", "notes", "lat", "lon", "pin"]
 
 DEFAULT_PRICING = {
     "rate_cents": 10.0,          # per property, for the first measurement type
     "extra_type_cents": 5.0,     # per property, for each additional type
     "premier_cents": 25.0,       # per property, Premier list (full report PDF per home)
+    "value_cents": 5.0,          # per property, add-on: each home's assessed value as a column
     "min_order_usd": 25.0,
     # price multiplier per assessed-value band (every $250k: <250k ... 1.75-2M, 2M+)
     "value_multipliers": [1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0],
@@ -112,10 +116,18 @@ def range_label(lo: int, hi: int) -> str:
 
 
 def normalize_types(types) -> list[str]:
-    """Valid types in catalogue order; lawn when none are given."""
+    """Valid types in catalogue order; lawn when no measurement is given
+    (add-ons like the assessed value can't be bought on their own)."""
     want = {str(t).strip().lower() for t in (types or []) if str(t).strip()}
     out = [k for k in TYPE_KEYS if k in want]
-    return out or ["lawn"]
+    if not [k for k in out if k not in ADDONS]:
+        out = ["lawn"] + out
+    return out
+
+
+def measures_of(types) -> list[str]:
+    """The measurement types (no add-ons)."""
+    return [t for t in normalize_types(types) if t not in ADDONS]
 
 
 def columns_for(types) -> list[tuple[str, str]]:
@@ -130,8 +142,9 @@ def columns_for(types) -> list[tuple[str, str]]:
 
 def per_property_cents(types, p: dict | None = None) -> float:
     p = p or pricing()
-    n = len(normalize_types(types))
-    return float(p["rate_cents"]) + float(p.get("extra_type_cents", 5.0)) * (n - 1)
+    n = len(measures_of(types))
+    addon = float(p.get("value_cents", 5.0)) if "value" in normalize_types(types) else 0.0
+    return float(p["rate_cents"]) + float(p.get("extra_type_cents", 5.0)) * (n - 1) + addon
 
 
 # ------------------------------------------------------------------ storage
@@ -163,6 +176,9 @@ def init():
                 con.execute(f"ALTER TABLE orders ADD COLUMN {col} INTEGER")
         if "new_types" not in have:  # exclusive orders: the types this order adds (charged)
             con.execute("ALTER TABLE orders ADD COLUMN new_types TEXT")
+        for col in ("grp", "grp_token"):  # several ZIPs bought together, paid in one checkout
+            if col not in have:
+                con.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
         # Exclusive ZIP locks: one holder per (ZIP, measurement type)
         con.execute("""CREATE TABLE IF NOT EXISTS zip_locks (
             zip TEXT NOT NULL, type TEXT NOT NULL, email TEXT NOT NULL, order_id TEXT NOT NULL,
@@ -214,12 +230,15 @@ def list_price(count: int, types=None, product: str = "standard", member: bool =
     Members pay half."""
     p = p or pricing()
     per = float(p.get("premier_cents", PREMIER_CENTS_DEFAULT)) if product == "premier" else per_property_cents(types, p)
+    # the assessed-value add-on is a flat amount per home (not scaled by home value)
+    addon = float(p.get("value_cents", 5.0)) if product != "premier" and "value" in normalize_types(types) else 0.0
+    base = per - addon
     if bands is not None:
         lo, hi = band_range(lo, hi)
         mult = list(p.get("value_multipliers") or DEFAULT_PRICING["value_multipliers"])
         mult += [mult[-1]] * (len(bands) - len(mult))
         count = sum(bands[lo:hi + 1])
-        raw = sum(bands[i] * per * float(mult[i]) for i in range(lo, hi + 1))
+        raw = sum(bands[i] * base * float(mult[i]) for i in range(lo, hi + 1)) + count * addon
     else:
         raw = count * per
     cents = int(max(math.ceil(raw - 1e-9), round(float(p["min_order_usd"]) * 100))) if count else 0
@@ -308,9 +327,11 @@ def exclusive_price(zip_code: str, count: int, types, email: str | None = None, 
     p = p or pricing()
     types = normalize_types(types)
     held = set(held_types(zip_code, email))
-    new = [t for t in types if t not in held]
+    new = [t for t in types if t not in held and t not in ADDONS]
     first, extra = float(p.get("exclusive_cents", 100.0)), float(p.get("exclusive_extra_cents", 50.0))
     per = (extra * len(new)) if held else ((first + extra * (len(new) - 1)) if new else 0.0)
+    if new and "value" in types:  # the assessed-value column rides along at its own rate
+        per += float(p.get("value_cents", 5.0))
     raw = count * per
     cents = int(max(math.ceil(raw - 1e-9), round(float(p["min_order_usd"]) * 100))) if (count and new) else 0
     return {"per_property_cents": per, "price_cents": cents, "full_price_cents": cents, "member_discount": False,
@@ -322,7 +343,7 @@ def _grant_locks(o: dict) -> list[str]:
     """Lock the order's new types for the buyer. Returns types someone else
     took in the meantime (then nothing is locked)."""
     z, email = o["zip"], o["email"].lower()
-    new = normalize_types((o.get("new_types") or o.get("types") or "").split(","))
+    new = measures_of((o.get("new_types") or o.get("types") or "").split(","))
     months = int(pricing().get("exclusive_months", 12))
     now = time.time()
     with _lock, _db() as con:
@@ -531,7 +552,7 @@ def dataset_progress(zip_code: str, classes: list[str]) -> dict:
 # ------------------------------------------------------------------- orders
 def create_order(email: str, zip_code: str, classes: list[str], types=None, site: str = "",
                  product: str = "standard", member: bool = False, lo: int | None = None, hi: int | None = None,
-                 account_email: str | None = None) -> dict:
+                 account_email: str | None = None, notify: bool = True) -> dict:
     """``account_email`` is the signed-in company's email: lock-holder rights
     (buying in their own exclusive ZIP) come from it, never from a typed email."""
     types = normalize_types(types)
@@ -561,7 +582,8 @@ def create_order(email: str, zip_code: str, classes: list[str], types=None, site
                      "awaiting_payment", tok, time.time(), ",".join(types), site, product, q["value_lo"], q["value_hi"],
                      new_types))
     o = get_order(oid)
-    _email_new_order(o)
+    if notify:
+        _email_new_order(o)
     return o
 
 
@@ -855,7 +877,7 @@ init()
 
 
 # ------------------------------------------------------- totals (owner)
-TOTAL_KEYS = [("lot_sqft", "Lot"), ("lawn_sqft", "Lawn"), ("parkway_sqft", "Parkway"), ("driveway_sqft", "Driveway"),
+TOTAL_KEYS = [("home_value", "Assessed value $"), ("lot_sqft", "Lot"), ("lawn_sqft", "Lawn"), ("parkway_sqft", "Parkway"), ("driveway_sqft", "Driveway"),
               ("sidewalk_sqft", "Sidewalk"), ("other_hardscape_sqft", "Patios & walks"), ("beds_sqft", "Beds"),
               ("building_sqft", "Building footprint"), ("wall_sqft", "House walls"), ("tree_canopy_sqft", "Tree canopy"),
               ("living_sqft", "House size (assessor)")]
@@ -912,3 +934,104 @@ def totals_all() -> dict:
             zips.append({"key": t["key"], "zip": t["zip"], **{k: v for k, v in t["all"].items() if k not in ("band", "label")}})
     grand = {"homes": sum(z["homes"] for z in zips), **{k: sum(z[k] for z in zips) for k, _ in TOTAL_KEYS}}
     return {"zips": zips, "all": grand, "columns": [{"key": k, "label": l} for k, l in TOTAL_KEYS]}
+
+
+# ------------------------------------------------------ several ZIPs at once
+MAX_ZIPS_PER_ORDER = 25
+
+
+def create_group(email: str, zips: list[str], classes: list[str], types=None, site: str = "",
+                 product: str = "standard", member: bool = False, lo: int | None = None, hi: int | None = None,
+                 account_email: str | None = None) -> dict:
+    """Buy several ZIPs together: one order per ZIP (each with its own
+    download page and, for exclusives, its own lock), paid in one checkout.
+    Every ZIP is checked before any order is made."""
+    zips = list(dict.fromkeys(z for z in zips if z))
+    if not zips:
+        raise LookupError("Add at least one ZIP.")
+    if len(zips) > MAX_ZIPS_PER_ORDER:
+        raise PermissionError(f"Up to {MAX_ZIPS_PER_ORDER} ZIPs per order.")
+    holder = (account_email or "").lower() or None
+    for z in zips:  # nothing is created if any ZIP can't be sold
+        q = quote(z, classes, normalize_types(types), product, member, lo, hi, email=holder)
+        if not q["count"]:
+            raise LookupError(f"ZIP {z}: no matching properties in our service area.")
+        if q["blocked"]:
+            raise PermissionError(f"ZIP {z}: {q['blocked']}")
+    grp, gtok = secrets.token_hex(4).upper(), secrets.token_urlsafe(16)
+    orders = [create_order(email, z, classes, types, site, product, member, lo, hi, account_email=account_email,
+                           notify=False) for z in zips]
+    with _lock, _db() as con:
+        con.executemany("UPDATE orders SET grp=?, grp_token=? WHERE id=?", [(grp, gtok, o["id"]) for o in orders])
+    orders = [get_order(o["id"]) for o in orders]
+    _email_new_group(grp, gtok, orders, site)
+    return {"grp": grp, "token": gtok, "orders": orders}
+
+
+def _email_new_group(grp: str, gtok: str, orders: list[dict], site: str = ""):
+    from . import mailer
+    total = sum(o["amount_cents"] for o in orders)
+    homes = sum(o["count"] or 0 for o in orders)
+    lines = "\n".join(f"  ZIP {o['zip']}: {o['count']:,} properties, ${o['amount_cents'] / 100:,.2f}" for o in orders)
+    link = f"{mailer.site_url(site)}/data/orders/{grp}?t={gtok}"
+    what = order_what(orders[0]) + f"\nHomes: {range_label(*order_bands(orders[0]))}"
+    mailer.notify_owner(f"New data order {grp}: {len(orders)} ZIPs, ${total / 100:,.2f}",
+                        f"Buyer: {orders[0]['email']}\n{lines}\nMeasurements: {what}\nTotal: ${total / 100:,.2f}\n\n{link}",
+                        reply_to=orders[0]["email"])
+    mailer.send(orders[0]["email"], f"Your order {grp}: {len(orders)} ZIP codes",
+                f"Thanks for your order.\n\n{lines}\n\n{homes:,} properties in all. Measurements: {what}\n"
+                f"Total: ${total / 100:,.2f}\n\nYour order page (keep this link, it's how you get your downloads):\n{link}\n")
+
+
+def group_orders(grp: str) -> list[dict]:
+    with _db() as con:
+        return [dict(r) for r in con.execute("SELECT * FROM orders WHERE grp=? ORDER BY zip", (grp.upper(),))]
+
+
+def stripe_checkout_group(grp: str, base_url: str) -> str:
+    """One Stripe Checkout for every unpaid ZIP in the group (a line per ZIP)."""
+    orders = [o for o in group_orders(grp) if o["status"] == "awaiting_payment"]
+    if not orders:
+        raise LookupError("nothing to pay")
+    key = os.environ["STRIPE_SECRET_KEY"]
+    tok = orders[0]["grp_token"]
+    data = {"mode": "payment", "customer_email": orders[0]["email"], "client_reference_id": f"G-{grp}",
+            "success_url": f"{base_url}/data/orders/{grp}?t={tok}&session_id={{CHECKOUT_SESSION_ID}}",
+            "cancel_url": f"{base_url}/data", "metadata[group_id]": grp}
+    for i, o in enumerate(orders):
+        data.update({f"line_items[{i}][quantity]": "1", f"line_items[{i}][price_data][currency]": "usd",
+                     f"line_items[{i}][price_data][unit_amount]": str(o["amount_cents"]),
+                     f"line_items[{i}][price_data][product_data][name]": f"ZIP {o['zip']}: {o['count']:,} properties",
+                     f"line_items[{i}][price_data][product_data][description]": order_what(o)})
+    r = httpx.post("https://api.stripe.com/v1/checkout/sessions", data=data, auth=(key, ""), timeout=30)
+    r.raise_for_status()
+    sess = r.json()
+    with _lock, _db() as con:
+        con.execute("UPDATE orders SET stripe_session=? WHERE grp=?", (sess["id"], grp))
+    return sess["url"]
+
+
+def group_paid(grp: str, amount_total: int, note: str = "stripe") -> bool:
+    """Mark every ZIP in the group paid once Stripe confirms the full amount."""
+    orders = group_orders(grp)
+    due = sum(o["amount_cents"] for o in orders if o["status"] == "awaiting_payment")
+    if not orders or int(amount_total) < due:
+        return False
+    for o in orders:
+        if o["status"] == "awaiting_payment":
+            mark_paid(o["id"], note=note)
+    return True
+
+
+def stripe_confirm_group(grp: str, session_id: str) -> bool:
+    orders = group_orders(grp)
+    if not stripe_enabled() or not orders or not session_id or session_id != orders[0].get("stripe_session"):
+        return False
+    r = httpx.get(f"https://api.stripe.com/v1/checkout/sessions/{session_id}",
+                  auth=(os.environ["STRIPE_SECRET_KEY"], ""), timeout=30)
+    if r.status_code != 200:
+        return False
+    s_ = r.json()
+    if s_.get("payment_status") == "paid" and (s_.get("metadata") or {}).get("group_id") == grp:
+        return group_paid(grp, int(s_.get("amount_total") or 0))
+    return False

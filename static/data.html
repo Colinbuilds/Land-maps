@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=18">
+<link rel="stylesheet" href="/static/styles.css?v=19">
 <style>
   /* ------------------------------------------------------------------
      Page-scoped design for /data. Everything is under body.dp so the
@@ -363,6 +363,14 @@
   .dp .vbar .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
   .dp .vbar.in .n, .dp .vbar.in .l { color: var(--ink); font-weight: 600; }
   .dp .vbar .l { color: var(--muted); white-space: nowrap; }
+  .dp .zcart { background: var(--field, #f3f5f0); border-radius: 16px; padding: 12px 14px; margin: 6px 0 12px; min-width: 0; }
+  .dp .zcart .zr { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid #e2e8e0; font-size: 14.5px; }
+  .dp .zcart .zr:first-child { border-top: 0; }
+  .dp .zcart .zr .x { background: transparent; color: #b91c1c; box-shadow: none; padding: 4px 8px; min-height: 32px; font-size: 18px; }
+  .dp .zcart .zr .blk { grid-column: 1 / -1; color: #b45309; font-size: 13px; }
+  .dp .zadd { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 8px; }
+  .dp .zadd input { min-height: 44px; font-size: 16px; border-radius: 12px; background: #fff; }
+  .dp .zadd button { min-height: 44px; border-radius: 12px; white-space: nowrap; }
   .dp .tradepresets { margin: 2px 0 12px; min-width: 0; max-width: 100%; }
   .dp #result > *, .dp .buy-card, .dp .buy-card > * { min-width: 0; max-width: 100%; }
   .dp .tradepresets .chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
@@ -472,10 +480,17 @@
             <div class="typepick" id="typePick" role="group" aria-label="Measurements to include"></div>
             <p class="small muted hidden" id="premIntro" style="margin:10px 0">Every home gets the full property report as a PDF, the same one members pull one at a time: roof lengths, pitch and facets, walls and elevations, gutters, lot and yard. Delivered as one folder, named by address, with an index spreadsheet.</p>
             <div class="small" id="memberLine"></div>
+            <div class="zcart">
+              <div class="small" style="font-weight:600">ZIP codes in this order</div>
+              <div id="cartRows"></div>
+              <div class="zadd"><input id="addZip" placeholder="Add another ZIP" inputmode="numeric" maxlength="5" aria-label="Add another ZIP"><button type="button" class="secondary" id="addZipBtn">+ Add ZIP</button></div>
+              <div id="cartMsg" class="small"></div>
+            </div>
             <div><span class="stat" id="qPrice"></span> <span class="muted small" id="qRate"></span></div>
             <div class="small" id="qPayback"></div>
             <div class="formrow"><input type="email" id="bEmail" placeholder="you@company.com" autocomplete="email" aria-label="Email for purchase"><button id="bBtn" class="arrow">Buy sheet</button></div>
             <div id="bMsg" class="small"></div>
+            <p class="small muted" style="margin:6px 0 0">Data is for your own marketing; see the <a href="/terms">Terms</a> and <a href="/refunds">Refund Policy</a>.</p>
           </div>
         </div>
       </div>
@@ -683,8 +698,8 @@
   <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Get 25 free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=18"></script>
-<script src="/static/data.js?v=17"></script>
+<script src="/static/common.js?v=19"></script>
+<script src="/static/data.js?v=20"></script>
 <script>
 // Phone-only sticky "Get 25 free" button: shown once the ZIP box has scrolled
 // away, hidden while the ZIP box or the closing CTA is on screen and once a

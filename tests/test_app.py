@@ -277,3 +277,81 @@ def test_marketing_hub_upload_and_share(tmp_path, monkeypatch):
     cl.post(f"/api/admin/marketing/{it['id']}/share?on=false")
     assert cl.get(f"/m/{tok}/file").status_code == 404
     cl.delete(f"/api/admin/marketing/{it['id']}")
+
+
+def test_safety_lockouts_headers_backups_and_reset(monkeypatch, tmp_path):
+    import app.main as m
+    from app import accounts, safety
+    cl = TestClient(app)
+    r = cl.get("/terms")
+    assert r.status_code == 200 and r.headers["x-frame-options"] == "SAMEORIGIN" and r.headers["x-content-type-options"] == "nosniff"
+    for p in ("/privacy", "/refunds", "/reset", "/command/safety"):
+        assert cl.get(p).status_code == 200
+    # login lockout after 10 wrong passwords for one email
+    em = f"lock{__import__('time').time()}@x.test"
+    accounts.create_company("Lock Co", em, "password123")
+    for _ in range(10):
+        assert cl.post("/api/roof/login", json={"email": em, "password": "nope"}).status_code == 401
+    r = cl.post("/api/roof/login", json={"email": em, "password": "password123"})
+    assert r.status_code == 429 and "Too many" in r.json()["detail"]
+    safety.succeeded("email:" + em, "login:testclient")
+    # admin key lockout
+    monkeypatch.setattr(m, "ADMIN_TOKEN", "k-123")
+    for _ in range(10):
+        cl.get("/api/admin/check", headers={"x-admin-token": "bad"})
+    assert cl.get("/api/admin/check", headers={"x-admin-token": "k-123"}).status_code == 429
+    safety.succeeded("admin:testclient")
+    s = cl.get("/api/admin/safety", headers={"x-admin-token": "k-123"}).json()
+    assert any(c["label"] == "Admin key set" and c["ok"] for c in s["checklist"])
+    assert any(a["status"] == 401 for a in s["audit"])
+    # backup
+    monkeypatch.setattr(safety, "BACKUPS", tmp_path)
+    b = cl.post("/api/admin/safety/backup", headers={"x-admin-token": "k-123"}).json()
+    import zipfile
+    names = zipfile.ZipFile(tmp_path / b["name"]).namelist()
+    assert "roof.db" in names
+    # password reset: one-time
+    c = accounts.company_by_email(em)
+    tok = accounts.make_reset(c["id"])
+    assert cl.post("/api/roof/reset", json={"token": tok, "password": "newpass123"}).status_code == 200
+    assert cl.post("/api/roof/reset", json={"token": tok, "password": "again1234"}).status_code == 400
+    assert accounts.login(em, "newpass123")
+    assert cl.post("/api/roof/forgot", json={"email": "nobody@x.test"}).json()["ok"]
+
+
+def test_buy_several_zips_in_one_order(monkeypatch):
+    from app import datastore as ds
+    fake = {"count": 100, "blocked": None}
+    monkeypatch.setattr(ds, "quote", lambda z, *a, **k: {**fake, "zip": z, "price_cents": 2500 if z != "68001" else 4000,
+                                                         "value_lo": 0, "value_hi": 8, "new_types": ["lawn"]})
+    g = ds.create_group("buyer@x.test", ["68022", "68001", "68022"], ["R"], ["lawn"])
+    assert len(g["orders"]) == 2 and {o["zip"] for o in g["orders"]} == {"68022", "68001"}  # duplicates dropped
+    assert all(o["grp"] == g["grp"] for o in g["orders"])
+    assert not ds.group_paid(g["grp"], 1000)  # short payment: nothing marked
+    monkeypatch.setattr(ds, "ensure_dataset", lambda *a, **k: "building")
+    assert ds.group_paid(g["grp"], 6500)
+    assert all(o["status"] == "processing" for o in ds.group_orders(g["grp"]))
+    cl = TestClient(app)
+    r = cl.get(f"/api/data/orders/{g['grp']}?t={g['token']}").json()
+    assert len(r["orders"]) == 2 and r["amount_cents"] == 6500
+    assert cl.get(f"/api/data/orders/{g['grp']}?t=wrong").status_code == 404
+    fake["blocked"] = "ZIP is exclusive"
+    import pytest
+    with pytest.raises(PermissionError):
+        ds.create_group("buyer@x.test", ["68022"], ["R"], ["lawn"])
+
+
+def test_assessed_value_addon_and_totals(tmp_path, monkeypatch):
+    from app import datastore as ds
+    p = ds.pricing()
+    assert ds.per_property_cents(["lawn"], p) == 10 and ds.per_property_cents(["lawn", "value"], p) == 15
+    assert ds.per_property_cents(["value"], p) == 15  # can't be bought alone: comes with lawn
+    assert ds.per_property_cents(["lawn", "driveway", "value"], p) == 20
+    assert "home_value" not in [k for k, _ in ds.columns_for(["lawn"])]
+    assert "home_value" in [k for k, _ in ds.columns_for(["lawn", "value"])]
+    assert ds.measures_of(["value", "driveway"]) == ["driveway"]
+    monkeypatch.setattr(ds, "ZIPS_DIR", tmp_path)
+    rows = [{"address": "1 A St", "home_value": 200000, "lawn_sqft": 5000}, {"address": "2 A St", "home_value": 300000, "lawn_sqft": 7000}]
+    (tmp_path / "99997_R.csv").write_text(ds.to_csv(rows, [(k, k) for k, _ in ds.COLUMNS]))
+    t = ds.totals_for_key("99997_R")
+    assert t["all"]["home_value"] == 500000 and any(c["key"] == "home_value" for c in t["columns"])

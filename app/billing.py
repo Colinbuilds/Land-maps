@@ -288,6 +288,12 @@ def handle_event(ev: dict) -> str:
         if kind in ("membership", "credits"):
             confirm_session(obj["id"])
             return f"{kind} confirmed"
+        gid = (obj.get("metadata") or {}).get("group_id")
+        if gid and obj.get("payment_status") == "paid":
+            from . import datastore
+            if datastore.group_paid(gid, int(obj.get("amount_total") or 0)):
+                return f"order group {gid} paid"
+            return "ignored"
         oid = (obj.get("metadata") or {}).get("order_id")
         if oid and obj.get("payment_status") == "paid":
             from . import datastore

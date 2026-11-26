@@ -13,7 +13,7 @@
   if (!me) return gate(`<h1>Sign in</h1><p class="sub">Use your company account.</p>
       <div class="card stack"><input id="gEmail" type="email" placeholder="Email" autocomplete="username">
       <input id="gPass" type="password" placeholder="Password" autocomplete="current-password">
-      <button id="gBtn">Sign in</button><div id="gMsg" class="small"></div></div>`, () => {
+      <button id="gBtn">Sign in</button><div id="gMsg" class="small"></div><a class="small" href="/reset">Forgot your password?</a></div>`, () => {
     $("gBtn").onclick = async () => {
       try { await api("/api/roof/login", { method: "POST", json: { email: $("gEmail").value, password: $("gPass").value } }); location.reload(); }
       catch (e) { $("gMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }

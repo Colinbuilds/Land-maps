@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms</title>
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  body { background: #f6f7f2; padding-bottom: 90px; }
+  .doc { max-width: 780px; margin: 0 auto; padding: 22px 16px 40px; }
+  .doc nav.lt { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .doc nav.lt a { padding: 7px 14px; border-radius: 99px; background: #e9efeb; color: var(--ink); text-decoration: none; font-weight: 600; font-size: 14px; }
+  .doc nav.lt a.on { background: var(--ink); color: #fff; }
+  .doc article { background: #fff; border-radius: 18px; padding: 22px; line-height: 1.65; }
+  .doc h1 { margin-top: 0; }
+  .doc h2 { font-size: 18px; margin: 22px 0 6px; }
+  .doc .upd { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<header class="top"><div class="brand"><span class="dot"></span><span class="bn">Home Service Info</span></div><div class="contact"></div></header>
+<div class="doc">
+  <nav class="lt"><a href="/terms">Terms of Service</a><a href="/privacy">Privacy Policy</a><a href="/refunds">Refund Policy</a></nav>
+  <article id="doc"></article>
+</div>
+<script src="/static/common.js?v=19"></script>
+<script>
+(async function () {
+  let biz = "Home Service Info", email = "", phone = "";
+  try { const c = await api("/api/config"); biz = (c.business.name && c.business.name !== "Your Company") ? c.business.name : biz; email = c.business.email || ""; phone = c.business.phone || ""; } catch (e) {}
+  document.querySelectorAll(".bn").forEach((e) => (e.textContent = biz));
+  const contact = [email && `<a href="mailto:${esc(email)}">${esc(email)}</a>`, phone && esc(phone)].filter(Boolean).join(" or ") || "the contact details on our website";
+  const B = esc(biz), UPDATED = "November 26, 2026";
+  const DOCS = {
+    terms: ["Terms of Service", `
+<p>These terms are an agreement between you (the company using the service) and ${B} ("we"). By creating an account, buying anything, or using the site, you agree to them.</p>
+<h2>1. What we provide</h2>
+<p>Property measurements for home-service companies: single-property reports, ZIP code data (spreadsheets and full-report folders), printable postcard designs, and a CRM for customers, estimates, scheduling, photos and invoices. Measurements are made by software from aerial photos, LiDAR elevation data and county records.</p>
+<h2>2. Measurements are estimates</h2>
+<p>Every measurement is an estimate. Aerial photos and LiDAR can be out of date, trees and shadows can hide surfaces, and county records can be wrong. Check on site before you order materials, sign a contract or bill a customer. We don't promise any measurement is exact, and features labeled "beta" (such as fence and pool detection) are not for pricing.</p>
+<h2>3. Accounts</h2>
+<p>Keep your password private; you're responsible for activity on your account. Give us accurate information. We may pause or close accounts that break these terms, don't pay, or put the service or other people at risk.</p>
+<h2>4. Membership, credits and payment</h2>
+<p>Memberships renew automatically each month, or each year if you pay yearly, until you cancel. Prices depend on the trades you choose and are shown before you pay. You can cancel any time from your billing page; you keep access until the end of the period you paid for. Report credits don't expire. Payments are processed by Stripe; we never see or store your full card number. We may change prices for future periods with at least 30 days' notice by email.</p>
+<h2>5. ZIP code data and postcards</h2>
+<p>Data you buy is licensed to your company for marketing and serving your own customers. Don't resell, publish or share it with other companies. Owner names and addresses come from public county records. You are responsible for following the laws that apply to how you contact people, including do-not-call and do-not-mail requests, rules for texts and emails, and any state limits on using public-record names for marketing. Postcard designs are provided as print-ready files; you handle printing, postage and mailing.</p>
+<h2>6. Exclusive ZIPs</h2>
+<p>An exclusive ZIP stops us from selling the measurement types you locked, in that ZIP, to other companies for the period shown at purchase (12 months unless stated). It doesn't affect data sold before your purchase, single-property reports, or measurement types you didn't lock. If another company's exclusive is completed first, we refund yours in full.</p>
+<h2>7. Your CRM data</h2>
+<p>Customers, estimates, jobs, photos and invoices you enter belong to your company. We store them to run the service, back them up, and don't sell them. You're responsible for having permission to store your customers' information and for the content you send them.</p>
+<h2>8. Acceptable use</h2>
+<p>Don't use the service to harass anyone, to break the law, to scrape or copy the service, to get around limits or security, or to resell access.</p>
+<h2>9. Warranty and liability</h2>
+<p>The service is provided "as is." To the extent the law allows, we aren't liable for indirect or consequential losses (such as lost profits or a mispriced job), and our total liability is limited to what you paid us in the 3 months before the claim.</p>
+<h2>10. Changes and contact</h2>
+<p>We may update these terms; we'll post the new version here and email members about important changes. These terms are governed by the laws of the State of Nebraska. Questions: ${contact}.</p>`],
+    privacy: ["Privacy Policy", `
+<p>This policy explains what ${B} collects, why, and the choices you have.</p>
+<h2>What we collect</h2>
+<p><b>Account details:</b> company name, email, phone, password (stored only as a secure hash), trades and prices you set. <b>Payments:</b> handled by Stripe; we keep the Stripe customer and subscription IDs, never your card number. <b>Use of the service:</b> addresses you look up, reports you order, ZIP data you buy, and basic logs (IP address, time, pages) used for security and to fix problems. <b>CRM content:</b> the customers, estimates, jobs, photos and invoices your company enters.</p>
+<h2>Property data</h2>
+<p>Measurements are made from aerial imagery and LiDAR. Owner names, addresses and assessed values come from public county records. If you're a homeowner and want your name removed from the data we provide to companies, email ${contact} with your address and we'll remove it from future lists.</p>
+<h2>How we use it</h2>
+<p>To run the service, bill you, send the emails you ask for (orders, estimates, invoices, password resets), keep accounts secure, and improve accuracy. We don't sell your personal information or your CRM data.</p>
+<h2>Who we share it with</h2>
+<p>Service providers that run parts of the service for us: hosting (Railway), payments (Stripe), email delivery (Google), and map and imagery providers that receive map requests from your browser. When you send an estimate or invoice, the homeowner sees what you included.</p>
+<h2>Security and retention</h2>
+<p>We use HTTPS, hashed passwords, signed sign-in cookies, sign-in lockouts and nightly backups. We keep account and CRM data while your account is open and for a reasonable period after so you can come back; ask us to delete it sooner. Backups roll off after about two weeks.</p>
+<h2>Your choices</h2>
+<p>You can update your account, cancel your membership, and ask us for a copy or deletion of your data at ${contact}.</p>`],
+    refunds: ["Refund Policy", `
+<p>We want you to be glad you paid. Here's how refunds work at ${B}.</p>
+<h2>Memberships</h2>
+<p>Cancel any time from your billing page; you keep access until the end of the period you paid for. If you're new and the service isn't for you, tell us within 7 days of your first membership payment and we'll refund it in full. Other membership charges aren't refunded, except for billing mistakes, which we always fix.</p>
+<h2>Report credits</h2>
+<p>Unused credits can be refunded within 30 days of purchase. Credits already used for a report aren't refunded, but if a report is clearly wrong (for example, the wrong property or a measurement far off what's on site), tell us and we'll re-run it or give the credit back.</p>
+<h2>ZIP code data and Premier lists</h2>
+<p>Data is delivered digitally, so orders aren't refundable once downloaded. If the data doesn't match what you ordered, or a sample of homes you check on site is materially off, contact us within 30 days and we'll re-measure, credit or refund the affected part.</p>
+<h2>Exclusive ZIPs</h2>
+<p>If another company's exclusive for the same ZIP and measurement is completed before yours, we refund yours in full. Otherwise exclusives aren't refundable once the lock starts.</p>
+<h2>How to ask</h2>
+<p>Contact ${contact} with your order or report number. Refunds go back to the original card through Stripe, usually within 5 to 10 business days.</p>`],
+  };
+  const key = location.pathname.replace(/^\//, "").replace(/\/$/, "") || "terms";
+  const [title, html] = DOCS[key] || DOCS.terms;
+  document.title = `${title} · ${biz}`;
+  document.querySelectorAll("nav.lt a").forEach((a) => a.classList.toggle("on", a.getAttribute("href") === "/" + key));
+  document.getElementById("doc").innerHTML = `<h1>${title}</h1><div class="upd">Last updated ${UPDATED}</div>${html}`;
+})();
+</script>
+</body>
+</html>

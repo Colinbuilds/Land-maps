@@ -138,6 +138,7 @@
           <label class="small">First measurement (¢ per property)<input type="number" step="0.5" id="dRate"></label>
           <label class="small">Each extra measurement (¢ per property)<input type="number" step="0.5" id="dExtra"></label>
           <label class="small">Premier list (¢ per property)<input type="number" step="1" id="dPremier"></label>
+          <label class="small">Assessed value add-on (¢ per property)<input type="number" step="0.5" id="dValue"></label>
           <label class="small">Minimum order ($)<input type="number" step="1" id="dMin"></label>
         </div>
         <p class="small muted" style="margin:0">Buyers tick the measurements they want (lawn, driveway, sidewalk, patios, decks &amp; sheds, beds, trees, building, walls &amp; windows). Example at 10¢ + 5¢: lawn + driveway + sidewalk = 20¢ per property.</p>
@@ -172,7 +173,7 @@
       </div>
     </div>
     <div class="card" style="margin-top:16px">
-      <h2>Square feet measured</h2>
+      <h2>Square feet and assessed value measured</h2>
       <p class="small muted" style="margin-top:-6px">Every stored ZIP, totaled. Tap <b>By value</b> to split a ZIP by assessed home value ($250k steps). Square feet unless noted.</p>
       <div class="tablewrap"><table id="dTot"></table></div>
       <div id="dBand" style="margin-top:14px"></div>
@@ -203,7 +204,7 @@
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
-<script src="/static/common.js?v=18"></script>
-<script src="/static/business.js?v=12"></script>
+<script src="/static/common.js?v=19"></script>
+<script src="/static/business.js?v=13"></script>
 </body>
 </html>

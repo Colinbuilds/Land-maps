@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reset password</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  body { background: #f6f7f2; padding-bottom: 80px; }
+  .box { max-width: 420px; margin: 48px auto; padding: 0 16px; }
+  .box .card { border-radius: 20px; padding: 20px; }
+  .box input { min-height: 50px; font-size: 16px; border-radius: 14px; }
+  .box button { width: 100%; min-height: 52px; border-radius: 99px; font-size: 16px; }
+</style>
+</head>
+<body>
+<header class="top"><div class="brand"><span class="dot"></span><span>Home Service Info</span></div><div class="contact"></div></header>
+<div class="box">
+  <h1 id="h">Reset your password</h1>
+  <div class="card stack" id="ask">
+    <p class="muted" style="margin:0">Enter your account email and we'll send a link to set a new password.</p>
+    <input id="email" type="text" inputmode="email" autocapitalize="none" autocomplete="username" placeholder="Email">
+    <button id="send">Send reset link</button><div id="m1" class="small"></div>
+  </div>
+  <div class="card stack hidden" id="set">
+    <input id="p1" type="password" autocomplete="new-password" placeholder="New password (8+ characters)">
+    <input id="p2" type="password" autocomplete="new-password" placeholder="New password again">
+    <button id="save">Save new password</button><div id="m2" class="small"></div>
+  </div>
+</div>
+<script src="/static/common.js?v=19"></script>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const t = new URLSearchParams(location.search).get("t");
+  if (t) { $("ask").classList.add("hidden"); $("set").classList.remove("hidden"); $("h").textContent = "Choose a new password"; }
+  $("send").onclick = async () => {
+    $("send").disabled = true;
+    try { const r = await api("/api/roof/forgot", { method: "POST", json: { email: $("email").value.trim() } }); $("m1").innerHTML = `<span class="ok">${esc(r.message)}</span>`; }
+    catch (e) { $("m1").innerHTML = `<span class="err">${esc(e.message)}</span>`; $("send").disabled = false; }
+  };
+  $("save").onclick = async () => {
+    if ($("p1").value.length < 8) { $("m2").innerHTML = '<span class="err">Use at least 8 characters.</span>'; return; }
+    if ($("p1").value !== $("p2").value) { $("m2").innerHTML = '<span class="err">The two passwords do not match.</span>'; return; }
+    try { await api("/api/roof/reset", { method: "POST", json: { token: t, password: $("p1").value } }); location.href = "/reports"; }
+    catch (e) { $("m2").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  };
+})();
+</script>
+</body>
+</html>

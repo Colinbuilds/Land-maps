@@ -245,6 +245,7 @@
     try { d = await api("/api/admin/data"); } catch (e) { $("dOrders").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; return; }
     $("dRate").value = d.pricing.rate_cents; $("dExtra").value = d.pricing.extra_type_cents;
     $("dMin").value = d.pricing.min_order_usd; $("dPremier").value = d.pricing.premier_cents;
+    $("dValue").value = d.pricing.value_cents ?? 5;
     $("dExFirst").value = d.pricing.exclusive_cents; $("dExExtra").value = d.pricing.exclusive_extra_cents;
     $("dExMonths").value = d.pricing.exclusive_months;
     const pa = d.prebuild_all || {};
@@ -279,14 +280,14 @@
       d.zips.map((z) => `<tr><td>${esc(z.key.replace("_", " · "))}</td><td>${esc(z.status)}</td><td class="num">${fmt(z.count)}</td></tr>`).join("") || '<tr><td colspan="3" class="muted">None yet.</td></tr>'}</tbody>`;
   }
   // square feet measured: per ZIP, and one ZIP by assessed value
-  const SHOW = ["lawn_sqft", "driveway_sqft", "sidewalk_sqft", "other_hardscape_sqft", "beds_sqft", "building_sqft", "wall_sqft", "lot_sqft"];
-  const big = (v) => v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + "M" : Math.round(v).toLocaleString();
+  const SHOW = ["home_value", "lawn_sqft", "driveway_sqft", "sidewalk_sqft", "other_hardscape_sqft", "beds_sqft", "building_sqft", "wall_sqft", "lot_sqft"];
+  const big = (v, k) => (k === "home_value" ? "$" : "") + (v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(v >= 1e7 ? 0 : 1) + "M" : Math.round(v).toLocaleString());
   async function loadTotals() {
     let T;
     try { T = await api("/api/admin/data/totals"); } catch (e) { $("dTot").innerHTML = `<tr><td class="err">${esc(e.message)}</td></tr>`; return; }
     const lab = Object.fromEntries(T.columns.map((c) => [c.key, c.label]));
     const head = `<thead><tr><th>ZIP</th><th class="num">Homes</th>${SHOW.map((k) => `<th class="num">${esc(lab[k])}</th>`).join("")}<th></th></tr></thead>`;
-    const row = (z, name, btn) => `<tr><td><b>${esc(name)}</b></td><td class="num">${fmt(z.homes)}</td>${SHOW.map((k) => `<td class="num">${big(z[k] || 0)}</td>`).join("")}<td>${btn}</td></tr>`;
+    const row = (z, name, btn) => `<tr><td><b>${esc(name)}</b></td><td class="num">${fmt(z.homes)}</td>${SHOW.map((k) => `<td class="num">${big(z[k] || 0, k)}</td>`).join("")}<td>${btn}</td></tr>`;
     $("dTot").innerHTML = head + `<tbody>${T.zips.map((z) => row(z, z.zip, `<button class="secondary" data-band="${esc(z.key)}">By value</button>`)).join("")
       || '<tr><td colspan="11" class="muted">No ZIPs measured yet. Use Measure a ZIP ahead of time, or Measure every ZIP we cover.</td></tr>'}
       ${T.zips.length > 1 ? row(T.all, "All ZIPs", "") : ""}</tbody>`;
@@ -295,7 +296,7 @@
       const avg = (r, k) => r.homes ? Math.round(r[k] / r.homes).toLocaleString() : "–";
       $("dBand").innerHTML = `<h2>ZIP ${esc(t.zip)} by assessed value</h2>
         <div class="tablewrap"><table><thead><tr><th>Home value</th><th class="num">Homes</th>${SHOW.map((k) => `<th class="num">${esc(lab[k])}</th>`).join("")}</tr></thead><tbody>
-        ${t.bands.concat([t.all]).map((r) => `<tr${r.band == null ? ' style="font-weight:700"' : ""}><td>${esc(r.label)}</td><td class="num">${fmt(r.homes)}</td>${SHOW.map((k) => `<td class="num" title="average ${avg(r, k)} per home">${big(r[k])}</td>`).join("")}</tr>`).join("")}
+        ${t.bands.concat([t.all]).map((r) => `<tr${r.band == null ? ' style="font-weight:700"' : ""}><td>${esc(r.label)}</td><td class="num">${fmt(r.homes)}</td>${SHOW.map((k) => `<td class="num" title="average ${k === "home_value" ? "$" : ""}${avg(r, k)} per home">${big(r[k], k)}</td>`).join("")}</tr>`).join("")}
         </tbody></table></div><p class="small muted">Hover a number for the average per home.</p>`;
       $("dBand").scrollIntoView({ behavior: "smooth", block: "start" });
     });
@@ -303,7 +304,7 @@
   $("dSave").addEventListener("click", async () => {
     try {
       await api("/api/admin/data/pricing", { method: "PUT", json: { rate_cents: +$("dRate").value, extra_type_cents: +$("dExtra").value,
-        premier_cents: +$("dPremier").value, min_order_usd: +$("dMin").value,
+        premier_cents: +$("dPremier").value, min_order_usd: +$("dMin").value, value_cents: +$("dValue").value,
         exclusive_cents: +$("dExFirst").value || 100, exclusive_extra_cents: +$("dExExtra").value, exclusive_months: +$("dExMonths").value || 12,
         value_multipliers: [...document.querySelectorAll("#dMult input")].map((x) => +x.value || 1) } });
       $("dMsg").innerHTML = '<span class="ok">Saved.</span>';
