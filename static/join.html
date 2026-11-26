@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Membership</title>
-<meta name="description" content="Unlimited property reports and half-price ZIP lists for $99 a month, or buy report credits as you go.">
+<meta name="description" content="Unlimited property reports, the CRM and half-price ZIP lists for $115 a month, or reports as you go for $5 each.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
@@ -105,7 +105,7 @@
         <button type="button" data-y="0" class="on" role="radio" aria-checked="true">Monthly</button>
         <button type="button" data-y="1" role="radio" aria-checked="false">Yearly <i id="saveTag">save 25%</i></button>
       </div>
-      <div class="price"><span id="mPrice">$99</span> <small id="mPer">/ month</small></div>
+      <div class="price"><span id="mPrice">$115</span> <small id="mPer">/ month</small></div>
       <div class="small" id="mYearNote" style="opacity:.9;margin:-4px 0 6px"></div>
       <div class="tpick">
         <div class="tp-head"><b>Your trades</b> <span id="tpNote"></span></div>
@@ -119,7 +119,7 @@
         <li>Pay a year up front and save 25%</li>
         <li>Reports carry the measurements your trades need: lot &amp; yard for lawn and snow, the roof for roofing and lights, walls &amp; elevations for siding and windows, with your prices up top</li>
         <li>A print-ready postcard of any home you measure, for door-to-door mail</li>
-        <li><b>Add the CRM portal for <span id="crmPrice">$25</span>/mo:</b> estimates in one tap, scheduling, job photos and invoices</li>
+        <li><b>CRM included:</b> start a report and the homeowner becomes a customer, estimates in one tap, scheduling, job photos and invoices</li>
         <li>Cancel any time from your billing page</li>
       </ul>
       <button id="mBtn">Become a member</button>
@@ -128,7 +128,7 @@
     <section class="plan" aria-labelledby="c-h">
       <span class="tag" style="background:var(--acc-soft);color:var(--acc-text)">Pay as you go</span>
       <h2 id="c-h">Report credits</h2>
-      <div class="price"><span id="cPrice">$25</span> <small>/ report</small></div>
+      <div class="price"><span id="cPrice">$5</span> <small>/ report</small></div>
       <p class="muted" style="margin:6px 0 0">One credit = one full property report. Credits never expire.</p>
       <div class="packs" id="packs" role="radiogroup" aria-label="Credit pack"></div>
       <button id="cBtn" class="wide">Buy credits</button>
@@ -180,7 +180,7 @@
     const steps = P.trade_cents && P.trade_cents.length ? P.trade_cents : [1500, 500];
     let c = P.member_price_cents;
     for (let i = 0; i < extra; i++) c += steps[i % steps.length];
-    return c + (me && me.crm ? (P.crm_price_cents || 0) : 0);
+    return c;
   };
   // what they pay per billing period (a year up front is 12 months less the discount)
   const priceFor = (ts) => yearly ? Math.round(monthFor(ts) * 12 * (1 - disc)) : monthFor(ts);
@@ -229,7 +229,6 @@
   let pack = 5;
   $("mPrice").textContent = usd(P.member_price_cents);
   $("cPrice").textContent = usd(P.credit_price_cents);
-  $("crmPrice").textContent = usd(P.crm_price_cents || 2500).replace(".00", "");
   const drawPacks = () => {
     $("packs").innerHTML = P.packs.map((n) => `<button type="button" class="pack ${n === pack ? "on" : ""}" role="radio" aria-checked="${n === pack}" data-n="${n}"><b>${n} credit${n > 1 ? "s" : ""}</b><span>${usd(n * P.credit_price_cents)}</span></button>`).join("");
     $("cBtn").textContent = `Buy ${pack} credit${pack > 1 ? "s" : ""} · ${usd(pack * P.credit_price_cents)}`;
@@ -251,18 +250,10 @@
         <div><div class="small muted">Plan</div><div class="big">${me.member ? `Member${me.billing === "year" ? " (yearly)" : ""}${until ? ` <span class="small muted" style="font-weight:500">renews ${esc(until)}</span>` : ""}` : "Pay as you go"}</div></div>
         <div><div class="small muted">Credits</div><div class="big">${me.member ? "Unlimited" : me.credits}</div></div>
         <div><div class="small muted">Trades</div><div class="big" style="font-size:15px">${esc((me.trades || []).map((k) => (TR.find((t) => t.key === k) || {}).label || k).join(", ") || "None yet")}</div></div>
-        ${me.member ? `<div><div class="small muted">CRM portal</div><div class="big" style="font-size:15px">${me.crm ? 'On · <a href="/crm">open</a> · <a href="#" id="crmOff">turn off</a>' : `Off · <a href="#" id="crmOn">add for ${usd(P.crm_price_cents || 2500).replace(".00", "")}/mo</a>`}</div></div>` : ""}
+        ${me.member ? `<div><div class="small muted">CRM</div><div class="big" style="font-size:15px">Included · <a href="/crm">open</a></div></div>` : ""}
         <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="/reports">Order a report</a>${me.stripe_customer ? `<button class="secondary" id="bill">Billing</button>` : ""}</div>
       </div>`;
     if (me.member) { $("mBtn").textContent = "You're a member"; $("mBtn").disabled = true; }
-    const crmSet = (on) => async (e) => {
-      e.preventDefault();
-      if (!confirm(on ? `Add the CRM portal for ${usd(P.crm_price_cents || 2500)} a month? Your card is charged the difference for the rest of this month.` : "Turn off the CRM portal? Your data stays; you can turn it back on any time.")) return;
-      try { me = await api("/api/roof/crm", { method: "PUT", json: { on } }); drawAccount(); if (on) location.href = "/crm"; } catch (x) { alert(x.message); }
-    };
-    const con = document.getElementById("crmOn"), coff = document.getElementById("crmOff");
-    if (con) con.onclick = crmSet(true);
-    if (coff) coff.onclick = crmSet(false);
     const bill = document.getElementById("bill");
     if (bill) bill.addEventListener("click", async () => {
       try { location.href = (await api("/api/billing/portal", { method: "POST" })).url; } catch (e) { alert(e.message); }

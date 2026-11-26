@@ -40,7 +40,9 @@
   </div>
 
   <section id="app" class="hidden">
-    <h1>Order a property report</h1>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <h1>Reports</h1><button id="startNew" style="border-radius:99px;padding:12px 20px">📐 Start new report</button>
+    </div>
     <p class="lead">Type an address, check the buildings to include, and get the full report in under a minute: roof lengths, pitch and facet diagrams, wall areas and elevations for siding, gutters, and the lot and yard measurements. Each report uses 1 credit.</p>
     <div class="tradebar">
       <div class="small"><b>Show numbers for</b> <span class="muted">(your trades; tap to switch)</span> <a href="/join" class="small" style="margin-left:6px">Change trades</a></div>
@@ -72,6 +74,6 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
 <script src="/static/common.js?v=18"></script>
-<script src="/static/reports.js?v=17"></script>
+<script src="/static/reports.js?v=18"></script>
 </body>
 </html>

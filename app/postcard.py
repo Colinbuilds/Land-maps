@@ -104,14 +104,68 @@ def nice_name(raw: str | None) -> str:
     return " ".join(out).strip()
 
 
+_BUSINESS = {"LLC", "L.L.C.", "INC", "INC.", "LP", "LLP", "LTD", "CO", "CO.", "CORP", "CORPORATION", "COMPANY", "CHURCH",
+             "CITY", "COUNTY", "STATE", "TRUST", "BANK", "ASSOCIATION", "ASSN", "PROPERTIES", "PROPERTY", "INVESTMENTS",
+             "INVESTMENT", "INVESTORS", "HOLDINGS", "HOMES", "BUILDERS", "BUILDING", "PARTNERS", "PARTNERSHIP",
+             "DEVELOPMENT", "MANAGEMENT", "RENTALS", "REALTY", "SCHOOL", "DISTRICT", "UNIVERSITY", "HOA", "FOUNDATION",
+             "MINISTRIES", "REVOCABLE", "LIVING", "FAMILY", "USA", "AUTHORITY", "GROUP", "VENTURES", "ENTERPRISES",
+             "CAPITAL", "FUND", "COMMUNITY", "HOUSING", "CONDOMINIUM", "CONDO", "OWNERS", "LAND", "FARMS", "FARM",
+             "RIVER", "OF", "THE", "HOLDCO", "SERVICES", "TRS", "LH"}
+_ROLES = r"\b(CO-?TTEE'?S?|TTEE'?S?|TRUSTEES?|ET ?AL|ET ?UX|ET ?VIR|JTRS?|JTWROS|LIFE ESTATE|L/E|H/W|C/O.*)$"
+_SUFFIX = {"JR", "SR", "II", "III", "IV"}
+
+
+def person_name(raw: str | None) -> str:
+    """An assessor owner name as you'd write it on mail, first name first.
+    'ANDERSON MARK A' -> 'Mark Anderson'; 'RIGGS/MACK E & SUSANNE K' ->
+    'Mack & Susanne Riggs'; 'GRAY, GENE J & TERI L' -> 'Gene & Teri Gray';
+    'WORTMANN, JOAN & DOSTAL, JORDAN T' -> 'Joan Wortmann & Jordan Dostal'.
+    Businesses and trusts keep their own name ('Jp & Pc LLC')."""
+    s = " ".join(str(raw or "").upper().split())
+    for _ in range(2):
+        s = re.sub(_ROLES, "", s).strip(" ,&")
+    if not s:
+        return ""
+    words = set(re.findall(r"[A-Z.']+", s))
+    if words & _BUSINESS or re.search(r"\d", s):
+        return nice_name(s)
+    parts = [p.strip() for p in re.split(r"\s*&\s*|\s+AND\s+", s) if p.strip()]
+    people, last = [], None
+    for i, part in enumerate(parts):
+        if "/" in part:
+            l, g = part.split("/", 1)
+        elif "," in part:
+            l, g = part.split(",", 1)
+        elif i == 0:
+            l, _, g = part.partition(" ")
+        else:  # "SUSANNE K" after "RIGGS/MACK E": same last name
+            l, g = last or "", part
+        lt = l.split()
+        suffix = " ".join(w for w in lt if w in _SUFFIX)
+        l = " ".join(w for w in lt if w not in _SUFFIX)
+        gt = [w for w in g.replace(",", " ").split() if w not in _SUFFIX]
+        suffix = suffix or " ".join(w for w in g.split() if w in _SUFFIX)
+        first = next((w for w in gt if len(w.strip(".")) > 1), gt[0] if gt else "")
+        last = l or last
+        people.append((first, last or "", suffix))
+    people = [p for p in people if p[0] or p[1]][:2]
+    if not people:
+        return nice_name(s)
+    cap = lambda w: nice_name(w)
+    if len(people) == 2 and people[0][1] == people[1][1]:
+        (f1, l, s1), (f2, _, _) = people
+        return f"{cap(f1)} & {cap(f2)} {cap(l)}".strip() + (f" {cap(s1)}" if s1 else "")
+    return " & ".join(" ".join(x for x in (cap(f), cap(l), cap(sf)) if x) for f, l, sf in people)
+
+
 def owner_of(d: dict) -> str:
     """The owner's name for the address panel (from the report, else the county)."""
     if d.get("owner") is not None:
-        return nice_name(d.get("owner"))
+        return person_name(d.get("owner"))
     try:
         from .bulk import owner_info
         m, f = _parcel(d)
-        return nice_name(owner_info(m, f)["owner"]) if f else ""
+        return person_name(owner_info(m, f)["owner"]) if f else ""
     except Exception:
         return ""
 
@@ -442,7 +496,7 @@ def build_mailing(src_zip, out_path, company: dict, trade: str | None, headline:
                     big, cap, more = _hero(trade, d)
                     from .trades import report_price
                     pr = report_price(trade, company.get("rates"), d) if trade else None
-                    r = {"owner": nice_name(d.get("owner")), "your_price": pr["price"] if pr else "",
+                    r = {"owner": person_name(d.get("owner")), "your_price": pr["price"] if pr else "",
                          "price_label": pr["label"] if pr else "",
                          "offer": custom_offer or copy_for(trade, bool(pr))[1],
                          "address": d.get("address"), "city": (d.get("city") or "").title(), "zip": d.get("zip"),

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marketing hub</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  body { background: #f3f4f1; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 16px 16px 60px; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .head h1 { margin: 4px 0; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+  .bar input { max-width: 300px; min-height: 42px; }
+  .chip { background: #e9efeb; color: var(--ink); border-radius: 99px; padding: 7px 13px; font-size: 13.5px; min-height: 36px; }
+  .chip.on { background: var(--ink); color: #fff; }
+  .board { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; }
+  .it { background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.06); cursor: pointer; display: flex; flex-direction: column; border: 2px solid transparent; }
+  .it:hover { border-color: #cbd5e1; }
+  .it .media { background: #0f172a; aspect-ratio: 16 / 9; display: grid; place-items: center; color: #94a3b8; font-size: 34px; overflow: hidden; }
+  .it .media video, .it .media img { width: 100%; height: 100%; object-fit: cover; }
+  .it .media.text { background: linear-gradient(135deg, #ecfdf5, #eff6ff); color: #334155; font-size: 13px; padding: 12px; place-items: start; text-align: left; white-space: pre-wrap; line-height: 1.35; }
+  .it .in { padding: 10px 12px 12px; display: grid; gap: 5px; }
+  .it b { font-size: 15px; line-height: 1.3; }
+  .pill { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: #eef2f7; color: #334155; margin-right: 4px; }
+  .pill.ready { background: #dcfce7; color: #166534; } .pill.posted { background: #e0ecff; color: #1d4ed8; } .pill.idea { background: #fef3c7; color: #92400e; }
+  .tags { font-size: 12px; color: var(--muted); }
+  .bg { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 50; display: flex; justify-content: flex-end; }
+  .dr { background: #f8faf9; width: min(720px, 100%); height: 100%; overflow: auto; padding: 18px; }
+  .dr label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .dr textarea { min-height: 300px; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .dr .preview video, .dr .preview img { width: 100%; border-radius: 12px; background: #000; max-height: 420px; }
+  .tchips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tchips button { background: #eef2f7; color: var(--ink); border-radius: 99px; padding: 5px 10px; font-size: 12.5px; min-height: 32px; }
+  .tchips button.on { background: var(--accent); color: #fff; }
+  .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .drop { border: 2px dashed #cbd5e1; border-radius: 14px; padding: 18px; text-align: center; color: var(--muted); background: #fff; }
+  .drop.over { border-color: var(--accent); background: #ecfdf5; }
+  .prog { height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .prog i { display: block; height: 100%; background: var(--accent); width: 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="top"><div class="brand"><span class="dot"></span>Marketing hub</div></header>
+<div class="wrap">
+  <div id="tokBox" class="card stack hidden" style="max-width:420px"><b>Owner access</b><input id="tok" type="password" placeholder="Admin key"><button id="tokGo">Open</button></div>
+  <div id="app" class="hidden">
+    <div class="head">
+      <div><h1>Marketing hub</h1><div class="muted small">Videos, images and ready-to-post copy. Tag by trade and channel, track what's posted, share any piece with a link.</div></div>
+      <div class="acts" style="margin:0"><button id="newMedia">⬆ Upload video or image</button><button class="secondary" id="newText">✍ Write content</button></div>
+    </div>
+    <div class="bar">
+      <input id="q" placeholder="Search titles and text" aria-label="Search">
+      <span id="kinds"></span>
+    </div>
+    <div class="bar" id="statuses" style="margin-top:-4px"></div>
+    <div class="board" id="board"></div>
+  </div>
+</div>
+<script src="/static/common.js?v=18"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const tok = () => encodeURIComponent(localStorage.getItem("adminToken") || "");
+  const ICON = { video: "🎬", image: "🖼️", file: "📎", script: "🎙️", post: "💬", email: "✉️", ad: "📣", idea: "💡" };
+  const LABEL = { video: "Video", image: "Image", file: "File", script: "Video script", post: "Social post", email: "Email", ad: "Ad", idea: "Idea / plan" };
+  let D = null, kind = "all", status = "all";
+  async function load() {
+    try { D = await api("/api/admin/marketing"); } catch (e) { $("tokBox").classList.remove("hidden"); return; }
+    $("tokBox").classList.add("hidden"); $("app").classList.remove("hidden");
+    $("kinds").innerHTML = [["all", "All"], ...D.kinds.map((k) => [k, LABEL[k]])].map(([k, l]) => `<button class="chip ${kind === k ? "on" : ""}" data-k="${k}">${k === "all" ? "" : ICON[k] + " "}${l}</button>`).join("");
+    $("statuses").innerHTML = [["all", "Any status"], ...D.statuses.map((s) => [s, s[0].toUpperCase() + s.slice(1)])].map(([k, l]) => `<button class="chip ${status === k ? "on" : ""}" data-s="${k}">${l}</button>`).join("");
+    draw();
+  }
+  $("tokGo").onclick = () => { localStorage.setItem("adminToken", $("tok").value.trim()); load(); };
+  $("kinds").onclick = (e) => { const b = e.target.closest("[data-k]"); if (b) { kind = b.dataset.k; load(); } };
+  $("statuses").onclick = (e) => { const b = e.target.closest("[data-s]"); if (b) { status = b.dataset.s; load(); } };
+  $("q").oninput = draw;
+  const media = (it, cls) => it.file && it.mime?.startsWith("video/") ? `<video src="/api/admin/marketing/${it.id}/media?token=${tok()}#t=0.5" preload="metadata" muted playsinline ${cls || ""}></video>`
+    : it.file && it.mime?.startsWith("image/") ? `<img src="/api/admin/marketing/${it.id}/media?token=${tok()}" alt="">` : "";
+  function draw() {
+    const q = $("q").value.trim().toLowerCase();
+    const rows = D.items.filter((it) => (kind === "all" || it.kind === kind) && (status === "all" || it.status === status)
+      && (!q || `${it.title} ${it.body || ""} ${it.tags.join(" ")}`.toLowerCase().includes(q)));
+    $("board").innerHTML = rows.map((it) => `<div class="it" data-id="${it.id}" tabindex="0">
+        <div class="media ${it.file ? "" : "text"}">${it.file ? (media(it) || ICON[it.kind]) : esc((it.body || "").slice(0, 260)) || ICON[it.kind]}</div>
+        <div class="in"><b>${ICON[it.kind]} ${esc(it.title)}</b>
+          <div><span class="pill ${it.status}">${esc(it.status)}</span>${it.token ? '<span class="pill">shared</span>' : ""}</div>
+          <div class="tags">${esc(it.tags.join(" · "))}</div></div></div>`).join("") || '<div class="muted">Nothing here yet.</div>';
+    $("board").querySelectorAll(".it").forEach((el) => { el.onclick = () => open(+el.dataset.id); el.onkeydown = (e) => { if (e.key === "Enter") open(+el.dataset.id); }; });
+  }
+
+  async function newItem(k) {
+    const it = await api("/api/admin/marketing", { method: "POST", json: { kind: k, title: k === "video" ? "New video" : "New content", status: k === "video" ? "draft" : "idea" } });
+    await load(); open(it.id, k === "video");
+  }
+  $("newMedia").onclick = () => newItem("video");
+  $("newText").onclick = () => newItem("post");
+
+  function open(id, focusUpload) {
+    const it = D.items.find((x) => x.id === id);
+    let tags = it.tags.slice();
+    const bg = document.createElement("div");
+    bg.className = "bg";
+    const share = it.token ? `${location.origin}/m/${it.token}` : "";
+    bg.innerHTML = `<div class="dr">
+      <div class="acts" style="justify-content:space-between;margin:0"><b style="font-size:18px">${ICON[it.kind]} Edit</b><button class="secondary" id="x">Close</button></div>
+      <div class="preview" style="margin-top:10px">${media(it, "controls") || ""}</div>
+      <div class="drop" id="drop" style="margin-top:10px">${it.file ? "Replace the file: " : ""}Drop a video or image here, or <button class="secondary" id="pick" style="padding:6px 10px">choose a file</button>
+        <input type="file" id="fileIn" accept="video/*,image/*,application/pdf" hidden><div class="prog hidden" id="prog"><i></i></div><div id="upMsg" class="small"></div></div>
+      <label>Title<input id="eTitle" value="${esc(it.title)}"></label>
+      <div class="row"><label>Type<select id="eKind">${D.kinds.map((k) => `<option value="${k}" ${k === it.kind ? "selected" : ""}>${LABEL[k]}</option>`).join("")}</select></label>
+        <label>Status<select id="eStatus">${D.statuses.map((s) => `<option ${s === it.status ? "selected" : ""}>${s}</option>`).join("")}</select></label></div>
+      <label>Tags (trade and channel)</label><div class="tchips" id="eTags">${[...D.trades, ...D.channels].map((t) => `<button data-t="${esc(t)}" class="${tags.includes(t) ? "on" : ""}">${esc(t)}</button>`).join("")}</div>
+      <label>Copy, caption or script<textarea id="eBody">${esc(it.body || "")}</textarea></label>
+      <div class="acts">
+        <button id="save">Save</button><button class="secondary" id="copy">Copy text</button>
+        <button class="secondary" id="shareBtn">${it.token ? "Stop sharing" : "Get share link"}</button>
+        ${it.file ? `<a class="btn secondary" href="/api/admin/marketing/${it.id}/media?token=${tok()}" download>Download file</a>` : ""}
+        <button class="secondary" id="del" style="margin-left:auto;color:#b91c1c">Delete</button></div>
+      ${share ? `<div class="card small" style="margin-top:10px">Share link (anyone with it can view): <a href="${share}" target="_blank">${share}</a> <button class="secondary" id="copyLink" style="padding:4px 10px">Copy</button></div>` : ""}
+      <div id="msg" class="small" style="margin-top:8px"></div></div>`;
+    document.body.appendChild(bg);
+    const shut = () => { bg.remove(); load(); };
+    bg.onclick = (e) => { if (e.target === bg) shut(); };
+    $("x").onclick = shut;
+    $("eTags").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; const t = b.dataset.t; tags = tags.includes(t) ? tags.filter((x) => x !== t) : [...tags, t]; b.classList.toggle("on"); };
+    const body = () => ({ title: $("eTitle").value, kind: $("eKind").value, status: $("eStatus").value, tags, body: $("eBody").value });
+    $("save").onclick = async () => { try { await api(`/api/admin/marketing/${id}`, { method: "PUT", json: body() }); $("msg").innerHTML = '<span class="ok">Saved.</span>'; } catch (e) { $("msg").innerHTML = `<span class="err">${esc(e.message)}</span>`; } };
+    $("copy").onclick = async () => { try { await navigator.clipboard.writeText($("eBody").value); $("msg").innerHTML = '<span class="ok">Copied.</span>'; } catch (e) {} };
+    $("shareBtn").onclick = async () => { await api(`/api/admin/marketing/${id}`, { method: "PUT", json: body() }); await api(`/api/admin/marketing/${id}/share?on=${!it.token}`, { method: "POST" }); bg.remove(); await load(); open(id); };
+    if ($("copyLink")) $("copyLink").onclick = async () => { try { await navigator.clipboard.writeText(share); $("msg").innerHTML = '<span class="ok">Link copied.</span>'; } catch (e) { prompt("Copy", share); } };
+    $("del").onclick = async () => { if (!confirm("Delete this for good?")) return; await api(`/api/admin/marketing/${id}`, { method: "DELETE" }); shut(); };
+    // upload with progress (videos can be big)
+    const send = (f) => {
+      const fd = new FormData(); fd.append("file", f);
+      const x = new XMLHttpRequest();
+      x.open("POST", `/api/admin/marketing/${id}/file`);
+      x.setRequestHeader("x-admin-token", localStorage.getItem("adminToken") || "");
+      $("prog").classList.remove("hidden");
+      x.upload.onprogress = (e) => { if (e.lengthComputable) { $("prog").firstElementChild.style.width = `${Math.round(100 * e.loaded / e.total)}%`; $("upMsg").textContent = `${(e.loaded / 1e6).toFixed(0)} of ${(e.total / 1e6).toFixed(0)} MB`; } };
+      x.onload = async () => {
+        if (x.status >= 300) { $("upMsg").innerHTML = `<span class="err">${esc((JSON.parse(x.responseText || "{}").detail) || "Upload failed")}</span>`; return; }
+        await api(`/api/admin/marketing/${id}`, { method: "PUT", json: body() });
+        bg.remove(); await load(); open(id);
+      };
+      x.onerror = () => { $("upMsg").innerHTML = '<span class="err">Upload failed. Check your connection.</span>'; };
+      x.send(fd);
+    };
+    $("pick").onclick = () => $("fileIn").click();
+    $("fileIn").onchange = () => { if ($("fileIn").files[0]) send($("fileIn").files[0]); };
+    const dz = $("drop");
+    dz.ondragover = (e) => { e.preventDefault(); dz.classList.add("over"); };
+    dz.ondragleave = () => dz.classList.remove("over");
+    dz.ondrop = (e) => { e.preventDefault(); dz.classList.remove("over"); if (e.dataTransfer.files[0]) send(e.dataTransfer.files[0]); };
+    if (focusUpload) $("fileIn").click();
+  }
+  load();
+})();
+</script>
+</body>
+</html>

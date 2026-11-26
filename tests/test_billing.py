@@ -39,7 +39,7 @@ def test_membership_checkout_confirm_and_unlimited_reports(monkeypatch):
     r = c.post("/api/billing/member")
     assert r.json()["checkout_url"].startswith("https://checkout")
     d = posted["/checkout/sessions"]
-    assert d["mode"] == "subscription" and d["line_items[0][price_data][unit_amount]"] == "9900"
+    assert d["mode"] == "subscription" and d["line_items[0][price_data][unit_amount]"] == "11500"
     assert d["line_items[0][price_data][recurring][interval]"] == "month"
 
     end = time.time() + 30 * 86400
