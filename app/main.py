@@ -39,24 +39,51 @@ app = FastAPI(title="Property Estimator")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+from . import safety  # noqa: E402
+
+
 @app.middleware("http")
 async def no_stale_pages(request: Request, call_next):
     """Phones (Safari especially) keep old copies of scripts, so a new page can
     end up running an old script. Make browsers re-check pages and scripts on
-    every load; unchanged files still come back as a cheap 304."""
+    every load; unchanged files still come back as a cheap 304.
+    Also: security headers on every response, and the owner's audit log."""
     resp = await call_next(request)
     path = request.url.path
     if path.startswith("/static/") or not path.startswith("/api/"):
         resp.headers["Cache-Control"] = "no-cache"
+    h = resp.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    h.setdefault("X-Frame-Options", "SAMEORIGIN")  # only the command center may frame our pages
+    h.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
+    h.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=(self)")
+    if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https":
+        h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    # owner actions: every change through /api/admin, owner sign-ins, and refused attempts
+    if path.startswith("/api/admin/") and (request.method != "GET" or path == "/api/admin/check" or resp.status_code in (401, 429)):
+        safety.log(_client_ip(request), request.method, path, resp.status_code)
     return resp
 
 
 def admin(request: Request):
     if not ADMIN_TOKEN:
         return  # dev mode: open. Set ESTIMATOR_ADMIN_TOKEN in production.
+    ip = _client_ip(request)
+    wait = safety.locked("admin:" + ip)
+    if wait:
+        raise HTTPException(429, f"Too many wrong admin keys from this connection. Try again in {wait // 60 + 1} minutes.")
     tok = (request.headers.get("x-admin-token") or request.query_params.get("token") or "").strip()
     if not hmac.compare_digest(tok.encode(), ADMIN_TOKEN.encode()):
+        if tok:  # a wrong key (not just a page that hasn't asked yet)
+            safety.failed("admin:" + ip)
         raise HTTPException(401, "admin token required")
+    safety.succeeded("admin:" + ip)
+
+
+@app.on_event("startup")
+def _start_backups():
+    safety.start_nightly()
 
 
 @app.get("/healthz")
@@ -458,10 +485,18 @@ class RoofLogin(BaseModel):
 
 @app.post("/api/roof/login")
 def roof_login(body: RoofLogin, request: Request):
+    ip, em = _client_ip(request), (body.email or "").strip().lower()
+    wait = safety.locked("login:" + ip, "email:" + em)
+    if wait:
+        raise HTTPException(429, f"Too many wrong passwords. Try again in {wait // 60 + 1} minutes, or reset your password.")
     c = accounts.login(body.email, body.password)
     owner = (body.email or "").strip().lower() in ("", "admin")
     if not c and ADMIN_TOKEN and hmac.compare_digest(body.password.strip().encode(), ADMIN_TOKEN.encode()):
         c = _owner_login(body.email)
+    if not c:
+        safety.failed("login:" + ip, "email:" + em)
+    else:
+        safety.succeeded("login:" + ip, "email:" + em)
     if not c and owner:  # the owner signing in: say what's wrong
         if not ADMIN_TOKEN:
             raise HTTPException(401, "Owner sign-in is off: ESTIMATOR_ADMIN_TOKEN isn't set on the server. "
@@ -698,7 +733,10 @@ def _zip5(z: str) -> str:
 
 
 def _client_ip(request: Request) -> str:
-    return (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (request.client.host if request.client else "")
+    """The visitor's address. Railway's proxy appends the real one last, so a
+    visitor can't dodge lockouts by sending their own X-Forwarded-For."""
+    xff = [x.strip() for x in (request.headers.get("x-forwarded-for") or "").split(",") if x.strip()]
+    return xff[-1] if xff else (request.client.host if request.client else "")
 
 
 def _base_url(request: Request) -> str:
@@ -2217,3 +2255,86 @@ def mk_public_file(tok: str):
     if not p or not p.exists():
         raise HTTPException(404)
     return FileResponse(p, media_type=it["mime"])
+
+
+
+# ================================================================ safety (owner) + password reset + legal pages
+@app.get("/command/safety")
+def page_safety():
+    return FileResponse(STATIC / "safety.html")
+
+
+@app.get("/api/admin/safety", dependencies=[Depends(admin)])
+def admin_safety():
+    return {"checklist": safety.checklist(bool(ADMIN_TOKEN)), "backups": safety.backups(),
+            "lockouts": safety.lockouts(), "audit": safety.audit(200)}
+
+
+@app.post("/api/admin/safety/backup", dependencies=[Depends(admin)])
+def admin_backup_now():
+    return safety.backup_now()
+
+
+@app.get("/api/admin/safety/backup/{name}")
+def admin_backup_download(name: str, request: Request, token: str | None = None):
+    if ADMIN_TOKEN and not hmac.compare_digest((token or "").strip().encode(), ADMIN_TOKEN.encode()):
+        safety.failed("admin:" + _client_ip(request))
+        raise HTTPException(403)
+    p = safety.backup_path(name)
+    if not p:
+        raise HTTPException(404)
+    safety.log(_client_ip(request), "GET", f"/api/admin/safety/backup/{name}", 200, "backup downloaded")
+    return FileResponse(p, media_type="application/zip", filename=name)
+
+
+class ForgotIn(BaseModel):
+    email: str = Field(max_length=200)
+
+
+@app.post("/api/roof/forgot")
+def forgot_password(body: ForgotIn, request: Request):
+    """Email a reset link (always answers the same, so it can't be used to
+    find out which emails have accounts)."""
+    ip = _client_ip(request)
+    if safety.locked("forgot:" + ip):
+        raise HTTPException(429, "Too many requests. Try again later.")
+    safety.failed("forgot:" + ip)  # counts requests: 10 per 15 minutes
+    c = accounts.company_by_email(body.email.strip().lower())
+    if c and not c.get("disabled") and not c["email"].endswith(".invalid"):
+        from . import mailer
+        link = f"{_base_url(request)}/reset?t={accounts.make_reset(c['id'])}"
+        mailer.send(c["email"], "Reset your password",
+                    f"Someone (hopefully you) asked to reset the password for {c['name']}.\n\n"
+                    f"Set a new one here (the link works for 1 hour):\n{link}\n\n"
+                    "If you didn't ask, ignore this email; your password stays the same.")
+    return {"ok": True, "message": "If that email has an account, a reset link is on its way."}
+
+
+class ResetIn(BaseModel):
+    token: str = Field(max_length=300)
+    password: str = Field(min_length=8, max_length=200)
+
+
+@app.post("/api/roof/reset")
+def reset_password(body: ResetIn, request: Request):
+    cid = accounts.read_reset(body.token)
+    if not cid:
+        raise HTTPException(400, "This reset link has expired or was already used. Ask for a new one.")
+    accounts.update_company(cid, password=body.password)
+    safety.succeeded("email:" + (accounts.get_company(cid) or {}).get("email", ""))
+    r = JSONResponse({"ok": True})
+    r.set_cookie(ROOF_COOKIE, accounts.make_session(cid), max_age=30 * 86400, httponly=True, samesite="lax",
+                 secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
+    return r
+
+
+@app.get("/reset")
+def page_reset():
+    return FileResponse(STATIC / "reset.html")
+
+
+@app.get("/terms")
+@app.get("/privacy")
+@app.get("/refunds")
+def page_legal():
+    return FileResponse(STATIC / "legal.html")

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Safety</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  body { background: #f3f4f1; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 16px 16px 60px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: #fff; border-radius: 16px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .panel h2 { font-size: 17px; margin: 0 0 10px; }
+  .chk { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-top: 1px solid var(--line); }
+  .chk:first-of-type { border-top: 0; }
+  .chk .i { font-size: 18px; line-height: 1.2; }
+  .chk b { display: block; }
+  .chk .fix { font-size: 13px; color: #92400e; }
+  .score { font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
+  table.t { width: 100%; font-size: 13px; border-collapse: collapse; }
+  table.t td, table.t th { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .ok { color: #166534; } .bad { color: #b91c1c; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="top"><div class="brand"><span class="dot"></span>Safety</div></header>
+<div class="wrap">
+  <div id="tokBox" class="card stack hidden" style="max-width:420px"><b>Owner access</b><input id="tok" type="password" placeholder="Admin key"><button id="tokGo">Open</button></div>
+  <div id="app" class="hidden">
+    <h1>Safety</h1>
+    <p class="muted" style="margin-top:0">What's protecting your site and data, what still needs setting up, and a record of every owner action.</p>
+    <div class="grid">
+      <div class="panel"><h2>Set-up checklist</h2><div class="score" id="score"></div><div id="chk"></div></div>
+      <div class="stack">
+        <div class="panel">
+          <h2>Backups</h2>
+          <p class="small muted" style="margin-top:-4px">Every database and setting, copied every night; the newest 14 are kept on the server. Download one every week or so and keep it off the server (your computer or Google Drive).</p>
+          <button id="bNow">Back up now</button> <span id="bMsg" class="small"></span>
+          <div class="tablewrap" style="margin-top:10px"><table class="t" id="bList"></table></div>
+        </div>
+        <div class="panel">
+          <h2>Always on</h2>
+          <ul class="small" style="margin:0;padding-left:18px;line-height:1.7">
+            <li>Wrong passwords or admin keys: 10 tries in 15 minutes locks that connection out for 15 minutes.</li>
+            <li>Passwords are stored as salted hashes, never as text. Companies can reset theirs by email.</li>
+            <li>Sign-in cookies are signed, secure (HTTPS only) and can't be read by scripts.</li>
+            <li>Browsers must use HTTPS, and other sites can't frame your pages.</li>
+            <li>Each company sees only its own reports, customers and money. Reports only carry its trades' sections.</li>
+            <li>Paused companies can't sign in. Every owner change is logged below.</li>
+          </ul>
+        </div>
+        <div class="panel"><h2>Locked out right now</h2><div id="locks" class="small"></div></div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:14px">
+      <h2>Owner activity</h2>
+      <p class="small muted" style="margin-top:-4px">Every change made from the command center, every owner sign-in and every refused attempt.</p>
+      <div class="tablewrap"><table class="t" id="audit"></table></div>
+    </div>
+  </div>
+</div>
+<script src="/static/common.js?v=19"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const tok = () => encodeURIComponent(localStorage.getItem("adminToken") || "");
+  const when = (t) => new Date(t * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const WHAT = [[/\/check$/, "Owner signed in"], [/manage$/, "Changed a company"], [/credits$/, "Changed credits"], [/view-as$/, "Opened a company's portal"],
+    [/test-drive/, "Test drive"], [/companies$/, "Added a company"], [/data\/pricing/, "Changed ZIP pricing"], [/\/paid$/, "Marked an order paid"],
+    [/locks\//, "Released an exclusive"], [/prebuild/, "Started measuring ZIPs"], [/postcards/, "Postcard studio"], [/marketing/, "Marketing hub"],
+    [/safety\/backup$/, "Made a backup"], [/backup\//, "Downloaded a backup"], [/settings$/, "Changed settings"]];
+  const what = (a) => a.status === 401 ? "Wrong admin key" : a.status === 429 ? "Locked out" : a.note || (WHAT.find(([r]) => r.test(a.path)) || [0, a.path])[1];
+  async function load() {
+    let S;
+    try { S = await api("/api/admin/safety"); } catch (e) { $("tokBox").classList.remove("hidden"); return; }
+    $("tokBox").classList.add("hidden"); $("app").classList.remove("hidden");
+    const ok = S.checklist.filter((c) => c.ok).length;
+    $("score").innerHTML = `<span class="${ok === S.checklist.length ? "ok" : "bad"}">${ok} of ${S.checklist.length}</span> <span class="small muted" style="font-weight:500">set up</span>`;
+    $("chk").innerHTML = S.checklist.map((c) => `<div class="chk"><div class="i">${c.ok ? "✅" : "⚠️"}</div><div><b>${esc(c.label)}</b>${c.ok ? "" : `<div class="fix">${esc(c.fix)}</div>`}</div></div>`).join("");
+    $("bList").innerHTML = `<thead><tr><th>Backup</th><th>Size</th><th></th></tr></thead><tbody>${S.backups.map((b) => `<tr><td>${when(b.created)}</td><td>${(b.size / 1e6).toFixed(1)} MB</td>
+      <td><a href="/api/admin/safety/backup/${encodeURIComponent(b.name)}?token=${tok()}">Download</a></td></tr>`).join("") || '<tr><td colspan="3" class="muted">None yet. Tap Back up now.</td></tr>'}</tbody>`;
+    $("locks").innerHTML = S.lockouts.length ? S.lockouts.map((l) => `<div>${esc(l.key.replace(/^(\w+):/, "$1 · "))}: ${l.fails} tries, free in ${Math.ceil(l.free_in / 60)} min</div>`).join("") : '<span class="muted">Nobody.</span>';
+    $("audit").innerHTML = `<thead><tr><th>When</th><th>What</th><th>From</th><th>Result</th></tr></thead><tbody>${S.audit.map((a) => `<tr><td>${when(a.ts)}</td><td>${esc(what(a))}</td>
+      <td>${esc(a.ip || "")}</td><td class="${a.status < 300 ? "ok" : "bad"}">${a.status < 300 ? "OK" : a.status}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">Nothing yet.</td></tr>'}</tbody>`;
+  }
+  $("tokGo").onclick = () => { localStorage.setItem("adminToken", $("tok").value.trim()); load(); };
+  $("bNow").onclick = async () => {
+    $("bMsg").innerHTML = '<span class="spinner"></span>Backing up…';
+    try { const b = await api("/api/admin/safety/backup", { method: "POST" }); $("bMsg").innerHTML = `<span class="ok">Done (${(b.size / 1e6).toFixed(1)} MB).</span>`; load(); }
+    catch (e) { $("bMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  };
+  load();
+})();
+</script>
+</body>
+</html>

@@ -15,6 +15,9 @@ async function api(path, opts = {}) {
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch (e) {}
+    // a stored admin key the server rejects (e.g. after changing it): forget it,
+    // so the page asks again instead of repeating it into a lockout
+    if (r.status === 401 && tok && /admin token/i.test(String(msg))) { try { localStorage.removeItem("adminToken"); } catch (e) {} }
     if (Array.isArray(msg)) msg = msg.map(friendlyError).join(" ");
     throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }
@@ -165,7 +168,7 @@ function measurementCards(r, keys, labels) {
   // The command center is one page (/command) with a tab per section; the
   // other owner pages open inside it. Opened on their own, they forward there.
   const OWNER_TAB = { "/command/data": "data", "/command/postcards": "postcards", "/command/tools": "measure",
-    "/command/settings": "settings", "/demo": "demo", "/business": "measure", "/command/marketing": "marketing" };
+    "/command/settings": "settings", "/demo": "demo", "/business": "measure", "/command/marketing": "marketing", "/command/safety": "safety" };
   let embedded = false;
   try { embedded = window.top !== window.self; } catch (e) { embedded = true; }
   if (owner && here !== "/command") {
@@ -182,6 +185,7 @@ function measurementCards(r, keys, labels) {
     { href: "/command#marketing", label: "Marketing", icon: "🎬" },
     { href: "/command#measure", label: "Measure", icon: "📏" },
     { href: "/command#demo", label: "Demo", icon: "🧪" },
+    { href: "/command#safety", label: "Safety", icon: "🛡️" },
     { href: "/command#settings", label: "Settings", icon: "⚙️" },
   ] : [
     { href: "/", label: "Home", icon: "🏠" },
@@ -201,6 +205,13 @@ function measurementCards(r, keys, labels) {
       nav.setAttribute("aria-label", "Site");
       nav.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""}">${l.label}</a>`).join("");
       header.insertBefore(nav, header.children[1] || null);
+    }
+    if (!owner && !document.querySelector(".site-foot")) {  // legal links on every customer page
+      const f = document.createElement("footer");
+      f.className = "site-foot";
+      f.style.cssText = "text-align:center;font-size:13px;color:#64748b;padding:18px 16px 96px";
+      f.innerHTML = '<a href="/terms" style="color:inherit">Terms</a> · <a href="/privacy" style="color:inherit">Privacy</a> · <a href="/refunds" style="color:inherit">Refunds</a>';
+      document.body.appendChild(f);
     }
     if (!document.querySelector(".tabbar")) {
       const bar = document.createElement("nav");

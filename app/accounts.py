@@ -266,3 +266,29 @@ def list_reports(cid: int | None = None, limit: int = 200) -> list[dict]:
 
 
 init()
+
+
+# ----------------------------------------------------------- password reset
+def _pw_fingerprint(cid: int) -> str:
+    with _db() as con:
+        r = con.execute("SELECT pw_hash FROM companies WHERE id=?", (cid,)).fetchone()
+    return (r["pw_hash"] if r else "")[-16:]
+
+
+def make_reset(cid: int, minutes: int = 60) -> str:
+    """A reset link token: expires, and stops working once the password changes."""
+    exp = int(time.time() + minutes * 60)
+    msg = f"reset.{cid}.{exp}.{_pw_fingerprint(cid)}"
+    return f"{cid}.{exp}.{hmac.new(_secret(), msg.encode(), hashlib.sha256).hexdigest()}"
+
+
+def read_reset(tok: str | None) -> int | None:
+    try:
+        cid, exp, sig = (tok or "").split(".")
+        msg = f"reset.{int(cid)}.{int(exp)}.{_pw_fingerprint(int(cid))}"
+        good = hmac.new(_secret(), msg.encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(sig, good) and int(exp) > time.time():
+            return int(cid)
+    except Exception:
+        pass
+    return None

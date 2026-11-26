@@ -277,3 +277,43 @@ def test_marketing_hub_upload_and_share(tmp_path, monkeypatch):
     cl.post(f"/api/admin/marketing/{it['id']}/share?on=false")
     assert cl.get(f"/m/{tok}/file").status_code == 404
     cl.delete(f"/api/admin/marketing/{it['id']}")
+
+
+def test_safety_lockouts_headers_backups_and_reset(monkeypatch, tmp_path):
+    import app.main as m
+    from app import accounts, safety
+    cl = TestClient(app)
+    r = cl.get("/terms")
+    assert r.status_code == 200 and r.headers["x-frame-options"] == "SAMEORIGIN" and r.headers["x-content-type-options"] == "nosniff"
+    for p in ("/privacy", "/refunds", "/reset", "/command/safety"):
+        assert cl.get(p).status_code == 200
+    # login lockout after 10 wrong passwords for one email
+    em = f"lock{__import__('time').time()}@x.test"
+    accounts.create_company("Lock Co", em, "password123")
+    for _ in range(10):
+        assert cl.post("/api/roof/login", json={"email": em, "password": "nope"}).status_code == 401
+    r = cl.post("/api/roof/login", json={"email": em, "password": "password123"})
+    assert r.status_code == 429 and "Too many" in r.json()["detail"]
+    safety.succeeded("email:" + em, "login:testclient")
+    # admin key lockout
+    monkeypatch.setattr(m, "ADMIN_TOKEN", "k-123")
+    for _ in range(10):
+        cl.get("/api/admin/check", headers={"x-admin-token": "bad"})
+    assert cl.get("/api/admin/check", headers={"x-admin-token": "k-123"}).status_code == 429
+    safety.succeeded("admin:testclient")
+    s = cl.get("/api/admin/safety", headers={"x-admin-token": "k-123"}).json()
+    assert any(c["label"] == "Admin key set" and c["ok"] for c in s["checklist"])
+    assert any(a["status"] == 401 for a in s["audit"])
+    # backup
+    monkeypatch.setattr(safety, "BACKUPS", tmp_path)
+    b = cl.post("/api/admin/safety/backup", headers={"x-admin-token": "k-123"}).json()
+    import zipfile
+    names = zipfile.ZipFile(tmp_path / b["name"]).namelist()
+    assert "roof.db" in names
+    # password reset: one-time
+    c = accounts.company_by_email(em)
+    tok = accounts.make_reset(c["id"])
+    assert cl.post("/api/roof/reset", json={"token": tok, "password": "newpass123"}).status_code == 200
+    assert cl.post("/api/roof/reset", json={"token": tok, "password": "again1234"}).status_code == 400
+    assert accounts.login(em, "newpass123")
+    assert cl.post("/api/roof/forgot", json={"email": "nobody@x.test"}).json()["ok"]
