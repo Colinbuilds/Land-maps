@@ -76,9 +76,9 @@
 <script>
 // one page, a tab per section: #companies (here), the rest open inside
 (function () {
-  const PAGES = { data: "/command/data", postcards: "/command/postcards", measure: "/command/tools",
+  const PAGES = { data: "/command/data", postcards: "/command/postcards", marketing: "/command/marketing", measure: "/command/tools",
                   demo: "/demo", settings: "/command/settings" };
-  const TITLES = { companies: "Companies", data: "ZIP data", postcards: "Postcard studio", measure: "Measure tools", demo: "Demo", settings: "Settings" };
+  const TITLES = { companies: "Companies", data: "ZIP data", postcards: "Postcard studio", marketing: "Marketing hub", measure: "Measure tools", demo: "Demo", settings: "Settings" };
   const loaded = {};
   function show() {
     const tab = (location.hash || "#companies").slice(1);

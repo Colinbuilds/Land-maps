@@ -165,7 +165,7 @@ function measurementCards(r, keys, labels) {
   // The command center is one page (/command) with a tab per section; the
   // other owner pages open inside it. Opened on their own, they forward there.
   const OWNER_TAB = { "/command/data": "data", "/command/postcards": "postcards", "/command/tools": "measure",
-    "/command/settings": "settings", "/demo": "demo", "/business": "measure" };
+    "/command/settings": "settings", "/demo": "demo", "/business": "measure", "/command/marketing": "marketing" };
   let embedded = false;
   try { embedded = window.top !== window.self; } catch (e) { embedded = true; }
   if (owner && here !== "/command") {
@@ -179,6 +179,7 @@ function measurementCards(r, keys, labels) {
     { href: "/command#companies", label: "Companies", icon: "🏢" },
     { href: "/command#data", label: "ZIP data", icon: "🗂️" },
     { href: "/command#postcards", label: "Postcards", icon: "✉️" },
+    { href: "/command#marketing", label: "Marketing", icon: "🎬" },
     { href: "/command#measure", label: "Measure", icon: "📏" },
     { href: "/command#demo", label: "Demo", icon: "🧪" },
     { href: "/command#settings", label: "Settings", icon: "⚙️" },

@@ -259,3 +259,21 @@ def test_new_prices_and_crm_included():
     assert not c["crm"]
     c = accounts.set_membership(c["id"], _t.time() + 86400, active=True)
     assert c["crm"] == 1  # every member has the CRM
+
+
+def test_marketing_hub_upload_and_share(tmp_path, monkeypatch):
+    from app import marketing as mk
+    monkeypatch.setattr(mk, "FILES", tmp_path)
+    cl = TestClient(app)
+    d = cl.get("/api/admin/marketing").json()
+    assert any("Launch plan" in i["title"] for i in d["items"])  # starter kit
+    it = cl.post("/api/admin/marketing", json={"kind": "video", "title": "Lawn demo", "tags": ["Lawn", "TikTok"]}).json()
+    r = cl.post(f"/api/admin/marketing/{it['id']}/file", files={"file": ("demo.mp4", b"\x00\x00\x00\x18ftypmp42" + b"0" * 2000, "video/mp4")})
+    assert r.status_code == 200 and r.json()["kind"] == "video" and r.json()["size"] > 2000
+    assert cl.get(f"/api/public/marketing/nope").status_code == 404
+    tok = cl.post(f"/api/admin/marketing/{it['id']}/share?on=true").json()["token"]
+    assert cl.get(f"/api/public/marketing/{tok}").json()["title"] == "Lawn demo"
+    assert cl.get(f"/m/{tok}/file").content.startswith(b"\x00\x00\x00\x18ftyp")
+    cl.post(f"/api/admin/marketing/{it['id']}/share?on=false")
+    assert cl.get(f"/m/{tok}/file").status_code == 404
+    cl.delete(f"/api/admin/marketing/{it['id']}")

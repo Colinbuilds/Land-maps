@@ -2122,3 +2122,98 @@ def admin_postcard_mailing_zip(folder: str, cid: int, token: str | None = None):
     if not j or j["status"] != "ready":
         raise HTTPException(409, "not ready")
     return FileResponse(j["path"], media_type="application/zip", filename=f"postcards_{folder}.zip")
+
+
+# ================================================================ marketing hub (owner)
+from . import marketing as _mk  # noqa: E402
+
+
+@app.get("/command/marketing")
+def page_marketing():
+    return FileResponse(STATIC / "marketing.html")
+
+
+@app.get("/api/admin/marketing", dependencies=[Depends(admin)])
+def mk_list():
+    _mk.seed_if_empty()
+    from . import trades as _tr
+    return {"items": _mk.list_items(), "kinds": _mk.KINDS, "statuses": _mk.STATUSES, "channels": _mk.CHANNELS,
+            "trades": [t["label"].split(" &")[0].split(" (")[0] for t in _tr.catalog() if "beta" not in t["label"].lower()]
+            + ["CRM", "Plan"]}
+
+
+class MkIn(BaseModel):
+    kind: str | None = None
+    title: str | None = Field(default=None, max_length=160)
+    body: str | None = Field(default=None, max_length=20000)
+    tags: list[str] | None = None
+    status: str | None = None
+
+
+@app.post("/api/admin/marketing", dependencies=[Depends(admin)])
+def mk_create(body: MkIn):
+    return _mk.create(body.kind or "idea", body.title or "Untitled", body.body or "", body.tags or [], body.status or "draft")
+
+
+@app.put("/api/admin/marketing/{iid}", dependencies=[Depends(admin)])
+def mk_update(iid: int, body: MkIn):
+    if not _mk.get(iid):
+        raise HTTPException(404)
+    return _mk.update(iid, **body.model_dump())
+
+
+@app.post("/api/admin/marketing/{iid}/file", dependencies=[Depends(admin)])
+async def mk_upload(iid: int, file: UploadFile = File(...)):
+    try:
+        return await _mk.attach(iid, file)
+    except LookupError:
+        raise HTTPException(404)
+    except ValueError as e:
+        raise HTTPException(413, str(e))
+
+
+@app.post("/api/admin/marketing/{iid}/share", dependencies=[Depends(admin)])
+def mk_share(iid: int, on: bool = True):
+    if not _mk.get(iid):
+        raise HTTPException(404)
+    return _mk.set_share(iid, on)
+
+
+@app.delete("/api/admin/marketing/{iid}", dependencies=[Depends(admin)])
+def mk_delete(iid: int):
+    _mk.delete(iid)
+    return {"ok": True}
+
+
+@app.get("/api/admin/marketing/{iid}/media")
+def mk_media(iid: int, token: str | None = None):
+    """The item's file for the owner (token in the URL so <video> can play it)."""
+    if ADMIN_TOKEN and not hmac.compare_digest((token or "").strip().encode(), ADMIN_TOKEN.encode()):
+        raise HTTPException(403)
+    it = _mk.get(iid)
+    p = _mk.file_path(it)
+    if not p or not p.exists():
+        raise HTTPException(404)
+    return FileResponse(p, media_type=it["mime"])
+
+
+@app.get("/m/{tok}")
+def mk_public_page(tok: str):
+    return FileResponse(STATIC / "share.html")
+
+
+@app.get("/api/public/marketing/{tok}")
+def mk_public(tok: str):
+    it = _mk.by_token(tok)
+    if not it:
+        raise HTTPException(404, "This link isn't available.")
+    return {k: it.get(k) for k in ("kind", "title", "body", "mime")} | {"has_file": bool(it.get("file"))}
+
+
+@app.get("/m/{tok}/file")
+def mk_public_file(tok: str):
+    it = _mk.by_token(tok)
+    p = _mk.file_path(it) if it else None
+    if not p or not p.exists():
+        raise HTTPException(404)
+    return FileResponse(p, media_type=it["mime"])
