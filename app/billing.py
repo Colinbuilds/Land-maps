@@ -1,7 +1,8 @@
 """Memberships and credit packs through Stripe (REST, no SDK).
 
-Membership: a monthly subscription (default $99). Members get unlimited
-single property reports and half price on ZIP lists. Status is stored on
+Membership: a monthly subscription (default $115, or a year up front at
+25% off). Members get unlimited single property reports for their trades,
+half price on ZIP lists, and the CRM portal included. Status is stored on
 the company and kept current three ways, so a missed notification never
 locks a paying member out or leaves a cancelled one in:
   * when they come back from Checkout (session confirmed with Stripe),
@@ -11,8 +12,8 @@ locks a paying member out or leaves a cancelled one in:
 Credit packs: one-time Checkout payments that add report credits.
 
 Settings (owner, Business > Data sales / settings file):
-  membership.price_cents   default 9900
-  credits.price_cents      price of one report credit, default 2500
+  membership.price_cents   default 11500
+  credits.price_cents      price of one report credit, default 500
 """
 from __future__ import annotations
 
@@ -27,14 +28,14 @@ from . import accounts
 from .pricing import load_settings
 
 API = "https://api.stripe.com/v1"
-DEFAULTS = {"member_price_cents": 9900, "credit_price_cents": 2500, "list_discount": 0.5,
+DEFAULTS = {"member_price_cents": 11500, "credit_price_cents": 500, "list_discount": 0.5,
             # membership by number of trades: the first `included_trades` come
             # with the base price; each further pair of trades is $20 a month
             # (+$15 for the first of the pair, +$5 for the second):
-            # 2 trades $99, 3 $114, 4 $119, 5 $134, 6 $139 ...
+            # 2 trades $115, 3 $130, 4 $135, 5 $150, 6 $155 ...
             "included_trades": 2, "trade_cents": [1500, 500],
-            # CRM portal add-on (estimates, schedule, photos, money), per month
-            "crm_price_cents": 2500,
+            # CRM portal (estimates, schedule, photos, money): included in membership
+            "crm_price_cents": 0,
             # pay a year up front: 12 months less this share (0.25 = 25% off)
             "annual_discount": 0.25}
 CREDIT_PACKS = (1, 5, 10, 25)

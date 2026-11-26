@@ -523,6 +523,12 @@ def roof_order(body: RoofOrder, c: dict = Depends(roof_company)):
     except PermissionError:
         raise HTTPException(402, "You're out of report credits.")
     left = accounts.get_company(c["id"])["credits"]
+    cust = None
+    if c.get("crm"):  # every report's homeowner becomes a CRM customer, named after the owner
+        try:
+            cust = _crm.customer_from_report(c["id"], {"id": rid, "data": rep})
+        except Exception:
+            cust = None
     from . import mailer
     mailer.notify_owner(f"Property report {rid} ordered by {c['name']}",
                         f"{c['name']} ({c['email']}) ordered a property report for {rep.get('address')}.\n"
@@ -531,7 +537,8 @@ def roof_order(body: RoofOrder, c: dict = Depends(roof_company)):
         mailer.send(c["email"], f"{left} report credit{'s' if left != 1 else ''} left",
                     f"Your company has {left} property report credit{'s' if left != 1 else ''} left. "
                     "Reply to this email to add more.")
-    return {"id": rid, "credits": left}
+    return {"id": rid, "credits": left, "customer_id": cust["id"] if cust else None,
+            "customer": cust["name"] if cust else None}
 
 
 @app.get("/api/roof/reports")
@@ -1613,10 +1620,12 @@ def crm_schedule_estimate(eid: int, body: ScheduleIn, c: dict = Depends(crm_comp
     e = _crm.get_estimate(c["id"], eid)
     if not e:
         raise HTTPException(404)
+    cu = _crm.get_customer(c["id"], e["customer_id"]) or {}
+    job_name = cu.get("name") or cu.get("address") or "Job"  # jobs carry the owner's name
     out = []
     try:
         for it in e["items"] or [{"desc": "Job", "price_cents": e["total_cents"], "qty": 1}]:
-            out.append(_crm.create_job(c["id"], e["customer_id"], it["desc"].split(" (")[0], body.start, body.repeat,
+            out.append(_crm.create_job(c["id"], e["customer_id"], job_name, body.start, body.repeat,
                                        int(it["price_cents"] * it.get("qty", 1)), body.time, body.until,
                                        it.get("trade"), e["id"]))
     except ValueError:

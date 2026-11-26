@@ -116,7 +116,10 @@ def _items(items) -> tuple[list[dict], int]:
         except (TypeError, ValueError):
             continue
         if desc or price:
-            out.append({"desc": desc, "qty": qty, "price_cents": max(0, price)})
+            line = {"desc": desc, "qty": qty, "price_cents": max(0, price)}
+            if it.get("trade"):  # which trade the line is for (jobs made from it keep it)
+                line["trade"] = str(it["trade"])[:40]
+            out.append(line)
     return out, int(round(sum(i["qty"] * i["price_cents"] for i in out)))
 
 
@@ -163,9 +166,9 @@ def customer_from_report(co: int, rep: dict) -> dict:
     hit = _one("SELECT * FROM customers WHERE company_id=? AND pin=?", (co, d.get("pin")))
     if hit:
         return hit
-    from .postcard import nice_name, owner_of
-    name = owner_of(d) or ""
-    return add_customer(co, name=nice_name(name), address=d.get("address"),
+    from .postcard import owner_of
+    name = owner_of(d) or ""  # the owner, first name first ("Mack & Susanne Riggs")
+    return add_customer(co, name=name, address=d.get("address"),
                         city=(d.get("city") or "").title(), zip=d.get("zip"), pin=d.get("pin"),
                         report_id=rep["id"])
 

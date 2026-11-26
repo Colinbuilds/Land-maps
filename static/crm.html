@@ -37,6 +37,7 @@
   .pill.sent { background: #e0ecff; color: #1d4ed8; } .pill.accepted, .pill.paid, .pill.done { background: #dcfce7; color: #166534; }
   .pill.declined, .pill.void, .pill.skipped { background: #fee2e2; color: #991b1b; } .pill.unpaid { background: #fef3c7; color: #92400e; }
   .empty { background: #fff; border-radius: 16px; padding: 18px; color: var(--muted); text-align: center; }
+  .startbig { width: 100%; min-height: 60px; border-radius: 18px; font-size: 17px; margin: 0 0 8px; }
   .quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .quick button { min-height: 62px; border-radius: 16px; font-size: 14px; line-height: 1.2; }
   .search2 input { min-height: 46px; font-size: 16px; border-radius: 14px; }
@@ -71,7 +72,7 @@
 <body>
 <header class="top">
   <div class="brand"><span class="dot"></span><span id="coName">CRM</span></div>
-  <div class="contact"><a href="/reports" class="small">Reports</a> · <button class="secondary mini" id="gear" aria-label="Settings">⚙︎</button></div>
+  <div class="contact"><button class="mini" id="hdrNew">+ New report</button> <a href="/reports" class="small">Reports</a> · <button class="secondary mini" id="gear" aria-label="Settings">⚙︎</button></div>
 </header>
 
 <div class="wrap" id="gate" hidden></div>
@@ -93,6 +94,6 @@
 <input type="file" id="photoIn" accept="image/*" capture="environment" hidden>
 
 <script src="/static/common.js?v=18"></script>
-<script src="/static/crm.js?v=1"></script>
+<script src="/static/crm.js?v=3"></script>
 </body>
 </html>

@@ -28,7 +28,7 @@
         <div><b>Schedule and route.</b> Weekly mows and one-off jobs, ordered by stop, checked off from your phone.</div>
         <div><b>Photos and invoices.</b> Before/after photos per job; mark done and the invoice is made.</div>
         <div><b>See the money.</b> Paid this month, what's owed, what's booked and your win rate.</div>
-        ${me.member ? `<button id="gOn">Turn on CRM · +$25/month</button>` : `<a class="btn" href="/join">Become a member to add the CRM</a>`}
+        ${me.member ? `<button id="gOn">Open my CRM</button>` : `<a class="btn" href="/join">The CRM comes with membership: join</a>`}
         <div id="gMsg" class="small"></div></div>`, () => {
       const b = $("gOn");
       if (b) b.onclick = async () => {
@@ -80,27 +80,62 @@
         <div class="kpi"><div class="l">Booked next 30 days</div><div class="v">${usd(m.booked_next_30)}</div></div>
         <div class="kpi"><div class="l">Open estimates</div><div class="v">${usd(m.pipeline)}</div></div>
       </div>
+      <button class="startbig" id="qNew">📐 Start new report</button>
       <div class="quick">
-        <button id="qEst">📝<br>Estimate from a report</button>
+        <button class="secondary" id="qEst">📝<br>Estimate from a report</button>
         <button class="secondary" id="qJob">📅<br>Add a job</button>
         <button class="secondary" id="qCust">👤<br>Add a customer</button>
       </div>
       <div class="sec"><h2>Today's stops</h2><a class="small" href="#" id="toSched">Full week</a></div>
       <div class="list">${H.today.map(stopCard).join("") || '<div class="empty">No jobs today. Tap <b>Add a job</b> or schedule an accepted estimate.</div>'}</div>
       ${H.open_estimates.length ? `<div class="sec"><h2>Waiting on customers</h2></div><div class="list">${H.open_estimates.map(estCard).join("")}</div>` : ""}`;
+    $("qNew").onclick = newReport;
     $("qEst").onclick = newFromReport;
     $("qJob").onclick = () => jobSheet();
     $("qCust").onclick = () => customerSheet();
     $("toSched").onclick = (e) => { e.preventDefault(); go("schedule"); };
     wireStops(v); wireEst(v);
   }
+  const TL = { lawn: "Lawn care", snow: "Snow removal", concrete: "Concrete", pressure: "Pressure washing", windows: "Windows",
+    gutters: "Gutters", lights: "Holiday lighting", roofing: "Roofing", siding: "Siding", solar: "Solar", trees: "Tree service",
+    landscaping: "Landscaping", irrigation: "Irrigation", pest: "Pest control", hvac: "HVAC" };
+
+  // ---- start a new report from the CRM: the homeowner becomes a customer by name
+  function newReport() {
+    sheet(`<h2>Start new report</h2><div class="sub">Type the address. We measure it, and the homeowner is added to your customers by name.</div>
+      <div class="search" style="margin-top:10px"><input id="nrAddr" type="text" autocomplete="off" placeholder="Property address" aria-label="Property address"><div class="suggest hidden" id="nrSug"></div></div>
+      <div id="nrMsg" class="small" style="margin-top:10px"></div>`, () => {
+      $("nrAddr").focus();
+      wireAutocomplete($("nrAddr"), $("nrSug"), async (s) => {
+        const q = new URLSearchParams({ q: s.text });
+        if (s.magicKey) q.set("magicKey", s.magicKey);
+        $("nrMsg").innerHTML = '<span class="spinner"></span>Finding the property…';
+        try {
+          const loc = await api(`/api/locate?${q}`);
+          if (!loc.suggested_pin) throw new Error("Couldn't find that lot. Try the full street address, or use the Reports page map.");
+          $("nrMsg").innerHTML = '<span class="spinner"></span>Measuring it now. About 20 to 40 seconds.';
+          const r = await api("/api/roof/report", { method: "POST", json: { pin: loc.suggested_pin } });
+          $("nrMsg").innerHTML = `<div class="item"><div class="t">${esc(r.customer || "Report ready")}</div>
+            <div class="m">${esc(s.text)} · report ${esc(r.id)}</div>
+            <div class="acts"><button id="nrEst">📝 Make estimate</button><a class="btn secondary" target="_blank" href="/r/${esc(r.id)}">Open report</a>
+            ${r.customer_id ? `<button class="secondary" id="nrCust">Customer</button>` : ""}<button class="secondary" id="nrAgain">Start another</button></div></div>`;
+          $("nrEst").onclick = async () => { try { estimateSheet(await api("/api/crm/estimates/from-report", { method: "POST", json: { report_id: r.id } })); } catch (x) { alert(x.message); } };
+          if (r.customer_id) $("nrCust").onclick = () => openCustomer(r.customer_id);
+          $("nrAgain").onclick = newReport;
+          if (current === "today") drawToday();
+        } catch (e) { $("nrMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+      });
+    });
+  }
+  $("hdrNew") && ($("hdrNew").onclick = newReport);
+
   const greet = () => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
 
   function stopCard(s) {
     const done = s.status !== "scheduled";
     return `<div class="item ${done ? "done" : ""}" data-job="${s.job_id}" data-day="${s.day}">
       <div class="top"><span class="t">${s.time ? esc(s.time) + " · " : ""}${esc(s.customer || "Customer")}</span><span class="p">${usd(s.price_cents)}</span></div>
-      <div class="m">${esc(s.title)}${s.repeat !== "none" ? ` · ${esc(s.repeat)}` : ""} · <a href="${mapLink([s.address, s.city].filter(Boolean).join(", "))}" target="_blank">${esc(s.address || "")}</a></div>
+      <div class="m">${esc(s.title && s.title !== s.customer ? s.title : (TL[s.trade] || "Job"))}${s.repeat !== "none" ? ` · ${esc(s.repeat)}` : ""} · <a href="${mapLink([s.address, s.city].filter(Boolean).join(", "))}" target="_blank">${esc(s.address || "")}</a></div>
       ${s.notes ? `<div class="m">${esc(s.notes)}</div>` : ""}
       <div class="acts">${done ? `${pill(s.status)}${s.invoice_id ? ' <span class="pill unpaid">invoiced</span>' : ""} <button class="secondary" data-act="undo">Undo</button>`
         : `<button data-act="done">✓ Done + invoice</button><button class="secondary" data-act="donenoinv">Done</button><button class="secondary" data-act="skip">Skip</button>`}
@@ -257,10 +292,11 @@
     });
   }
   function linesHtml(items) {
-    return items.map((it) => `<div class="ln"><input data-f="desc" value="${esc(it.desc)}" placeholder="What"><input data-f="price" type="number" step="0.01" inputmode="decimal" value="${((it.price_cents || 0) * (it.qty || 1) / 100).toFixed(2)}" placeholder="$"><button type="button" aria-label="Remove line">✕</button></div>`).join("");
+    return items.map((it) => `<div class="ln" data-trade="${esc(it.trade || "")}"><input data-f="desc" value="${esc(it.desc)}" placeholder="What"><input data-f="price" type="number" step="0.01" inputmode="decimal" value="${((it.price_cents || 0) * (it.qty || 1) / 100).toFixed(2)}" placeholder="$"><button type="button" aria-label="Remove line">✕</button></div>`).join("");
   }
   function readLines() {
     return [...document.querySelectorAll(".lines .ln")].map((r) => ({ desc: r.querySelector('[data-f="desc"]').value, qty: 1,
+      trade: r.dataset.trade || null,
       price_cents: Math.round((+r.querySelector('[data-f="price"]').value || 0) * 100) })).filter((x) => x.desc || x.price_cents);
   }
   function wireLines(onChange) {
@@ -345,7 +381,7 @@
   }
   function jobSheet(j = {}) {
     const open = (cust) => sheet(`<h2>New job</h2><div class="sub">${esc(cust.name || "")} · ${esc(cust.address || "")}</div>
-      <label>What<input id="jTitle" placeholder="Mow, edge and blow" value="${esc(j.title || "")}"></label>
+      <label>Job name<input id="jTitle" placeholder="Job name" value="${esc(j.title || cust.name || "")}"></label>
       <div class="two"><label>Price $<input id="jPrice" type="number" step="0.01" inputmode="decimal"></label><label>Repeats${repeatSel("none")}</label></div>
       <div class="two"><label>Date<input id="jStart" type="date" value="${today}"></label><label>Time (optional)<input id="jTime" type="time"></label></div>
       <label>Notes<textarea id="jNotes"></textarea></label>

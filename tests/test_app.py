@@ -151,7 +151,7 @@ def test_crm_flow_and_command_center():
     # owner library has the company with a summary
     lib = cl.get("/api/admin/library").json()
     row = next(c for c in lib["companies"] if c["id"] == cid)
-    assert "Lawn" in row["summary"]["text"] and row["summary"]["mrr_cents"] == 9900 + 2500
+    assert "Lawn" in row["summary"]["text"] and row["summary"]["mrr_cents"] == 11500  # CRM included
     # pausing blocks sign-in
     cl.patch(f"/api/admin/companies/{cid}/manage", json={"disabled": True})
     assert cl.get("/api/crm/home").status_code == 401
@@ -176,9 +176,9 @@ def test_report_sections_follow_trades():
 
 def test_yearly_membership_is_25_percent_off():
     from app import billing
-    assert billing.member_price_cents(["lawn", "snow"], yearly=True) == 9900 * 12 * 3 // 4
-    assert billing.member_price_cents(["lawn", "snow", "gutters", "roofing"], crm=True, yearly=True) == round((11900 + 2500) * 12 * 0.75)
-    assert billing.monthly_value_cents({"member": True, "billing": "year", "trades": ["lawn"]}) == round(9900 * 0.75)
+    assert billing.member_price_cents(["lawn", "snow"], yearly=True) == 11500 * 12 * 3 // 4  # $1,035
+    assert billing.member_price_cents(["lawn", "snow", "gutters", "roofing"], crm=True, yearly=True) == round(13500 * 12 * 0.75)
+    assert billing.monthly_value_cents({"member": True, "billing": "year", "trades": ["lawn"]}) == round(11500 * 0.75)
     assert TestClient(app).get("/api/billing/plans").json()["annual_discount"] == 0.25
 
 
@@ -235,3 +235,27 @@ def test_signin_page_and_admin_check(monkeypatch):
     monkeypatch.setattr(m, "ADMIN_TOKEN", "owner-key-123")
     assert cl.get("/api/admin/check", headers={"x-admin-token": "nope"}).status_code == 401
     assert cl.get("/api/admin/check", headers={"x-admin-token": "owner-key-123"}).json() == {"ok": True, "open": False}
+
+
+def test_owner_names_first_last():
+    from app.postcard import person_name as p
+    assert p("ANDERSON MARK A") == "Mark Anderson"                       # Douglas
+    assert p("RIGGS/MACK E & SUSANNE K") == "Mack & Susanne Riggs"       # Sarpy
+    assert p("LAPE JR/LEROY W") == "Leroy Lape Jr"
+    assert p("GRAY, GENE J & TERI L") == "Gene & Teri Gray"              # Lancaster / Cass
+    assert p("WORTMANN, JOAN & DOSTAL, JORDAN T") == "Joan Wortmann & Jordan Dostal"
+    assert p("PALMER, RALPH V & PATRICIA E  TTEES") == "Ralph & Patricia Palmer"
+    assert p("O'BRIEN SEAN") == "Sean O'Brien"
+    assert p("GRACE BAPTIST CHURCH") == "Grace Baptist Church"           # not a person: kept
+    assert p("11207 LLC") == "11207 LLC"
+    assert p("") == ""
+
+
+def test_new_prices_and_crm_included():
+    import time as _t
+    from app import accounts, billing
+    assert billing.plans()["credit_price_cents"] == 500 and billing.member_price_cents(["lawn"]) == 11500
+    c = accounts.create_company("Crm Inc Test", f"ci{_t.time()}@x.test", "password123")
+    assert not c["crm"]
+    c = accounts.set_membership(c["id"], _t.time() + 86400, active=True)
+    assert c["crm"] == 1  # every member has the CRM

@@ -167,7 +167,7 @@
       ids.forEach((i) => { if (edited[i]) ed[String(i)] = edited[i]; });
       const r = await api("/api/roof/report", { method: "POST", json: { pin: current.pin, structure_ids: ids, edited: ed } });
       showCredits(r.credits);
-      $("orderMsg").innerHTML = `<span class="ok">Done.</span> <a href="/r/${r.id}${tq()}" target="_blank">Open report ${esc(r.id)}</a> · <a href="/r/${r.id}/pdf${tq()}" target="_blank">PDF</a> · <a href="/r/${r.id}/postcard.pdf${pcq()}" target="_blank">Postcard</a>`;
+      $("orderMsg").innerHTML = `<span class="ok">Done.</span>${r.customer ? ` Added <b>${esc(r.customer)}</b> to your <a href="/crm">CRM</a>.` : ""} <a href="/r/${r.id}${tq()}" target="_blank">Open report ${esc(r.id)}</a> · <a href="/r/${r.id}/pdf${tq()}" target="_blank">PDF</a> · <a href="/r/${r.id}/postcard.pdf${pcq()}" target="_blank">Postcard</a>`;
       window.open(`/r/${r.id}${tq()}`, "_blank");
       loadReports();
     } catch (e) {
@@ -187,6 +187,17 @@
           · <a href="/r/${r.id}/photo.jpg" target="_blank" title="High-resolution aerial photo">Photo</a></td></tr>`).join("")
       || '<tr><td colspan="3" class="muted">No reports yet.</td></tr>'}</tbody>`;
   }
+
+  // start over: clear the last property and put the cursor in the address box
+  $("startNew").addEventListener("click", () => {
+    current = null;
+    if (structLayer && map) { map.removeLayer(structLayer); structLayer = null; }
+    $("orderCard").innerHTML = '<p class="muted" style="margin:0">Type an address above, or tap a lot on the map.</p>';
+    $("addr").value = "";
+    $("addr").scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(() => $("addr").focus(), 250);
+  });
+  if (new URLSearchParams(location.search).has("new")) setTimeout(() => $("startNew").click(), 400);
 
   boot();
 })();

@@ -97,6 +97,8 @@ def _public(row) -> dict:
     d = dict(row)
     d.pop("pw_hash", None)
     d["member"] = is_member(d)
+    if d["member"]:  # the CRM comes with every membership
+        d["crm"] = 1
     # every trade the company picked (older accounts: the single `trade`)
     d["trades"] = [t for t in (d.get("trades") or d.get("trade") or "").split(",") if t]
     try:  # the company's prices per trade (see trades.PRICE_RULES)

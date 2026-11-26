@@ -260,7 +260,7 @@
     const banded = vb.bands.length && Math.abs(avg - perHome()) > 0.01;
     $("qRate").textContent = `(${what} × ${n.toLocaleString()} homes at ${banded ? "about " : ""}${+(avg / (q.member ? 2 : 1)).toFixed(2)}¢ each${banded ? ", priced by home value" : ""}${atMin ? `, $${pricing.min_order_usd} minimum` : ""})`;
     $("memberLine").innerHTML = q.member ? '<span class="ok">Member price: half off.</span>'
-      : `<span class="muted">Members pay half. <a href="/join">$99/month</a> includes unlimited single-property reports.</span>`;
+      : `<span class="muted">Members pay half. <a href="/join">$115/month</a> includes unlimited single-property reports and the CRM.</span>`;
     // what each unticked option would add
     document.querySelectorAll("#typePick [data-c]").forEach((el) => {
       const on = picked.includes(el.dataset.c);
