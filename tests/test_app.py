@@ -339,3 +339,19 @@ def test_buy_several_zips_in_one_order(monkeypatch):
     import pytest
     with pytest.raises(PermissionError):
         ds.create_group("buyer@x.test", ["68022"], ["R"], ["lawn"])
+
+
+def test_assessed_value_addon_and_totals(tmp_path, monkeypatch):
+    from app import datastore as ds
+    p = ds.pricing()
+    assert ds.per_property_cents(["lawn"], p) == 10 and ds.per_property_cents(["lawn", "value"], p) == 15
+    assert ds.per_property_cents(["value"], p) == 15  # can't be bought alone: comes with lawn
+    assert ds.per_property_cents(["lawn", "driveway", "value"], p) == 20
+    assert "home_value" not in [k for k, _ in ds.columns_for(["lawn"])]
+    assert "home_value" in [k for k, _ in ds.columns_for(["lawn", "value"])]
+    assert ds.measures_of(["value", "driveway"]) == ["driveway"]
+    monkeypatch.setattr(ds, "ZIPS_DIR", tmp_path)
+    rows = [{"address": "1 A St", "home_value": 200000, "lawn_sqft": 5000}, {"address": "2 A St", "home_value": 300000, "lawn_sqft": 7000}]
+    (tmp_path / "99997_R.csv").write_text(ds.to_csv(rows, [(k, k) for k, _ in ds.COLUMNS]))
+    t = ds.totals_for_key("99997_R")
+    assert t["all"]["home_value"] == 500000 and any(c["key"] == "home_value" for c in t["columns"])

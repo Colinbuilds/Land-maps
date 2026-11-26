@@ -61,7 +61,8 @@
   try { const cp = await api("/api/data/pricing"); if (cp && cp.rate_cents) pricing = cp; } catch (e) {}
   const money = (d) => "$" + Math.round(d).toLocaleString();
   function sheetPrice(n) {
-    const per = pricing.rate_cents + pricing.extra_type_cents * (Math.max(1, picked.length) - 1);
+    const m = picked.filter((k) => k !== "value").length;  // the value column is a flat add-on
+    const per = pricing.rate_cents + pricing.extra_type_cents * (Math.max(1, m) - 1) + (picked.includes("value") ? (pricing.value_cents ?? 5) : 0);
     return Math.max(n * per / 100, pricing.min_order_usd);
   }
   const cents = (c) => (c >= 1 ? `${+c.toFixed(1)}¢` : `${+c.toFixed(2)}¢`);
@@ -123,7 +124,9 @@
     box.innerHTML = cat.map((t, i) => `<label class="${picked.includes(t.key) ? "on" : ""}"><input type="checkbox" value="${esc(t.key)}" ${picked.includes(t.key) ? "checked" : ""}><span>${esc(t.label)}</span><span class="c" data-c="${esc(t.key)}"></span></label>`).join("");
     box.addEventListener("change", () => {
       picked = [...box.querySelectorAll("input:checked")].map((x) => x.value);
-      if (!picked.length) { const f = box.querySelector("input:not(:disabled)"); if (f) { f.checked = true; picked = [f.value]; } }
+      if (!picked.filter((k) => k !== "value").length) {  // the value column comes with at least one measurement
+        const f = box.querySelector('input:not(:disabled):not([value="value"])'); if (f) { f.checked = true; picked = [f.value, ...picked]; }
+      }
       box.querySelectorAll("label").forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
       try { localStorage.setItem("dataTypes", JSON.stringify(picked)); } catch (e) {}
       updatePrice();
@@ -219,12 +222,17 @@
     $("bBtn").textContent = excl ? "Lock this ZIP" : "Buy sheet";
     updatePrice();
   }));
+  // the assessed-value column is an add-on (+5¢), never the "first measurement"
+  const ADDON = ["value"];
+  const measuresPicked = () => picked.filter((k) => !ADDON.includes(k));
+  const addonCents = () => picked.includes("value") ? (pricing.value_cents ?? 5) : 0;
   const perHome = () => product === "premier" ? (pricing.premier_cents || 25)
-    : pricing.rate_cents + pricing.extra_type_cents * (Math.max(1, picked.length) - 1);
+    : pricing.rate_cents + pricing.extra_type_cents * (Math.max(1, measuresPicked().length) - 1);  // + addonCents(), flat, added per home
+  const flatAddon = () => product === "premier" ? 0 : addonCents();
   function exclusivePrice() {
-    const p = q.pricing, h = held(), fresh = picked.filter((k) => !h.includes(k));
-    const per = h.length ? (p.exclusive_extra_cents || 50) * fresh.length
-      : fresh.length ? (p.exclusive_cents || 100) + (p.exclusive_extra_cents || 50) * (fresh.length - 1) : 0;
+    const p = q.pricing, h = held(), fresh = measuresPicked().filter((k) => !h.includes(k));
+    const per = (h.length ? (p.exclusive_extra_cents || 50) * fresh.length
+      : fresh.length ? (p.exclusive_cents || 100) + (p.exclusive_extra_cents || 50) * (fresh.length - 1) : 0) + (fresh.length ? addonCents() : 0);
     const n = q.zip_total;
     const c = fresh.length ? Math.max(Math.ceil(n * per - 1e-9), Math.round(p.min_order_usd * 100)) : 0;
     q.count = n; q.price_cents = c;
@@ -236,7 +244,7 @@
     $("memberLine").innerHTML = '<span class="muted">Exclusive pricing is the same for members and non-members.</span>';
     document.querySelectorAll("#typePick [data-c]").forEach((el) => {
       const k = el.dataset.c;
-      el.textContent = taken().includes(k) ? "Taken" : h.includes(k) ? "Yours"
+      el.textContent = k === "value" ? `+${cents(p.value_cents ?? 5)}` : taken().includes(k) ? "Taken" : h.includes(k) ? "Yours"
         : (!h.length && fresh[0] === k) ? usd(p.exclusive_cents || 100) : `+${cents(p.exclusive_extra_cents || 50)}`;
     });
   }
@@ -246,9 +254,9 @@
     if (product === "exclusive") {
       const h = Object.entries(qq.locks || {}).filter(([, l]) => l.yours).map(([k]) => k);
       const blocked = picked.filter((k) => (qq.taken_types || []).includes(k));
-      const fresh = picked.filter((k) => !h.includes(k));
-      const per = h.length ? (p.exclusive_extra_cents || 50) * fresh.length
-        : fresh.length ? (p.exclusive_cents || 100) + (p.exclusive_extra_cents || 50) * (fresh.length - 1) : 0;
+      const fresh = measuresPicked().filter((k) => !h.includes(k));
+      const per = (h.length ? (p.exclusive_extra_cents || 50) * fresh.length
+        : fresh.length ? (p.exclusive_cents || 100) + (p.exclusive_extra_cents || 50) * (fresh.length - 1) : 0) + (fresh.length ? addonCents() : 0);
       const n = qq.zip_total;
       return { n, cents: fresh.length ? Math.max(Math.ceil(n * per - 1e-9), Math.round(p.min_order_usd * 100)) : 0,
                blocked: blocked.length ? "Another company holds this ZIP for " + blocked.join(", ") : "" };
@@ -258,6 +266,7 @@
     let raw = 0, n = 0;
     if (vb.bands.length) for (let i = vLo; i <= vHi; i++) { n += vb.bands[i] || 0; raw += (vb.bands[i] || 0) * perHome() * (mult[Math.min(i, mult.length - 1)] || 1); }
     else { n = qq.zip_total; raw = n * perHome(); }
+    raw += n * flatAddon();
     const full = n ? Math.max(Math.ceil(raw - 1e-9), Math.round(p.min_order_usd * 100)) : 0;
     const blocked = picked.filter((k) => (qq.taken_types || []).includes(k));
     return { n, cents: qq.member ? Math.round(full / 2) : full, blocked: blocked.length ? "Another company holds this ZIP for " + blocked.join(", ") : "" };
@@ -303,6 +312,7 @@
     let raw = 0;
     if (vb.bands.length) for (let i = vLo; i <= vHi; i++) raw += vb.bands[i] * perHome() * (mult[Math.min(i, mult.length - 1)] || 1);
     else raw = n * perHome();
+    raw += n * flatAddon();
     const full = n ? Math.max(Math.ceil(raw - 1e-9), Math.round(pricing.min_order_usd * 100)) : 0;
     q.count = n;
     $("qCount").textContent = `${n.toLocaleString()} properties`;
@@ -311,9 +321,10 @@
     q.price_cents = cents;
     $("qPrice").innerHTML = q.member ? `${usd(cents)} <s class="muted" style="font-size:.5em;font-weight:500">${usd(full)}</s>` : usd(cents);
     const atMin = full <= pricing.min_order_usd * 100;
-    const what = product === "premier" ? "Premier report" : `${picked.length} measurement${picked.length === 1 ? "" : "s"}`;
-    const avg = n ? raw / n : perHome();
-    const banded = vb.bands.length && Math.abs(avg - perHome()) > 0.01;
+    const nm = measuresPicked().length;
+    const what = product === "premier" ? "Premier report" : `${nm} measurement${nm === 1 ? "" : "s"}${picked.includes("value") ? " + assessed value" : ""}`;
+    const avg = n ? raw / n : perHome() + flatAddon();
+    const banded = vb.bands.length && Math.abs(avg - perHome() - flatAddon()) > 0.01;
     $("qRate").textContent = `(${what} × ${n.toLocaleString()} homes at ${banded ? "about " : ""}${+(avg / (q.member ? 2 : 1)).toFixed(2)}¢ each${banded ? ", priced by home value" : ""}${atMin ? `, $${pricing.min_order_usd} minimum` : ""})`;
     $("memberLine").innerHTML = q.member ? '<span class="ok">Member price: half off.</span>'
       : `<span class="muted">Members pay half. <a href="/join">$115/month</a> includes unlimited single-property reports and the CRM.</span>`;
@@ -321,7 +332,8 @@
     // what each unticked option would add
     document.querySelectorAll("#typePick [data-c]").forEach((el) => {
       const on = picked.includes(el.dataset.c);
-      el.textContent = taken().includes(el.dataset.c) ? "Taken" : on ? (picked[0] === el.dataset.c ? `${pricing.rate_cents}¢` : `+${pricing.extra_type_cents}¢`) : `+${pricing.extra_type_cents}¢`;
+      el.textContent = el.dataset.c === "value" ? `+${+(pricing.value_cents ?? 5)}¢`
+        : taken().includes(el.dataset.c) ? "Taken" : on ? (measuresPicked()[0] === el.dataset.c ? `${pricing.rate_cents}¢` : `+${pricing.extra_type_cents}¢`) : `+${pricing.extra_type_cents}¢`;
     });
   }
 

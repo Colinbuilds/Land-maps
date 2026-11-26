@@ -1478,6 +1478,7 @@ class DataPricing(BaseModel):
     rate_cents: float = Field(ge=0.5, le=100)          # first measurement type, per property
     extra_type_cents: float = Field(ge=0, le=100)      # each extra type, per property
     premier_cents: float = Field(default=25.0, ge=1, le=500)  # Premier list, per property
+    value_cents: float = Field(default=5.0, ge=0, le=500)     # add-on: assessed value column, per property
     min_order_usd: float = Field(ge=0, le=100_000)
     value_multipliers: list[float] = Field(default=[1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0],
                                            min_length=9, max_length=9)
