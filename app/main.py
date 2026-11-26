@@ -1220,6 +1220,77 @@ def data_order(body: OrderReq, request: Request):
     return out
 
 
+class GroupOrderReq(OrderReq):
+    zip: str | None = None
+    zips: list[str] = Field(min_length=1, max_length=25)
+
+
+@app.post("/api/data/orders")
+def data_orders(body: GroupOrderReq, request: Request):
+    """Buy several ZIPs in one go: an order per ZIP, one checkout."""
+    zs = [_zip5(z) for z in body.zips]
+    c = _session_company(request)
+    try:
+        if body.product == "exclusive" and not c:
+            raise PermissionError("Sign in (or create a free account) to buy an exclusive ZIP, so the lock is tied to your company.")
+        g = datastore.create_group(body.email, zs, _classes(body.classes), body.types, site=_base_url(request),
+                                   product=body.product, member=bool(c and c["member"]),
+                                   lo=body.value_lo, hi=body.value_hi, account_email=(c or {}).get("email"))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except PermissionError as e:
+        raise HTTPException(409, str(e))
+    out = {"grp": g["grp"], "token": g["token"], "count": sum(o["count"] for o in g["orders"]),
+           "amount_cents": sum(o["amount_cents"] for o in g["orders"]),
+           "order_url": f"/data/orders/{g['grp']}?t={g['token']}"}
+    if datastore.stripe_enabled():
+        try:
+            out["checkout_url"] = datastore.stripe_checkout_group(g["grp"], _base_url(request))
+        except Exception as e:
+            raise HTTPException(502, f"Payment provider error: {str(e)[:200]}")
+    return out
+
+
+def _group_access(grp: str, t: str | None) -> list[dict]:
+    orders = datastore.group_orders(grp)
+    if not orders or not t or not hmac.compare_digest(t, orders[0].get("grp_token") or ""):
+        raise HTTPException(404, "order not found")
+    return orders
+
+
+@app.get("/data/orders/{grp}")
+def page_group(grp: str):
+    return FileResponse(STATIC / "data-orders.html")
+
+
+@app.get("/api/data/orders/{grp}")
+def data_group_status(grp: str, t: str | None = None, session_id: str | None = None):
+    orders = _group_access(grp, t)
+    if session_id and any(o["status"] == "awaiting_payment" for o in orders):
+        datastore.stripe_confirm_group(grp, session_id)
+        orders = datastore.group_orders(grp)
+    views = []
+    for o in orders:
+        v = datastore.order_view(o)
+        v["link"] = f"/data/order/{o['id']}?t={o['token']}"
+        views.append(v)
+    return {"grp": grp.upper(), "email": orders[0]["email"], "orders": views,
+            "amount_cents": sum(o["amount_cents"] for o in orders), "count": sum(o["count"] or 0 for o in orders),
+            "unpaid": any(o["status"] == "awaiting_payment" for o in orders), "stripe": datastore.stripe_enabled(),
+            "contact": {k: load_settings()["business"].get(k) for k in ("name", "phone", "email")}}
+
+
+@app.post("/api/data/orders/{grp}/checkout")
+def data_group_checkout(grp: str, request: Request, t: str | None = None):
+    _group_access(grp, t)
+    if not datastore.stripe_enabled():
+        raise HTTPException(400, "nothing to pay")
+    try:
+        return {"checkout_url": datastore.stripe_checkout_group(grp, _base_url(request))}
+    except LookupError:
+        raise HTTPException(400, "nothing to pay")
+
+
 def _order_access(oid: str, t: str | None):
     o = datastore.get_order(oid)
     if not o or not t or t != o["token"]:

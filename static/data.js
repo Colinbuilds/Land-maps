@@ -7,6 +7,7 @@
   $("bizContact").textContent = [cfg.business.phone, cfg.business.email].filter(Boolean).join(" · ");
   const usd = (c) => "$" + (c / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   let map = null, zl = null, q = null;
+  let extra = [];  // more ZIPs in the same order (declared early: other code reads it on load)
   // measurements picked for the full sheet (declared first: the calculator reads it on load)
   let picked = (() => { try { return JSON.parse(localStorage.getItem("dataTypes") || "null") || ["lawn"]; } catch (e) { return ["lawn"]; } })();
   const saved = (() => { try { return localStorage.getItem("dataEmail") || ""; } catch (e) { return ""; } })();
@@ -20,6 +21,7 @@
     try { q = await api(`/api/data/quote?zip=${zip}&classes=${encodeURIComponent($("cls").value)}`); }
     catch (e) { $("quoteMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
     history.replaceState(null, "", `?zip=${zip}`);
+    extra = extra.filter((x) => x.zip !== zip);
     if (!q.count) {
       $("result").classList.add("hidden");
       $("quoteMsg").innerHTML = '<span class="err">No matching properties in that ZIP inside our coverage area yet.</span>';
@@ -238,9 +240,63 @@
         : (!h.length && fresh[0] === k) ? usd(p.exclusive_cents || 100) : `+${cents(p.exclusive_extra_cents || 50)}`;
     });
   }
+  // ---- several ZIPs in one order: each priced on its own, per property, with the same choices
+  function priceOf(qq) {
+    const p = qq.pricing || pricing;
+    if (product === "exclusive") {
+      const h = Object.entries(qq.locks || {}).filter(([, l]) => l.yours).map(([k]) => k);
+      const blocked = picked.filter((k) => (qq.taken_types || []).includes(k));
+      const fresh = picked.filter((k) => !h.includes(k));
+      const per = h.length ? (p.exclusive_extra_cents || 50) * fresh.length
+        : fresh.length ? (p.exclusive_cents || 100) + (p.exclusive_extra_cents || 50) * (fresh.length - 1) : 0;
+      const n = qq.zip_total;
+      return { n, cents: fresh.length ? Math.max(Math.ceil(n * per - 1e-9), Math.round(p.min_order_usd * 100)) : 0,
+               blocked: blocked.length ? "Another company holds this ZIP for " + blocked.join(", ") : "" };
+    }
+    if (product === "premier" && (qq.taken_types || []).length) return { n: 0, cents: 0, blocked: "Premier lists are paused in this ZIP (it's exclusive to another company)." };
+    const vb = qq.value_bands || { bands: [] }, mult = p.value_multipliers || [1];
+    let raw = 0, n = 0;
+    if (vb.bands.length) for (let i = vLo; i <= vHi; i++) { n += vb.bands[i] || 0; raw += (vb.bands[i] || 0) * perHome() * (mult[Math.min(i, mult.length - 1)] || 1); }
+    else { n = qq.zip_total; raw = n * perHome(); }
+    const full = n ? Math.max(Math.ceil(raw - 1e-9), Math.round(p.min_order_usd * 100)) : 0;
+    const blocked = picked.filter((k) => (qq.taken_types || []).includes(k));
+    return { n, cents: qq.member ? Math.round(full / 2) : full, blocked: blocked.length ? "Another company holds this ZIP for " + blocked.join(", ") : "" };
+  }
+  function drawCart() {
+    if (!q) return;
+    const all = [q, ...extra];
+    const parts = all.map(priceOf);
+    $("cartRows").innerHTML = all.map((qq, i) => `<div class="zr"><b>ZIP ${esc(qq.zip)}</b><span class="muted">${parts[i].n.toLocaleString()} homes · ${usd(parts[i].cents)}</span>
+        ${i ? `<button type="button" class="x" data-rm="${i - 1}" aria-label="Remove ZIP ${esc(qq.zip)}">×</button>` : "<span></span>"}
+        ${parts[i].blocked ? `<div class="blk">${esc(parts[i].blocked)}</div>` : ""}</div>`).join("");
+    $("cartRows").querySelectorAll("[data-rm]").forEach((b) => b.onclick = () => { extra.splice(+b.dataset.rm, 1); updatePrice(); });
+    if (extra.length) {
+      const tot = parts.reduce((a, x) => a + x.cents, 0), homes = parts.reduce((a, x) => a + x.n, 0);
+      $("qPrice").textContent = usd(tot);
+      $("qRate").textContent = `(${all.length} ZIP codes, ${homes.toLocaleString()} homes, each ZIP priced per property)`;
+      $("bBtn").textContent = product === "exclusive" ? `Lock ${all.length} ZIPs` : `Buy ${all.length} ZIPs`;
+    } else {
+      $("bBtn").textContent = product === "exclusive" ? "Lock this ZIP" : "Buy sheet";
+    }
+  }
+  async function addZip() {
+    const z = $("addZip").value.trim();
+    if (!/^\d{5}$/.test(z)) { $("cartMsg").innerHTML = '<span class="err">Enter a 5-digit ZIP.</span>'; return; }
+    if ([q, ...extra].some((x) => x.zip === z)) { $("cartMsg").innerHTML = '<span class="err">That ZIP is already in this order.</span>'; return; }
+    if (extra.length >= 24) { $("cartMsg").innerHTML = '<span class="err">Up to 25 ZIPs per order.</span>'; return; }
+    $("cartMsg").innerHTML = '<span class="spinner"></span>Counting properties…';
+    try {
+      const qq = await api(`/api/data/quote?zip=${z}&classes=${encodeURIComponent($("cls").value)}`);
+      if (!qq.count) throw new Error(`No matching properties in ZIP ${z} inside our coverage area yet.`);
+      extra.push(qq); $("addZip").value = ""; $("cartMsg").textContent = ""; updatePrice();
+    } catch (e) { $("cartMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  }
+  $("addZipBtn").addEventListener("click", addZip);
+  $("addZip").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addZip(); } });
+
   function updatePrice() {
     if (!q || !q.zip_total) return;
-    if (product === "exclusive") return exclusivePrice();
+    if (product === "exclusive") { exclusivePrice(); return drawCart(); }
     const vb = q.value_bands || { bands: [] };
     const mult = pricing.value_multipliers || [1];
     const n = selCount();
@@ -261,6 +317,7 @@
     $("qRate").textContent = `(${what} × ${n.toLocaleString()} homes at ${banded ? "about " : ""}${+(avg / (q.member ? 2 : 1)).toFixed(2)}¢ each${banded ? ", priced by home value" : ""}${atMin ? `, $${pricing.min_order_usd} minimum` : ""})`;
     $("memberLine").innerHTML = q.member ? '<span class="ok">Member price: half off.</span>'
       : `<span class="muted">Members pay half. <a href="/join">$115/month</a> includes unlimited single-property reports and the CRM.</span>`;
+    drawCart();
     // what each unticked option would add
     document.querySelectorAll("#typePick [data-c]").forEach((el) => {
       const on = picked.includes(el.dataset.c);
@@ -302,7 +359,10 @@
     $("bBtn").disabled = true;
     $("bMsg").innerHTML = '<span class="spinner"></span>Creating your order…';
     try {
-      const r = await api("/api/data/order", { method: "POST", json: { email, zip: q.zip, classes: $("cls").value.split(","), types: picked, product, value_lo: vLo, value_hi: vHi } });
+      const body = { email, classes: $("cls").value.split(","), types: picked, product, value_lo: vLo, value_hi: vHi };
+      const r = extra.length
+        ? await api("/api/data/orders", { method: "POST", json: { ...body, zips: [q.zip, ...extra.map((x) => x.zip)] } })
+        : await api("/api/data/order", { method: "POST", json: { ...body, zip: q.zip } });
       location.href = r.checkout_url || r.order_url;
     } catch (e) {
       $("bMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;

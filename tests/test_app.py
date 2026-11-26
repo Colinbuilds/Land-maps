@@ -317,3 +317,25 @@ def test_safety_lockouts_headers_backups_and_reset(monkeypatch, tmp_path):
     assert cl.post("/api/roof/reset", json={"token": tok, "password": "again1234"}).status_code == 400
     assert accounts.login(em, "newpass123")
     assert cl.post("/api/roof/forgot", json={"email": "nobody@x.test"}).json()["ok"]
+
+
+def test_buy_several_zips_in_one_order(monkeypatch):
+    from app import datastore as ds
+    fake = {"count": 100, "blocked": None}
+    monkeypatch.setattr(ds, "quote", lambda z, *a, **k: {**fake, "zip": z, "price_cents": 2500 if z != "68001" else 4000,
+                                                         "value_lo": 0, "value_hi": 8, "new_types": ["lawn"]})
+    g = ds.create_group("buyer@x.test", ["68022", "68001", "68022"], ["R"], ["lawn"])
+    assert len(g["orders"]) == 2 and {o["zip"] for o in g["orders"]} == {"68022", "68001"}  # duplicates dropped
+    assert all(o["grp"] == g["grp"] for o in g["orders"])
+    assert not ds.group_paid(g["grp"], 1000)  # short payment: nothing marked
+    monkeypatch.setattr(ds, "ensure_dataset", lambda *a, **k: "building")
+    assert ds.group_paid(g["grp"], 6500)
+    assert all(o["status"] == "processing" for o in ds.group_orders(g["grp"]))
+    cl = TestClient(app)
+    r = cl.get(f"/api/data/orders/{g['grp']}?t={g['token']}").json()
+    assert len(r["orders"]) == 2 and r["amount_cents"] == 6500
+    assert cl.get(f"/api/data/orders/{g['grp']}?t=wrong").status_code == 404
+    fake["blocked"] = "ZIP is exclusive"
+    import pytest
+    with pytest.raises(PermissionError):
+        ds.create_group("buyer@x.test", ["68022"], ["R"], ["lawn"])

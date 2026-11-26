@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your ZIP Orders</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/styles.css?v=9">
+<style>
+  .zrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; padding: 12px 0; border-top: 1px solid var(--line); align-items: center; }
+  .zrow:first-child { border-top: 0; }
+  .zrow b { font-size: 16px; }
+  .pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 9px; border-radius: 99px; background: #eef2f7; color: #334155; }
+  .pill.ready { background: #dcfce7; color: #166534; } .pill.processing { background: #e0ecff; color: #1d4ed8; } .pill.awaiting_payment { background: #fef3c7; color: #92400e; }
+  .progress { height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; grid-column: 1 / -1; }
+  .progress div { height: 100%; background: var(--accent); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span><span id="bizName">Property Data</span></div>
+  <div class="contact" id="bizContact"></div>
+</header>
+<main style="max-width:720px">
+  <div class="card stack" id="box"><p class="muted"><span class="spinner"></span>Loading your order…</p></div>
+  <p class="small muted">Keep this page's link: it's how you get back to every ZIP's download.</p>
+</main>
+<script src="/static/common.js?v=19"></script>
+<script>
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const grp = location.pathname.split("/").pop();
+  const qs = new URLSearchParams(location.search);
+  const t = qs.get("t"), sid = qs.get("session_id");
+  const usd = (c) => "$" + (c / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const LABEL = { awaiting_payment: "waiting for payment", processing: "measuring", ready: "ready", conflict: "refund due" };
+  let first = true;
+  async function load() {
+    let g;
+    try { g = await api(`/api/data/orders/${grp}?t=${encodeURIComponent(t || "")}${first && sid ? `&session_id=${encodeURIComponent(sid)}` : ""}`); }
+    catch (e) { $("box").innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+    first = false;
+    if (g.contact && g.contact.name) $("bizName").textContent = g.contact.name;
+    $("bizContact").textContent = [g.contact?.phone, g.contact?.email].filter(Boolean).join(" · ");
+    const ready = g.orders.filter((o) => o.status === "ready").length;
+    let pay = "";
+    if (g.unpaid) pay = g.stripe ? `<button id="pay">Pay ${usd(g.amount_cents)} by card</button>`
+      : `<p><b>We've got your order.</b> We'll email an invoice to ${esc(g.email)}. As soon as it's paid, every ZIP is measured and this page updates with the downloads.</p>`;
+    $("box").innerHTML = `<div class="muted small">Order ${esc(g.grp)} · ${esc(g.email)}</div>
+      <h1 style="margin:0">${g.orders.length} ZIP codes: ${g.count.toLocaleString()} properties</h1>
+      <div class="muted">${usd(g.amount_cents)} · ${(g.orders[0].type_labels || []).map(esc).join(", ")} · ${ready} of ${g.orders.length} ready</div>
+      ${pay}
+      <div>${g.orders.map((o) => {
+        const p = o.progress || {}, pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+        return `<div class="zrow"><div><b>ZIP ${esc(o.zip)}</b> <span class="pill ${esc(o.status)}">${esc(LABEL[o.status] || o.status)}</span>
+            <div class="small muted">${(o.count || 0).toLocaleString()} properties · ${usd(o.amount_cents)}${o.value_label && o.value_label !== "All home values" ? ` · ${esc(o.value_label)}` : ""}</div></div>
+          <a class="btn ${o.status === "ready" ? "" : "secondary"}" href="${esc(o.link)}">${o.status === "ready" ? "Download" : "Open"}</a>
+          ${o.status === "processing" && p.total ? `<div class="progress"><div style="width:${pct}%"></div></div>` : ""}</div>`;
+      }).join("")}</div>`;
+    const b = $("pay");
+    if (b) b.onclick = async () => {
+      b.disabled = true;
+      try { location.href = (await api(`/api/data/orders/${grp}/checkout?t=${encodeURIComponent(t)}`, { method: "POST" })).checkout_url; }
+      catch (e) { b.disabled = false; alert(e.message); }
+    };
+    if (g.orders.some((o) => o.status === "processing")) setTimeout(load, 6000);
+  }
+  load();
+})();
+</script>
+</body>
+</html>

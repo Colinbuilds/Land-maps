@@ -163,6 +163,9 @@ def init():
                 con.execute(f"ALTER TABLE orders ADD COLUMN {col} INTEGER")
         if "new_types" not in have:  # exclusive orders: the types this order adds (charged)
             con.execute("ALTER TABLE orders ADD COLUMN new_types TEXT")
+        for col in ("grp", "grp_token"):  # several ZIPs bought together, paid in one checkout
+            if col not in have:
+                con.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
         # Exclusive ZIP locks: one holder per (ZIP, measurement type)
         con.execute("""CREATE TABLE IF NOT EXISTS zip_locks (
             zip TEXT NOT NULL, type TEXT NOT NULL, email TEXT NOT NULL, order_id TEXT NOT NULL,
@@ -531,7 +534,7 @@ def dataset_progress(zip_code: str, classes: list[str]) -> dict:
 # ------------------------------------------------------------------- orders
 def create_order(email: str, zip_code: str, classes: list[str], types=None, site: str = "",
                  product: str = "standard", member: bool = False, lo: int | None = None, hi: int | None = None,
-                 account_email: str | None = None) -> dict:
+                 account_email: str | None = None, notify: bool = True) -> dict:
     """``account_email`` is the signed-in company's email: lock-holder rights
     (buying in their own exclusive ZIP) come from it, never from a typed email."""
     types = normalize_types(types)
@@ -561,7 +564,8 @@ def create_order(email: str, zip_code: str, classes: list[str], types=None, site
                      "awaiting_payment", tok, time.time(), ",".join(types), site, product, q["value_lo"], q["value_hi"],
                      new_types))
     o = get_order(oid)
-    _email_new_order(o)
+    if notify:
+        _email_new_order(o)
     return o
 
 
@@ -912,3 +916,104 @@ def totals_all() -> dict:
             zips.append({"key": t["key"], "zip": t["zip"], **{k: v for k, v in t["all"].items() if k not in ("band", "label")}})
     grand = {"homes": sum(z["homes"] for z in zips), **{k: sum(z[k] for z in zips) for k, _ in TOTAL_KEYS}}
     return {"zips": zips, "all": grand, "columns": [{"key": k, "label": l} for k, l in TOTAL_KEYS]}
+
+
+# ------------------------------------------------------ several ZIPs at once
+MAX_ZIPS_PER_ORDER = 25
+
+
+def create_group(email: str, zips: list[str], classes: list[str], types=None, site: str = "",
+                 product: str = "standard", member: bool = False, lo: int | None = None, hi: int | None = None,
+                 account_email: str | None = None) -> dict:
+    """Buy several ZIPs together: one order per ZIP (each with its own
+    download page and, for exclusives, its own lock), paid in one checkout.
+    Every ZIP is checked before any order is made."""
+    zips = list(dict.fromkeys(z for z in zips if z))
+    if not zips:
+        raise LookupError("Add at least one ZIP.")
+    if len(zips) > MAX_ZIPS_PER_ORDER:
+        raise PermissionError(f"Up to {MAX_ZIPS_PER_ORDER} ZIPs per order.")
+    holder = (account_email or "").lower() or None
+    for z in zips:  # nothing is created if any ZIP can't be sold
+        q = quote(z, classes, normalize_types(types), product, member, lo, hi, email=holder)
+        if not q["count"]:
+            raise LookupError(f"ZIP {z}: no matching properties in our service area.")
+        if q["blocked"]:
+            raise PermissionError(f"ZIP {z}: {q['blocked']}")
+    grp, gtok = secrets.token_hex(4).upper(), secrets.token_urlsafe(16)
+    orders = [create_order(email, z, classes, types, site, product, member, lo, hi, account_email=account_email,
+                           notify=False) for z in zips]
+    with _lock, _db() as con:
+        con.executemany("UPDATE orders SET grp=?, grp_token=? WHERE id=?", [(grp, gtok, o["id"]) for o in orders])
+    orders = [get_order(o["id"]) for o in orders]
+    _email_new_group(grp, gtok, orders, site)
+    return {"grp": grp, "token": gtok, "orders": orders}
+
+
+def _email_new_group(grp: str, gtok: str, orders: list[dict], site: str = ""):
+    from . import mailer
+    total = sum(o["amount_cents"] for o in orders)
+    homes = sum(o["count"] or 0 for o in orders)
+    lines = "\n".join(f"  ZIP {o['zip']}: {o['count']:,} properties, ${o['amount_cents'] / 100:,.2f}" for o in orders)
+    link = f"{mailer.site_url(site)}/data/orders/{grp}?t={gtok}"
+    what = order_what(orders[0]) + f"\nHomes: {range_label(*order_bands(orders[0]))}"
+    mailer.notify_owner(f"New data order {grp}: {len(orders)} ZIPs, ${total / 100:,.2f}",
+                        f"Buyer: {orders[0]['email']}\n{lines}\nMeasurements: {what}\nTotal: ${total / 100:,.2f}\n\n{link}",
+                        reply_to=orders[0]["email"])
+    mailer.send(orders[0]["email"], f"Your order {grp}: {len(orders)} ZIP codes",
+                f"Thanks for your order.\n\n{lines}\n\n{homes:,} properties in all. Measurements: {what}\n"
+                f"Total: ${total / 100:,.2f}\n\nYour order page (keep this link, it's how you get your downloads):\n{link}\n")
+
+
+def group_orders(grp: str) -> list[dict]:
+    with _db() as con:
+        return [dict(r) for r in con.execute("SELECT * FROM orders WHERE grp=? ORDER BY zip", (grp.upper(),))]
+
+
+def stripe_checkout_group(grp: str, base_url: str) -> str:
+    """One Stripe Checkout for every unpaid ZIP in the group (a line per ZIP)."""
+    orders = [o for o in group_orders(grp) if o["status"] == "awaiting_payment"]
+    if not orders:
+        raise LookupError("nothing to pay")
+    key = os.environ["STRIPE_SECRET_KEY"]
+    tok = orders[0]["grp_token"]
+    data = {"mode": "payment", "customer_email": orders[0]["email"], "client_reference_id": f"G-{grp}",
+            "success_url": f"{base_url}/data/orders/{grp}?t={tok}&session_id={{CHECKOUT_SESSION_ID}}",
+            "cancel_url": f"{base_url}/data", "metadata[group_id]": grp}
+    for i, o in enumerate(orders):
+        data.update({f"line_items[{i}][quantity]": "1", f"line_items[{i}][price_data][currency]": "usd",
+                     f"line_items[{i}][price_data][unit_amount]": str(o["amount_cents"]),
+                     f"line_items[{i}][price_data][product_data][name]": f"ZIP {o['zip']}: {o['count']:,} properties",
+                     f"line_items[{i}][price_data][product_data][description]": order_what(o)})
+    r = httpx.post("https://api.stripe.com/v1/checkout/sessions", data=data, auth=(key, ""), timeout=30)
+    r.raise_for_status()
+    sess = r.json()
+    with _lock, _db() as con:
+        con.execute("UPDATE orders SET stripe_session=? WHERE grp=?", (sess["id"], grp))
+    return sess["url"]
+
+
+def group_paid(grp: str, amount_total: int, note: str = "stripe") -> bool:
+    """Mark every ZIP in the group paid once Stripe confirms the full amount."""
+    orders = group_orders(grp)
+    due = sum(o["amount_cents"] for o in orders if o["status"] == "awaiting_payment")
+    if not orders or int(amount_total) < due:
+        return False
+    for o in orders:
+        if o["status"] == "awaiting_payment":
+            mark_paid(o["id"], note=note)
+    return True
+
+
+def stripe_confirm_group(grp: str, session_id: str) -> bool:
+    orders = group_orders(grp)
+    if not stripe_enabled() or not orders or not session_id or session_id != orders[0].get("stripe_session"):
+        return False
+    r = httpx.get(f"https://api.stripe.com/v1/checkout/sessions/{session_id}",
+                  auth=(os.environ["STRIPE_SECRET_KEY"], ""), timeout=30)
+    if r.status_code != 200:
+        return False
+    s_ = r.json()
+    if s_.get("payment_status") == "paid" and (s_.get("metadata") or {}).get("group_id") == grp:
+        return group_paid(grp, int(s_.get("amount_total") or 0))
+    return False
