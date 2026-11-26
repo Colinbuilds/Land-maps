@@ -2530,3 +2530,16 @@ def cov_pull(cbsa: str):
     datastore.prebuild_all(["R"], zips=zs)
     cv._set("metros", "cbsa", cbsa, status="live", note=f"Measuring {len(zs)} ZIPs")
     return {"queued": len(zs), "queue": datastore.prebuild_status()}
+
+
+
+# ================================================================ owner ZIP map
+@app.get("/command/map")
+def page_zipmap():
+    return FileResponse(STATIC / "zipmap.html")
+
+
+@app.get("/api/admin/zipmap", dependencies=[Depends(admin)])
+def admin_zipmap():
+    """Every covered ZIP with purchases, revenue, measured and locked."""
+    return datastore.zip_heat()

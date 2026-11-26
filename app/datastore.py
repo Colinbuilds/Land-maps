@@ -1043,3 +1043,67 @@ def stripe_confirm_group(grp: str, session_id: str) -> bool:
     if s_.get("payment_status") == "paid" and (s_.get("metadata") or {}).get("group_id") == grp:
         return group_paid(grp, int(s_.get("amount_total") or 0))
     return False
+
+
+# ------------------------------------------------------ owner ZIP heat map
+_ZIP_SHAPES = DATA_DIR / "zip_shapes.json"
+_shape_lock = threading.Lock()
+
+
+def zip_shapes(zips: list[str]) -> dict:
+    """{zip: simplified GeoJSON geometry}, fetched from Census in batches and
+    kept on disk (ZIP outlines rarely change)."""
+    from .gis import _esri_to_geojson_geom, get_json
+    with _shape_lock:
+        have = json.loads(_ZIP_SHAPES.read_text()) if _ZIP_SHAPES.exists() else {}
+        need = [z for z in zips if z not in have]
+        for i in range(0, len(need), 40):
+            chunk = need[i:i + 40]
+            d = get_json(bulk._ZCTA + "/query", {"where": "ZCTA5 IN (" + ",".join(f"'{z}'" for z in chunk) + ")",
+                                                  "outFields": "ZCTA5", "outSR": 4326, "geometryPrecision": 4,
+                                                  "maxAllowableOffset": 0.0008, "f": "json"}, ttl=365 * 86400)
+            for f in d.get("features") or []:
+                g = _esri_to_geojson_geom(f["geometry"])
+                if g:
+                    have[f["attributes"]["ZCTA5"]] = g
+        if need:
+            _ZIP_SHAPES.write_text(json.dumps(have))
+    return {z: have[z] for z in zips if z in have}
+
+
+def zip_heat() -> dict:
+    """Every ZIP we cover, with how often it's been bought, revenue, whether
+    it's measured and whether it's locked: a GeoJSON for the owner's map."""
+    from . import coverage
+    zips = set(service_zips())
+    for m in coverage.metros():
+        if m["status"] == "live" and isinstance(m.get("zips"), list):
+            zips |= set(m["zips"])
+    stats: dict = {}
+    for o in list_orders(100000):
+        z = o["zip"]
+        s = stats.setdefault(z, {"orders": 0, "paid": 0, "cents": 0, "pending": 0, "last": 0})
+        s["orders"] += 1
+        if o["status"] in ("processing", "ready"):
+            s["paid"] += 1
+            s["cents"] += o["amount_cents"] or 0
+            s["last"] = max(s["last"], o.get("paid") or o["created"])
+        elif o["status"] == "awaiting_payment":
+            s["pending"] += 1
+    zips |= set(stats)
+    measured = {p.stem.split("_")[0] for p in ZIPS_DIR.glob("*.json")
+                if (json.loads(p.read_text()) or {}).get("status") == "ready"}
+    with _db() as con:
+        locked = {r[0] for r in con.execute("SELECT DISTINCT zip FROM zip_locks WHERE until>?", (time.time(),))}
+    shapes = zip_shapes(sorted(zips))
+    feats = []
+    for z in sorted(zips):
+        if z not in shapes:
+            continue
+        s = stats.get(z, {"orders": 0, "paid": 0, "cents": 0, "pending": 0, "last": 0})
+        feats.append({"type": "Feature", "geometry": shapes[z],
+                      "properties": {"zip": z, **s, "measured": z in measured, "locked": z in locked}})
+    return {"type": "FeatureCollection", "features": feats,
+            "totals": {"zips": len(feats), "bought": sum(1 for f in feats if f["properties"]["paid"]),
+                       "measured": sum(1 for f in feats if f["properties"]["measured"]),
+                       "cents": sum(f["properties"]["cents"] for f in feats)}}

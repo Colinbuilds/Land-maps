@@ -49,7 +49,7 @@
     <div class="panel"><div class="tablewrap"><table class="t" id="list"></table></div></div>
   </div>
 </div>
-<script src="/static/common.js?v=20"></script>
+<script src="/static/common.js?v=21"></script>
 <script>
 (async function () {
   const $ = (id) => document.getElementById(id);
@@ -157,6 +157,7 @@
       bg.querySelector("#approve").onclick = async () => {
         const fields = {}; bg.querySelectorAll("[data-f]").forEach((i) => { if (i.value.trim()) fields[i.dataset.f] = i.value.trim(); });
         if (!fields.pin || !fields.address) { bg.querySelector("#amsg").innerHTML = '<span class="err">Parcel id and address fields are required.</span>'; return; }
+        if (!bg.querySelector("#where").value.trim() && !confirm("No homes-only filter: this county will pull EVERY parcel (commercial, farmland, vacant lots too). Approve anyway?")) return;
         const img = (bg.querySelector('input[name="img"]:checked') || {}).value;
         const imagery_url = img === "esri" ? "esri" : img === "custom" ? bg.querySelector("#imgUrl").value.trim() : null;
         bg.querySelector("#amsg").innerHTML = '<span class="spinner"></span>Setting up (LiDAR, photos, footprints)…';

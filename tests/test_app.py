@@ -376,3 +376,17 @@ def test_coverage_fields_approve_and_reload(tmp_path, monkeypatch):
     counties.COUNTIES.pop("test_xx")
     assert cv.load_saved_configs() == 1 and counties.COUNTIES["test_xx"]["parcels"]["fields"]["lot_sqft"] == ("ACRES", 43560.0)
     counties.COUNTIES.pop("test_xx")
+
+
+def test_zip_heat_counts_paid_purchases(monkeypatch):
+    from app import datastore as ds
+    monkeypatch.setattr(ds, "service_zips", lambda: ["99990", "99991"])
+    monkeypatch.setattr(ds, "zip_shapes", lambda zs: {z: {"type": "Point", "coordinates": [0, 0]} for z in zs})
+    monkeypatch.setattr(ds, "list_orders", lambda n: [
+        {"zip": "99990", "status": "ready", "amount_cents": 2500, "created": 1, "paid": 2},
+        {"zip": "99990", "status": "processing", "amount_cents": 3000, "created": 1, "paid": 3},
+        {"zip": "99991", "status": "awaiting_payment", "amount_cents": 2500, "created": 1}])
+    h = ds.zip_heat()
+    p = {f["properties"]["zip"]: f["properties"] for f in h["features"]}
+    assert p["99990"]["paid"] == 2 and p["99990"]["cents"] == 5500 and p["99991"]["paid"] == 0 and p["99991"]["pending"] == 1
+    assert h["totals"]["bought"] == 1
