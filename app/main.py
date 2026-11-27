@@ -95,8 +95,9 @@ def healthz():
 # ------------------------------------------------------------------- pages
 @app.get("/")
 def page_home():
-    """The customer site's front door (companies: reports, ZIP data, CRM)."""
-    return FileResponse(STATIC / "home.html")
+    """The customer site's front door: what the problem is, what membership is
+    worth, and the ZIP code lookup to buy data, all on one page."""
+    return FileResponse(STATIC / "data.html")
 
 
 @app.get("/estimate")
@@ -747,8 +748,10 @@ def _base_url(request: Request) -> str:
 
 
 @app.get("/data")
-def page_data():
-    return FileResponse(STATIC / "data.html")
+def page_data(request: Request):
+    """Buying ZIP data lives on the home page now; keep old links working."""
+    q = request.url.query
+    return RedirectResponse("/" + (f"?{q}" if q else "") + "#zipbox", status_code=301)
 
 
 @app.get("/data/order/{oid}")

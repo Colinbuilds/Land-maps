@@ -225,10 +225,16 @@ _PRUNE_DIRS = ("bin", "lidar", "json", "chunks", "ept", "lean")
 _cache_info: dict = {"bytes": 0, "limit": 0, "pruned": 0, "at": 0}
 
 
-def cache_limit_bytes() -> int:
-    """How big the download cache may grow: CACHE_MAX_GB, else 40% of the
-    disk (at most 40 GB). Measured sheets and orders live elsewhere and are
-    never touched."""
+def _reserve_bytes(total: float) -> float:
+    """Free space always kept on the volume: 5% of it, at least 20 GB."""
+    return max(20e9, 0.05 * total)
+
+
+def cache_limit_bytes(cache_bytes: int = 0) -> int:
+    """How big the download cache may grow. By default as big as the volume
+    allows: it's only trimmed when free space drops under 5% (20 GB min), so
+    a big volume keeps everything and measuring stays fast. CACHE_MAX_GB sets
+    a hard cap instead."""
     env = os.environ.get("CACHE_MAX_GB")
     if env:
         try:
@@ -237,32 +243,16 @@ def cache_limit_bytes() -> int:
             pass
     import shutil
     try:
-        total = shutil.disk_usage(str(CACHE_DIR)).total
+        du = shutil.disk_usage(str(CACHE_DIR))
     except Exception:
-        total = 20e9
-    return int(min(40e9, total * 0.4))
-
-
-def clear_orphans() -> int:
-    """Half-downloaded LiDAR tiles (raw .las, often hundreds of MB each) left
-    behind when the server restarted or ran out of memory mid-download."""
-    freed = 0
-    root = CACHE_DIR / "lidar"
-    if root.exists():
-        for fp in root.glob("*.las"):
-            try:
-                if time.time() - fp.stat().st_mtime > 3600:
-                    freed += fp.stat().st_size
-                    fp.unlink()
-            except OSError:
-                pass
-    return freed
+        return 1 << 62
+    return int(max(0.0, cache_bytes + du.free - _reserve_bytes(du.total)))
 
 
 def prune_cache() -> dict:
     """Delete the oldest cached downloads (map tiles, LiDAR, county answers)
-    once the cache is over its limit, down to 75% of it. Anything deleted is
-    simply downloaded again if it's needed."""
+    only when the cache passes its limit, down to 90% of it. Anything deleted
+    is simply downloaded again if it's needed."""
     files = []
     for d in _PRUNE_DIRS:
         root = CACHE_DIR / d
@@ -277,11 +267,11 @@ def prune_cache() -> dict:
                     continue
                 files.append((st.st_mtime, st.st_size, fp))
     size = sum(f[1] for f in files)
-    limit = cache_limit_bytes()
+    limit = cache_limit_bytes(size)
     freed = 0
     if size > limit:
         files.sort()
-        target = size - int(limit * 0.75)
+        target = size - int(limit * 0.9)
         for _, sz, fp in files:
             if freed >= target:
                 break

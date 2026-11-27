@@ -193,21 +193,31 @@ function measurementCards(r, keys, labels) {
   ] : [
     { href: "/", label: "Home", icon: "🏠" },
     { href: "/reports", label: "Reports", icon: "📐" },
-    { href: "/data", label: "Buy data", icon: "📄" },
     { href: "/crm", label: "CRM", icon: "📋" },
-    { href: "/join", label: "Membership", icon: "⭐" },
+    { href: "/join", label: "Membership", icon: "⭐", cls: "member" },
   ];
   const tabNow = (location.hash || "#status").slice(1);
   const isActive = (h) => (h === "/" ? here === "/" : h.startsWith("/command#") ? h.slice(9) === tabNow
-    : here === h || here.startsWith(h + "/") || (h === "/reports" && here.startsWith("/r/")));
+    : here === h || here.startsWith(h + "/") || (h === "/reports" && here.startsWith("/r/")) || (h === "/" && here === "/data"));
   const build = () => {
     const header = document.querySelector("header.top");
     if (header && !header.querySelector(".site-nav")) {
       const nav = document.createElement("nav");
       nav.className = "site-nav";
       nav.setAttribute("aria-label", "Site");
-      nav.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""}">${l.label}</a>`).join("");
+      nav.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""} ${l.cls || ""}">${l.label}</a>`).join("");
       header.insertBefore(nav, header.children[1] || null);
+    }
+    // the logo is always the way home
+    const brand = header && header.querySelector(".brand");
+    if (brand && brand.tagName !== "A") {
+      const a = document.createElement("a");
+      a.className = brand.className;
+      a.href = owner ? "/command" : "/";
+      a.setAttribute("aria-label", "Home");
+      a.innerHTML = brand.innerHTML;
+      if (brand.id) a.id = brand.id;
+      brand.replaceWith(a);
     }
     if (!owner && !document.querySelector(".site-foot")) {  // legal links on every customer page
       const f = document.createElement("footer");
@@ -220,7 +230,7 @@ function measurementCards(r, keys, labels) {
       const bar = document.createElement("nav");
       bar.className = "tabbar" + (links.length > 6 ? " many" : "");
       bar.setAttribute("aria-label", "Site");
-      bar.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""}"><span aria-hidden="true">${l.icon}</span>${l.label}</a>`).join("");
+      bar.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""} ${l.cls || ""}"><span aria-hidden="true">${l.icon}</span>${l.label}</a>`).join("");
       document.body.appendChild(bar);
     }
   };

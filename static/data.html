@@ -3,15 +3,48 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Property Measurement Data</title>
-<meta name="description" content="Every home in a ZIP code, already measured: grass-only lawn, driveway, sidewalk, beds and more. 25 properties free.">
+<title>Home Service Info</title>
+<meta name="description" content="Stop driving out to quote. Every home in your ZIP already measured (lawn, driveway, roof, walls) with the owner's name and your price. 25 homes free.">
 <meta name="theme-color" content="#f6f7f2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=19">
+<link rel="stylesheet" href="/static/styles.css?v=20">
 <style>
+  /* home page: the problem, membership value, everything tiles */
+  .dp .pains { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .dp .pain { padding: 22px; display: grid; gap: 6px; align-content: start; }
+  .dp .pain .big { font-family: var(--display, "Manrope"), sans-serif; font-size: 40px; font-weight: 800; letter-spacing: -.03em; color: #b91c1c; line-height: 1; }
+  .dp .pain b { font-size: 17px; } .dp .pain p { margin: 0; color: var(--muted); font-size: 15px; }
+  .dp .fix { margin-top: 16px; padding: 24px; display: flex; gap: 20px; align-items: center; justify-content: space-between; flex-wrap: wrap; border: 2px solid #bbe5c8; }
+  .dp .fix h3 { margin: 0 0 6px; font-size: 22px; } .dp .fix p { margin: 0; color: var(--muted); max-width: 720px; }
+  .dp .mv { padding: 22px; }
+  .dp .mv-top { display: flex; gap: 14px; align-items: end; flex-wrap: wrap; margin-bottom: 14px; }
+  .dp .mv-top label { display: grid; gap: 4px; font-weight: 600; font-size: 14px; }
+  .dp .mv-top input { max-width: 160px; min-height: 46px; font-size: 18px; font-weight: 700; }
+  .dp table.mvt { width: 100%; border-collapse: collapse; font-size: 15.5px; }
+  .dp table.mvt th, .dp table.mvt td { padding: 11px 10px; border-bottom: 1px solid var(--hair); text-align: right; font-variant-numeric: tabular-nums; }
+  .dp table.mvt th:first-child, .dp table.mvt td:first-child { text-align: left; }
+  .dp table.mvt td.save { color: #15803d; font-weight: 800; }
+  .dp table.mvt td.mem { font-weight: 700; }
+  .dp table.mvt td small { display: block; color: var(--muted); font-size: 12.5px; font-weight: 400; }
+  .dp .mv-call { margin-top: 16px; background: #e3f5e9; border-radius: 16px; padding: 16px 18px; font-size: 17px; }
+  .dp .mv-call b { color: #15803d; }
+  .dp .mv-ctas { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  .dp .tiles4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .dp .tile4 { padding: 20px; display: grid; gap: 8px; align-content: start; color: inherit; text-decoration: none; transition: transform .12s, border-color .12s; }
+  .dp .tile4:hover { transform: translateY(-2px); border-color: #86d3a0; }
+  .dp .tile4 .ic { font-size: 28px; } .dp .tile4 h3 { margin: 0; font-size: 20px; } .dp .tile4 p { margin: 0; color: var(--muted); font-size: 15px; }
+  .dp .tile4 b { color: #15803d; }
+  .dp .signed { background: #fff; border-radius: 16px; padding: 12px 14px; margin-bottom: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  @media (max-width: 640px) {
+    .dp table.mvt thead { display: none; }
+    .dp table.mvt tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 8px; padding: 12px 0; border-bottom: 1px solid var(--hair); }
+    .dp table.mvt td { border: 0; padding: 0; text-align: left !important; }
+    .dp table.mvt td:first-child { grid-column: 1 / -1; margin-bottom: 6px; }
+    .dp table.mvt td[data-l]::before { content: attr(data-l); display: block; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  }
   /* ------------------------------------------------------------------
      Page-scoped design for /data. Everything is under body.dp so the
      shared styles.css stays untouched for the other pages.
@@ -381,7 +414,7 @@
 </head>
 <body class="dp">
 <header class="top">
-  <div class="brand"><span class="dot"></span><span id="bizName">Property Data</span></div>
+  <div class="brand"><span class="dot"></span><span id="bizName">Home Service Info</span></div>
   <div class="contact" id="bizContact"></div>
 </header>
 <main>
@@ -391,9 +424,10 @@
     <div class="wrap">
       <div class="hero">
         <div>
-          <p class="eyebrow">For lawn, snow, concrete &amp; siding companies</p>
-          <h1>Price every lawn in a ZIP code <span class="soft-t">before you drive anywhere.</span></h1>
-          <p class="lead">Stop measuring yards on satellite maps one at a time, or driving out just to write a quote. Every home in your ZIP, already measured. One spreadsheet, ready in minutes.</p>
+          <div id="me"></div>
+          <p class="eyebrow">For lawn, snow, concrete, roofing, siding &amp; every home-service trade</p>
+          <h1>Stop driving out to quote. <span class="soft-t">Every home in your ZIP is already measured.</span></h1>
+          <p class="lead">Lawn, driveway, sidewalk, roof and walls for every house, with the owner's name and your price on each one. Mail them, call them, quote them before you ever leave the shop. Check your ZIP and get 25 homes free:</p>
           <div class="soft" id="zipbox">
             <div class="zipform">
               <input type="text" id="zip" inputmode="numeric" maxlength="5" placeholder="ZIP code" aria-label="ZIP code" autocomplete="postal-code">
@@ -501,6 +535,65 @@
           <a class="btn secondary" id="sDl" download="sample.csv" href="#">Download CSV</a>
         </div>
         <div class="tablewrap"><table id="sampleTable"></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ the problem -->
+  <section class="sec" id="problem">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">The problem</p>
+        <h2>Every quote starts with a trip you don't get paid for.</h2>
+        <p>Measuring is the hidden cost of every home-service company. It eats your evenings, your gas and your crew's time, and most of the quotes it produces never turn into a job.</p>
+      </div>
+      <div class="pains">
+        <div class="soft pain"><span class="big">~$12</span><b>a home to drive out and measure</b><p>Gas, 20-30 minutes and a truck off the route, just to write a number. Do that for every lead and the leads that never book cost you the most.</p></div>
+        <div class="soft pain"><span class="big">330 hrs</span><b>to trace 5,000 yards on a satellite map</b><p>About 4 minutes a home, and you still can't see the beds, decks and driveway you're not mowing. That's two months of someone's full-time job.</p></div>
+        <div class="soft pain"><span class="big">0</span><b>prices on the postcards you mail now</b><p>"Call for a free estimate" goes in the trash. A card with their own home from above and their exact price gets the phone to ring.</p></div>
+      </div>
+      <div class="soft fix">
+        <div><p class="eyebrow" style="margin:0 0 8px">The fix</p>
+          <h3>Every home measured, priced at your rates and ready to mail.</h3>
+          <p>Pick a ZIP. You get one row per house: grass-only lawn, parkway, driveway, sidewalk, patios, beds, roof and walls, the owner's name, and your price for each service, worked out from your own rates. Quote on the first call, mail postcards with real prices, and plan routes before the season starts.</p></div>
+        <a class="btn arrow" href="#zipbox">Check my ZIP</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ membership value -->
+  <section class="sec tint" id="member-value">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Membership</p>
+        <h2>Half off every ZIP sheet. <span class="soft-t">It pays for itself on the first one.</span></h2>
+        <p id="mvLead">Members pay half for every ZIP sheet and Premier folder, get unlimited property reports for their trades, postcards for any home, and the CRM.</p>
+      </div>
+      <div class="soft mv">
+        <div class="mv-top">
+          <label>Homes in your ZIP<input type="number" id="mvN" min="100" step="100" value="6000" inputmode="numeric"></label>
+          <span class="small muted">A typical suburban ZIP has 5,000 to 8,000 homes.</span>
+        </div>
+        <div class="tablewrap"><table class="mvt" id="mvTable"></table></div>
+        <div class="mv-call" id="mvCall"></div>
+        <p class="small muted" style="margin:10px 0 0" id="mvNote"></p>
+        <div class="mv-ctas"><a class="btn arrow" href="/join">Become a member</a><a class="btn secondary" href="#zipbox">Price my ZIP</a></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ everything -->
+  <section class="sec" id="everything">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">One place</p>
+        <h2>From a list of houses to booked, paid jobs.</h2>
+      </div>
+      <div class="tiles4">
+        <a class="soft tile4" href="/reports"><span class="ic">📐</span><h3>Property reports</h3><p>Type an address, get the measurements your trade prices from, as a PDF and a share link. Unlimited for members.</p><b>Order a report →</b></a>
+        <a class="soft tile4" href="#zipbox"><span class="ic">🗂️</span><h3>Whole ZIP codes</h3><p>Every home with its measurements, owner and your price. Lock a ZIP so no other company can buy it.</p><b>Pick a ZIP →</b></a>
+        <a class="soft tile4" href="/join"><span class="ic">✉️</span><h3>Mail-ready postcards</h3><p>Their home from above, their measurements and your price, as a print-ready file for every house on your list.</p><b>With membership →</b></a>
+        <a class="soft tile4" href="/crm"><span class="ic">📋</span><h3>CRM</h3><p>Estimates in one tap, weekly schedules, job photos and invoices from your phone. Free with membership.</p><b>Open the CRM →</b></a>
       </div>
     </div>
   </section>
@@ -640,7 +733,7 @@
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">Pricing</p>
-        <h2>Pay per home. No subscription.</h2>
+        <h2>Pay per home, <span class="soft-t">or half that as a member.</span></h2>
       </div>
       <div class="tiers">
         <div class="soft tier free"><span class="t-lbl">First 25 in any ZIP</span><div class="stat">Free</div><span class="t-sub">Instantly, on this page</span></div>
@@ -674,8 +767,9 @@
         <details><summary>Does it replace a site visit?</summary><p>It replaces the measuring, not your judgement. Measurements are estimates from aerial photos and LiDAR; confirm on the first visit before final billing. Every row has a quality flag so you know which to double-check.</p></details>
         <details><summary>How accurate is it?</summary><p>Lawn is traced on recent aerial photos, with LiDAR removing anything raised (decks, sheds, play sets, shrubs) and infrared confirming what's actually growing. Check the free sample against yards you've already measured.</p></details>
         <details><summary>What's in the free sample?</summary><p>25 real properties picked from across the ZIP, with every column the full sheet has. One free sample per email.</p></details>
-        <details><summary>Is owner information included?</summary><p>No. Sheets have addresses and measurements, not owner names or mailing addresses, so they're simple to use for postcards to "Resident".</p></details>
-        <details><summary>Which ZIPs can I pick?</summary><p>Any ZIP in Douglas, Sarpy, Lancaster and Cass counties, Nebraska today, with more counties coming.</p></details>
+        <details><summary>Is owner information included?</summary><p>Yes: the owner's name and mailing address from public county records, where the state allows it for marketing (not in Kansas). Follow do-not-mail and do-not-call requests.</p></details>
+        <details><summary>Which ZIPs can I pick?</summary><p>Omaha and Lincoln today, with Des Moines, Kansas City, Denver and more metros being added every week. Type your ZIP above to see if it's ready.</p></details>
+        <details><summary>What does membership add?</summary><p>Half off every ZIP sheet and Premier folder, unlimited property reports for your trades, postcard files for any home, and the CRM. Cancel any time.</p></details>
         <details><summary>How do I pay and download?</summary><p>Pay by card at checkout. You get a private order page that updates on its own and has the download button when the sheet is ready.</p></details>
       </div>
     </div>
@@ -692,13 +786,13 @@
   </section>
 
   <div class="wrap foot">
-    <p style="margin:0">Measurements come from public aerial photos, LiDAR and county parcel data, which can be a few years old. Coverage today: Douglas, Sarpy, Lancaster and Cass counties, Nebraska.</p>
+    <p style="margin:0">Measurements come from public aerial photos, LiDAR and county parcel data, which can be a few years old. Coverage grows every week: type your ZIP above to check.</p>
   </div>
 
   <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Get 25 free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=23"></script>
+<script src="/static/common.js?v=24"></script>
 <script src="/static/data.js?v=20"></script>
 <script>
 // Phone-only sticky "Get 25 free" button: shown once the ZIP box has scrolled
@@ -738,6 +832,44 @@
       if (top > innerHeight * 0.6) res.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
     }
   }).observe(res, { attributes: true, attributeFilter: ["class"] });
+})();
+</script>
+<script>
+// Home: what membership is worth on a real ZIP, from the live prices
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const usd = (c) => "$" + Math.round(c / 100).toLocaleString();
+  let P = { rate_cents: 10, extra_type_cents: 5, premier_cents: 25, min_order_usd: 25 }, B = { member_price_cents: 11500, credit_price_cents: 500, list_discount: 0.5 };
+  try { P = await api("/api/data/pricing"); } catch (e) {}
+  try { B = await api("/api/billing/plans"); } catch (e) {}
+  try {  // signed in: a quick way back to their tools
+    const me = await api("/api/roof/me");
+    $("me").innerHTML = `<div class="signed"><b>Welcome back, ${esc(me.name)}.</b><a class="btn" href="/reports">New report</a><a class="btn secondary" href="/crm">CRM</a></div>`;
+  } catch (e) {}
+  const off = Number(B.list_discount || 0.5), mem = Number(B.member_price_cents || 11500), rep = Number(B.credit_price_cents || 500);
+  $("mvLead").textContent = `Membership is ${usd(mem)} a month. Members pay ${Math.round(off * 100)}% less for every ZIP sheet and Premier folder, get unlimited property reports for their trades, postcards for any home, and the CRM.`;
+  function draw() {
+    const n = Math.max(100, Math.round(Number($("mvN").value) || 6000));
+    const minC = Number(P.min_order_usd || 25) * 100;
+    const sheet = (per) => Math.max(minC, n * per);
+    const rows = [
+      ["Lawn sheet", `${n.toLocaleString()} homes × ${P.rate_cents}¢`, sheet(P.rate_cents)],
+      ["Lawn + driveway + beds", `3 measurements: ${P.rate_cents}¢ + ${P.extra_type_cents}¢ + ${P.extra_type_cents}¢ a home`, sheet(P.rate_cents + 2 * P.extra_type_cents)],
+      ["Premier folder", `the full report PDF for every home, ${P.premier_cents}¢ each`, sheet(P.premier_cents)],
+      ["20 property reports a month", `${usd(rep)} each pay-as-you-go`, 20 * rep, true],
+    ];
+    $("mvTable").innerHTML = `<thead><tr><th>For one ZIP</th><th>Pay as you go</th><th>Member</th><th>You save</th></tr></thead><tbody>` +
+      rows.map(([k, sub, full, reports]) => {
+        const m = reports ? 0 : Math.round(full * (1 - off));
+        return `<tr><td><b>${k}</b><small>${sub}</small></td><td data-l="Pay as you go">${usd(full)}</td><td class="mem" data-l="Member">${reports ? "Included" : usd(m)}</td><td class="save" data-l="You save">${usd(full - m)}</td></tr>`;
+      }).join("") + "</tbody>";
+    const three = rows[1][2], saved = Math.round(three * off);
+    const months = saved / mem;
+    $("mvCall").innerHTML = `One 3-measurement sheet for a ${n.toLocaleString()}-home ZIP saves <b>${usd(saved)}</b>. That's ${months >= 1 ? `<b>${months.toFixed(1)} months</b> of membership` : `<b>${Math.round(months * 100)}%</b> of a month's membership`}, paid for by one order${months >= 1 ? "" : ", before you count unlimited reports"}.`;
+    $("mvNote").textContent = `Prices shown are the base rate per home. Homes in higher assessed-value bands cost a little more, and orders have a ${usd(minC)} minimum. Your exact price shows the moment you check your ZIP.`;
+  }
+  $("mvN").addEventListener("input", draw);
+  draw();
 })();
 </script>
 </body>

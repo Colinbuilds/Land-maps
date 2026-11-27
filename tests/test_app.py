@@ -463,3 +463,29 @@ def test_queue_goes_omaha_first(monkeypatch):
         {"cbsa": "45820", "zips": ["66603"], "lat": 39.0, "lon": -95.7}])
     # Omaha, then the priority metros in order (Des Moines, KC, Denver), then the rest nearest first
     assert ds.queue_order(["66603", "80202", "64105", "50309", "68102", "99999"]) == ["68102", "50309", "64105", "80202", "66603", "99999"]
+
+
+def test_cache_kept_while_disk_has_room(monkeypatch, tmp_path):
+    from collections import namedtuple
+    import shutil
+    from app import gis
+    monkeypatch.setattr(gis, "CACHE_DIR", tmp_path)
+    (tmp_path / "bin").mkdir()
+    for i in range(5):
+        (tmp_path / "bin" / f"t{i}").write_bytes(b"x" * 1000)
+    DU = namedtuple("DU", "total used free")
+    monkeypatch.delenv("CACHE_MAX_GB", raising=False)
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: DU(1e12, 2e11, 8e11))  # 1 TB, plenty free
+    assert gis.prune_cache()["bytes"] == 5000  # nothing deleted
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: DU(1e12, 1e12 - 5e10 - 3000, 5e10 - 3000))  # under the 5% reserve
+    assert gis.prune_cache()["bytes"] < 5000  # oldest trimmed
+
+
+def test_home_is_the_buy_page(client=None):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    r = c.get("/")
+    assert r.status_code == 200 and 'id="zipbox"' in r.text and 'id="member-value"' in r.text
+    r = c.get("/data?zip=68022", follow_redirects=False)
+    assert r.status_code == 301 and r.headers["location"] == "/?zip=68022#zipbox"
