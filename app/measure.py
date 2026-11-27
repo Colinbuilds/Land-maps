@@ -369,10 +369,21 @@ class Measurer:
         sqft_px = P.area / npx if npx else mos.sqft_per_px  # calibrate raster to vector area
         ft_px = math.sqrt(sqft_px)
 
+        # Line the photo up with the map: national photos (NAIP) can sit 10-20
+        # ft off the county's lot and building lines, which puts roof on the
+        # driveway and lawn on the roof. Slide the photo so its roof edges
+        # land on the building outlines.
+        coarse = "NAIP" in str(img.get("source", "")).upper() or str(img.get("tile_url", "")).startswith("export:")
+        shift_px = _photo_shift(mos.rgb, bldg_m, max(2, int(round(15.0 / ft_px)))) if coarse else (0, 0)
+        if shift_px != (0, 0):
+            mos.rgb = ndi.shift(mos.rgb, (-shift_px[0], -shift_px[1], 0), order=0, mode="nearest")
+
         hard = classify_hard(mos.rgb)
         ndvi = None
         try:
             ndvi = ndvi_for(mos, self.c.get("infrared"))
+            if ndvi is not None and shift_px != (0, 0):
+                ndvi = ndi.shift(ndvi, (-shift_px[0], -shift_px[1]), order=0, mode="nearest")
         except Exception:
             ndvi = None
         if ndvi is not None:
@@ -496,11 +507,36 @@ class Measurer:
         # ------------------------------------------------------------ driveway
         lot_hard = hard & parcel_m & ~sw_band_m
         lot_hard = _drop_small(lot_hard, _MIN_BLOB_SQFT / sqft_px)
-        labels, nlab = ndi.label(lot_hard, structure=np.ones((3, 3)))
         front_zone = to_mask(unary_union(frontage).buffer(sw_w + 8.0 if sw_inside else 8.0).intersection(P)) if frontage else np.zeros(hard.shape, bool)
-        touching = np.unique(labels[front_zone & lot_hard])
+        # lot lines on public right-of-way of any kind (streets and alleys)
+        row_side = P.exterior.intersection(row.buffer(2.0)) if not row.is_empty else None
+        row_zone = to_mask(row_side.buffer(6.0).intersection(P)) if row_side is not None and not row_side.is_empty else np.zeros(hard.shape, bool)
+        # ...but only where it's paved just outside (an alley), not a field or creek
+        paved_out = ndi.binary_dilation((hard | pave_m | classify_hard(mos.rgb)) & ~parcel_m,
+                                        iterations=max(1, int(round(8.0 / ft_px))))
+        row_zone &= paved_out
+        if frontage and row_zone.any():
+            # an alley runs behind the house: only the back half of the lot,
+            # away from the street (not a corner lot's side street or strip)
+            fl = to_mask(unary_union(frontage).buffer(2.0))
+            if fl.any():
+                dfront = ndi.distance_transform_edt(~fl)
+                row_zone &= dfront > 0.5 * float(dfront[parcel_m].max())
+        raw_lot_hard = lot_hard
+        lot_hard, eave_m = _sensible_paving(lot_hard, mos.rgb, parcel_m & ~bldg_m, bldg_m, sw_band_m | front_zone | row_zone,
+                                            ft_px, sqft_px)
+        hard = hard & ~(raw_lot_hard & ~lot_hard)  # patches judged to be grass count as lawn
+        bldg_m = bldg_m | eave_m  # roof-edge strips: neither patio nor lawn
+        # street side and alley side (behind the house)
+        labels, nlab = ndi.label(lot_hard, structure=np.ones((3, 3)))
+        touching = np.unique(labels[(front_zone | row_zone) & lot_hard])
         touching = touching[touching > 0]
         # keep the biggest frontage-touching blobs (2 = circle drives / side-load)
+        if len(touching):
+            # a driveway leads to the house (garage) and is car-wide
+            near_house = ndi.binary_dilation(bldg_m, iterations=max(1, int(round(30.0 / ft_px)))) if bldg_m.any() else None
+            ok_ids = [t for t in touching if _drive_shaped(labels == t, near_house, ft_px)]
+            touching = np.array(ok_ids, dtype=touching.dtype) if ok_ids else touching[:0]
         if len(touching):
             sizes = ndi.sum(lot_hard, labels, touching)
             order = np.argsort(sizes)[::-1]
@@ -508,6 +544,21 @@ class Measurer:
         else:
             keep = []
         drive_m = np.isin(labels, keep) if keep else np.zeros(hard.shape, bool)
+        if drive_m.any() and frontage and building_in is not None and not building_in.is_empty:
+            # A driveway runs from the street to the garage, not on past the
+            # house into the back yard: whatever lies deeper than the house
+            # front + 25 ft has to look like a slab on its own to stay paving.
+            front_line = to_mask(unary_union(frontage).buffer(2.0)) | row_zone  # street or alley
+            if front_line.any():
+                depth = ndi.distance_transform_edt(~front_line) * ft_px
+                limit = building_in.distance(unary_union(frontage)) + 25.0
+                far = drive_m & (depth > limit)
+                if far.any():
+                    drive_m &= ~far
+                    slab, _ = _sensible_paving(far, mos.rgb, parcel_m & ~bldg_m, np.zeros(hard.shape, bool),
+                                               np.zeros(hard.shape, bool), ft_px, sqft_px)
+                    lot_hard = lot_hard & ~(far & ~slab)
+                    hard = hard & ~(far & ~slab)
         if drive_m.any() and stations and bldg_m.any():
             # Driveways run from the street to the garage. Where the house's
             # shadow or a parked car hides part of it, carry the detected slab
@@ -536,15 +587,18 @@ class Measurer:
                     apron_sqft += max(0.0, min(gap, seen)) * step
         driveway_sqft = drive_lot_sqft + apron_sqft
         driveway_method = "imagery"
-        if driveway_sqft < 120 and building_in is not None and not building_in.is_empty and V is not None and frontage:
-            # Shadowed or tree-covered driveway: fall back to a typical-width slab
-            # from the house to the curb, and say so.
+        if driveway_sqft < 120 and building_in is not None and not building_in.is_empty and V is not None \
+                and building_in.area >= 600:
+            # Every house has a driveway. Shadowed, tree-covered or the same
+            # colour as the lawn: fall back to a typical-width slab from the
+            # house to the street, and say so.
             gap = building_in.distance(V)
             if 5 < gap < 120:
                 dw = float(self.c.get("default_driveway_width_ft", 16))
                 driveway_sqft = dw * gap
                 driveway_method = "estimated"
-                est_in_lot = dw * min(gap, building_in.distance(unary_union(frontage)))
+                in_lot = building_in.distance(unary_union(frontage)) if frontage else building_in.distance(P.exterior)
+                est_in_lot = dw * min(gap, in_lot if frontage else max(0.0, gap - 12.0))
                 drive_m = np.zeros(hard.shape, bool)
         elif driveway_sqft < 120:
             driveway_method = "none_found"
@@ -570,9 +624,22 @@ class Measurer:
                 yard = yard & ~roofish
             crown_m = crown_m & ~bldg_m
             struct_m &= yard
+            # decks, sheds and play sets aren't green; leafy "structures" are
+            # tree tops the LiDAR caught as solid (the grass under them is lawn)
+            rgbf = ndi.uniform_filter(mos.rgb[..., :3].astype(np.float32), size=(3, 3, 1))
+            exg = (2 * rgbf[..., 1] - rgbf[..., 0] - rgbf[..., 2]) / (rgbf.sum(-1) + 1e-6)
+            leafy = exg > 0.06
+            if ndvi is not None:
+                leafy = leafy | (ndi.uniform_filter(ndvi, 3) > 0.30)
+            lab_s, n_s = ndi.label(struct_m)
+            if n_s:
+                green_share = ndi.mean(leafy, lab_s, range(1, n_s + 1))
+                drop = np.zeros(n_s + 1, bool)
+                drop[1:] = np.asarray(green_share) > 0.5
+                struct_m = struct_m & ~drop[lab_s]
             canopy_m &= yard & ~struct_m
             bed_m &= yard & ~hard & ~struct_m & ~canopy_m
-        pool_m = _pools(mos.rgb) & yard & ~struct_m
+        pool_m = _pool_shapes(_pools(mos.rgb) & yard & ~struct_m, sqft_px)
         lawn_m = yard & ~hard & ~struct_m & ~bed_m & ~canopy_m & ~pool_m
         lawn_m = ndi.binary_opening(lawn_m, iterations=1)
         lawn_m = _drop_small(lawn_m, 4.0 / sqft_px)
@@ -633,7 +700,7 @@ class Measurer:
 
         quality, why = "ok", []
         open_area = max(1.0, P.area - building_sqft)
-        if driveway_sqft > max(5000.0, 0.25 * P.area):
+        if driveway_sqft > max(5000.0, 0.25 * P.area) or (driveway_sqft > 2000 and lot_area < 15000):
             why.append("driveway unusually large")
         if (drive_lot_sqft + other_sqft) > 0.6 * open_area:
             why.append("most of the yard reads as paving")
@@ -717,7 +784,10 @@ def _lidar_masks(obj, veg, gnd, ft_px, sqft_px, inten=None, bldg=None):
     r = lambda ft: max(1, int(round(ft / ft_px)))
     # Raised non-tree objects. The opening drops anything under ~2.5 ft wide
     # (fences, posts, mailboxes) so mowable lawn along a fence isn't lost.
-    struct = obj > 0.8
+    # Decks, sheds and play sets stand under ~14 ft; anything taller in a yard
+    # is a tree top the scan caught as a solid return (common in USGS data).
+    tall = ndi.binary_dilation((obj > 14.0) | (veg > 14.0), iterations=r(2.0))
+    struct = (obj > 0.8) & (obj < 14.0) & ~tall
     # Close small gaps first so ring-shaped things (trampoline frames,
     # above-ground pool walls, gazebo rails) become solid outlines.
     struct = ndi.binary_closing(struct, iterations=r(1.0))
@@ -849,6 +919,129 @@ def _otsu(v: np.ndarray, bins: int = 64) -> float:
     return float((edges[:-1] + edges[1:])[np.argmax(between)] / 2)
 
 
+def _photo_shift(rgb: np.ndarray, bldg_m: np.ndarray, max_px: int) -> tuple[int, int]:
+    """(dy, dx) pixels the photo is off from the building outlines. Roofs
+    aren't green and the lawn around a house is, so the right shift is the
+    one where the band just outside the outlines is greenest compared with
+    inside them. (0, 0) unless clearly better than no shift."""
+    if bldg_m.sum() < 200:
+        return (0, 0)
+    sm = ndi.uniform_filter(rgb[..., :3].astype(np.float32), size=(3, 3, 1))
+    exg = (2 * sm[..., 1] - sm[..., 0] - sm[..., 2]) / (sm.sum(-1) + 1e-6)
+    k = max(2, max_px // 3)
+    inside = ndi.binary_erosion(bldg_m, iterations=2)
+    ring = ndi.binary_dilation(bldg_m, iterations=k) & ~ndi.binary_dilation(bldg_m, iterations=1)
+    iy, ix = np.nonzero(inside)
+    ry, rx = np.nonzero(ring)
+    if len(iy) < 50 or len(ry) < 50:
+        return (0, 0)
+    H, W = exg.shape
+    def score(dy, dx):
+        return float(exg[np.clip(ry + dy, 0, H - 1), np.clip(rx + dx, 0, W - 1)].mean()
+                     - exg[np.clip(iy + dy, 0, H - 1), np.clip(ix + dx, 0, W - 1)].mean())
+    base = score(0, 0)
+    best = (base, 0, 0)
+    for dy in range(-max_px, max_px + 1):
+        for dx in range(-max_px, max_px + 1):
+            v = score(dy, dx)
+            if v > best[0]:
+                best = (v, dy, dx)
+    # needs a real gain in contrast, and not just a pixel or two
+    if best[0] - base < 0.015 or max(abs(best[1]), abs(best[2])) <= 1:
+        return (0, 0)
+    return (best[1], best[2])
+
+
+def _texture(rgb: np.ndarray, size: int) -> np.ndarray:
+    """Local brightness variation: grass (even brown winter grass) is speckled,
+    concrete and asphalt are smooth."""
+    lum = rgb[..., :3].mean(-1).astype(np.float32)
+    m = ndi.uniform_filter(lum, size)
+    m2 = ndi.uniform_filter(lum * lum, size)
+    return np.sqrt(np.maximum(m2 - m * m, 0.0))
+
+
+def _sensible_paving(hard, rgb, yard_m, bldg_m, anchors, ft_px, sqft_px):
+    """Common sense on what the colour classifier called paving, patch by patch.
+    Paving that touches the house, the sidewalk or the street side is kept:
+    driveways, front walks and patios are joined to something. A patch
+    floating out in the yard has to look like a slab to stay paving: smooth
+    (not as speckled as the lawn) and solid (not a ragged scatter), unless
+    it's bright, flat, colourless concrete. Otherwise it's dry or patchy grass."""
+    if not hard.any():
+        return hard, np.zeros(hard.shape, bool)
+    size = max(3, int(round(3.0 / ft_px)) | 1)
+    tex = _texture(rgb, size)
+    lawnish = yard_m & ~ndi.binary_dilation(hard, iterations=2)
+    if lawnish.sum() < 50:
+        return hard, np.zeros(hard.shape, bool)
+    grass_tex = float(np.median(tex[lawnish]))
+    sm = ndi.uniform_filter(rgb[..., :3].astype(np.float32), size=(5, 5, 1))
+    mx_, mn_ = sm.max(-1), sm.min(-1)
+    plain = (mx_ > 0.62) & ((mx_ - mn_) / (mx_ + 1e-6) < 0.10)
+    grow = max(1, int(round(3.0 / ft_px)))
+    anchor = ndi.binary_dilation(anchors | bldg_m, iterations=grow)
+    street = ndi.binary_dilation(anchors, iterations=grow)
+    hug = ndi.binary_dilation(bldg_m, iterations=max(1, int(round(5.0 / ft_px)))) if bldg_m.any() else np.zeros(hard.shape, bool)
+    eave = np.zeros(hard.shape, bool)
+    lab, n = ndi.label(hard, structure=np.ones((3, 3)))
+    if not n:
+        return hard, np.zeros(hard.shape, bool)
+    keep = np.zeros(n + 1, bool)
+    objs = ndi.find_objects(lab)
+    for i, sl in enumerate(objs, 1):
+        blob = lab[sl] == i
+        area = float(blob.sum()) * sqft_px
+        inner = ndi.binary_erosion(blob, iterations=1)
+        t = float(np.median(tex[sl][inner if inner.sum() >= 6 else blob]))
+        bright = float(plain[sl][blob].mean())
+        hull_fill = blob.sum() / max(1.0, float(_hull_area(blob)))
+        touches = bool((anchor[sl] & blob).any())
+        if touches:
+            # a thin strip lying along the house wall, not reaching the street:
+            # the photo's roof edge (or drip line), not a patio
+            width = 2 * float(ndi.distance_transform_edt(blob).max()) * ft_px
+            on_street = bool((street[sl] & blob).any())
+            if not on_street and width < 6.0 and float(hug[sl][blob].mean()) > 0.8:
+                eave[sl] |= blob
+                continue
+            if on_street:  # driveways and front walks: always paving
+                keep[i] = True
+                continue
+            # against the house only: a patio is still a slab, smooth or solid
+            keep[i] = bright > 0.5 or t < 0.85 * grass_tex or hull_fill >= 0.45
+            continue
+        smooth = t < 0.85 * grass_tex
+        solid = hull_fill >= 0.45
+        keep[i] = bright > 0.5 or (smooth and solid and area >= 40)
+    return keep[lab], eave
+
+
+def _hull_area(blob: np.ndarray) -> float:
+    ys, xs = np.nonzero(blob)
+    if len(xs) < 3:
+        return float(len(xs))
+    try:
+        from shapely.geometry import MultiPoint
+        return max(float(MultiPoint(list(zip(xs.tolist(), ys.tolist()))).convex_hull.area), float(len(xs)))
+    except Exception:
+        return float(len(xs))
+
+
+def _drive_shaped(blob: np.ndarray, near_house, ft_px: float) -> bool:
+    """A driveway is at least car-wide (8 ft) and leads toward the house."""
+    if not blob.any():
+        return False
+    width_px = 2 * float(ndi.distance_transform_edt(blob).max())
+    if width_px * ft_px < 8.0:
+        return False
+    if near_house is None:
+        return True
+    ys, xs = np.nonzero(blob)
+    long_side = max(xs.max() - xs.min(), ys.max() - ys.min()) * ft_px
+    return bool((near_house & blob).any()) or long_side >= 40.0
+
+
 def classify_hard(rgb: np.ndarray) -> np.ndarray:
     """Pixel classifier for paved / concrete surfaces.
 
@@ -884,8 +1077,24 @@ def _pools(rgb: np.ndarray) -> np.ndarray:
     r, g, b = sm[..., 0], sm[..., 1], sm[..., 2]
     mx = sm.max(-1)
     sat = (mx - sm.min(-1)) / (mx + 1e-6)
-    m = (b > r * 1.08) & (b >= g * 0.97) & (sat > 0.15) & (mx > 0.15)
+    # water is bright and clearly blue-green; shade only leans blue and is dark
+    m = (b > r * 1.08) & (b >= g * 0.97) & (sat > 0.15) & (mx > 0.38) & ((b > g * 1.05) | (mx > 0.48))
     return ndi.binary_opening(m, iterations=2)
+
+
+def _pool_shapes(m: np.ndarray, sqft_px: float) -> np.ndarray:
+    """Keep pool-sized, pool-shaped patches only: 120-1,500 sq ft and a solid
+    outline (rectangle or kidney). Blue-looking tree shade is ragged and big."""
+    lab, n = ndi.label(m)
+    if not n:
+        return m
+    best, best_area = 0, 0.0
+    for i, sl in enumerate(ndi.find_objects(lab), 1):
+        blob = lab[sl] == i
+        area = float(blob.sum()) * sqft_px
+        if 120.0 <= area <= 1500.0 and blob.sum() / max(1.0, _hull_area(blob)) >= 0.7 and area > best_area:
+            best, best_area = i, area
+    return lab == best if best else np.zeros(m.shape, bool)  # one pool per home at most
 
 
 def _sunlit_lawn(rgb: np.ndarray) -> np.ndarray:
