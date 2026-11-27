@@ -479,3 +479,13 @@ def test_cache_kept_while_disk_has_room(monkeypatch, tmp_path):
     assert gis.prune_cache()["bytes"] == 5000  # nothing deleted
     monkeypatch.setattr(shutil, "disk_usage", lambda p: DU(1e12, 1e12 - 5e10 - 3000, 5e10 - 3000))  # under the 5% reserve
     assert gis.prune_cache()["bytes"] < 5000  # oldest trimmed
+
+
+def test_home_is_the_buy_page(client=None):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    r = c.get("/")
+    assert r.status_code == 200 and 'id="zipbox"' in r.text and 'id="member-value"' in r.text
+    r = c.get("/data?zip=68022", follow_redirects=False)
+    assert r.status_code == 301 and r.headers["location"] == "/?zip=68022#zipbox"
