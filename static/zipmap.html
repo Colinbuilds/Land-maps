@@ -11,6 +11,7 @@
   html, body { height: 100%; }
   body { background: #f3f4f1; margin: 0; }
   .shell { display: grid; grid-template-columns: minmax(0, 1fr) 300px; height: calc(100vh - 56px); }
+  .embedded .shell { height: 100vh; }
   @media (max-width: 860px) { .shell { grid-template-columns: 1fr; grid-template-rows: 62vh auto; height: auto; } }
   #map { height: 100%; min-height: 360px; border-radius: 0; border: 0; }
   .side { background: #fff; overflow: auto; padding: 14px; border-left: 1px solid var(--line); }
@@ -36,7 +37,7 @@
     <h2>Every ZIP we cover</h2>
     <div class="kp" id="kp"></div>
     <div class="leg">
-      <div><i style="background:#e2e8f0;border:1px solid #64748b"></i>Covered, not bought yet</div>
+      <div><i style="background:#e2e8f0;border:1px solid #64748b"></i>Covered, not bought yet (dots when zoomed out, outlines when zoomed in)</div>
       <div><i style="background:rgba(234,88,12,.25)"></i><i style="background:rgba(234,88,12,.5)"></i><i style="background:rgba(220,38,38,.8)"></i>Each purchase tints it darker</div>
       <div><i style="background:#fff;border:2px solid #16a34a"></i>Measured (ready to download)</div>
       <div><i style="background:#fff;border:3px solid #7c3aed"></i>Exclusive (locked by a company)</div>
@@ -47,7 +48,7 @@
   </div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=21"></script>
+<script src="/static/common.js?v=22"></script>
 <script>
 (async function () {
   const $ = (id) => document.getElementById(id);
@@ -55,14 +56,13 @@
   const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([41.25, -96.0], 9);
   L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
     { maxZoom: 16, attribution: "Esri, HERE, Garmin, © OpenStreetMap contributors" }).addTo(map);
-  let layer = null, first = true, byZip = {};
+  let dots = null, outl = null, first = true, byZip = {}, rows = [];
   // each paid purchase adds a little more colour, capped so the map stays readable
   const tint = (n) => n ? Math.min(0.85, 0.18 + 0.12 * (n - 1)) : 0.12;
   const color = (n) => n >= 6 ? "#dc2626" : n >= 3 ? "#ea580c" : n ? "#f97316" : "#94a3b8";
-  function style(f) {
-    const p = f.properties;
-    return { fillColor: p.paid ? color(p.paid) : "#cbd5e1", fillOpacity: tint(p.paid),
-             color: p.locked ? "#7c3aed" : p.measured ? "#16a34a" : p.pending ? "#ea580c" : "#64748b",
+  const edge = (p) => p.locked ? "#7c3aed" : p.measured ? "#16a34a" : p.pending ? "#ea580c" : "#64748b";
+  function style(p) {
+    return { fillColor: p.paid ? color(p.paid) : "#cbd5e1", fillOpacity: tint(p.paid), color: edge(p),
              weight: p.locked ? 3 : p.measured || p.pending ? 2 : 0.8, dashArray: p.pending && !p.locked && !p.measured ? "5 4" : null };
   }
   function popup(p) {
@@ -71,27 +71,75 @@
       <br>${p.measured ? "✅ Measured" : "Not measured yet"}${p.locked ? "<br>🔒 Exclusive (locked)" : ""}
       <br><a href="/data?zip=${p.zip}" target="_blank">Open on the buy page</a>`;
   }
+  // zoomed out: one dot per ZIP (the whole country stays fast). Zoomed in: real ZIP outlines for what's on screen.
+  const OUTLINE_ZOOM = 9;
+  function drawDots() {
+    if (dots) map.removeLayer(dots);
+    byZip = {};
+    dots = L.layerGroup(rows.map((p) => {
+      const m = L.circleMarker([p.lat, p.lon], { radius: p.paid ? 6 + Math.min(6, p.paid) : 4, fillColor: p.paid ? color(p.paid) : "#94a3b8",
+        fillOpacity: p.paid ? 0.85 : 0.55, color: edge(p), weight: p.locked || p.measured ? 2 : 1 });
+      m.bindPopup(popup(p)); m.bindTooltip(p.zip); byZip[p.zip] = m; return m;
+    }));
+    if (map.getZoom() < OUTLINE_ZOOM) dots.addTo(map);
+  }
+  let outlineReq = 0;
+  async function drawOutlines() {
+    if (map.getZoom() < OUTLINE_ZOOM) {
+      if (outl) { map.removeLayer(outl); outl = null; }
+      if (dots && !map.hasLayer(dots)) dots.addTo(map);
+      return;
+    }
+    const b = map.getBounds().pad(0.2);
+    const here = rows.filter((p) => b.contains([p.lat, p.lon]));
+    const want = ++outlineReq;
+    let G;
+    try { G = await api("/api/admin/zipmap/outlines?zips=" + here.slice(0, 400).map((p) => p.zip).join(",")); }
+    catch (e) { return; }  // keep the dots if outlines can't load
+    if (want !== outlineReq) return;
+    const by = Object.fromEntries(rows.map((p) => [p.zip, p]));
+    if (outl) map.removeLayer(outl);
+    outl = L.geoJSON(G, { style: (f) => style(by[f.properties.zip]),
+      onEachFeature: (f, l) => { const p = by[f.properties.zip]; l.bindPopup(popup(p)); l.bindTooltip(p.zip, { sticky: true }); byZip[p.zip] = l; } }).addTo(map);
+    if (dots) map.removeLayer(dots);
+  }
+  map.on("moveend", drawOutlines);
   async function load() {
     let G;
-    try { G = await api("/api/admin/zipmap"); } catch (e) { $("tokBox").classList.remove("hidden"); $("app").classList.add("hidden"); return; }
+    try { G = await api("/api/admin/zipmap"); }
+    catch (e) {
+      if (/401|admin|key|unauthor/i.test(e.message)) { $("tokBox").classList.remove("hidden"); $("app").classList.add("hidden"); }
+      else $("upd").textContent = "Couldn't load the map: " + e.message + " · retrying";
+      setTimeout(load, 15000);
+      return;
+    }
     $("tokBox").classList.add("hidden"); $("app").classList.remove("hidden");
-    if (layer) map.removeLayer(layer);
-    byZip = {};
-    layer = L.geoJSON(G, { style, onEachFeature: (f, l) => { byZip[f.properties.zip] = l; l.bindPopup(popup(f.properties)); l.bindTooltip(f.properties.zip, { sticky: true }); } }).addTo(map);
-    if (first && G.features.length) { map.fitBounds(layer.getBounds(), { padding: [10, 10] }); first = false; }
+    rows = G.zips;
+    drawDots();
+    if (first && rows.length) {
+      first = false;
+      map.fitBounds(L.latLngBounds(rows.map((p) => [p.lat, p.lon])), { padding: [20, 20], maxZoom: 10 });
+    }
+    drawOutlines();
     const t = G.totals;
-    $("kp").innerHTML = [["ZIPs covered", t.zips], ["Bought at least once", t.bought], ["Measured", t.measured], ["Revenue", usd(t.cents)]]
+    $("kp").innerHTML = [["ZIPs covered", t.zips.toLocaleString()], ["Bought at least once", t.bought], ["Measured", t.measured], ["Revenue", usd(t.cents)]]
       .map(([l, v]) => `<div><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
-    const hot = G.features.map((f) => f.properties).filter((p) => p.paid).sort((a, b) => b.paid - a.paid || b.cents - a.cents).slice(0, 15);
+    const hot = rows.filter((p) => p.paid).sort((a, b) => b.paid - a.paid || b.cents - a.cents).slice(0, 15);
     $("hot").innerHTML = hot.map((p) => `<button data-z="${p.zip}"><b>${p.zip}</b><span>${p.paid} purchase${p.paid === 1 ? "" : "s"}${p.locked ? " · 🔒" : ""}</span><span>${usd(p.cents)}</span></button>`).join("")
       || '<p class="small muted">No purchases yet. ZIPs darken as they sell.</p>';
-    $("hot").querySelectorAll("[data-z]").forEach((b) => b.onclick = () => { const l = byZip[b.dataset.z]; if (l) { map.fitBounds(l.getBounds(), { maxZoom: 12 }); l.openPopup(); } });
-    $("upd").textContent = `Live · updated ${new Date().toLocaleTimeString()}`;
+    $("hot").querySelectorAll("[data-z]").forEach((b) => b.onclick = () => {
+      const p = rows.find((r) => r.zip === b.dataset.z);
+      if (p) { map.setView([p.lat, p.lon], 11); setTimeout(() => byZip[p.zip] && byZip[p.zip].openPopup(), 1500); }
+    });
+    $("upd").textContent = G.building ? `Adding ZIPs to the map… ${G.waiting ? G.waiting.toLocaleString() + " still loading" : ""}`
+      : G.error ? "Some ZIPs couldn't load: " + G.error : `Live · updated ${new Date().toLocaleTimeString()}`;
+    if (G.building) setTimeout(load, 8000);
   }
   $("tokGo").onclick = () => { localStorage.setItem("adminToken", $("tok").value.trim()); load(); };
   await load();
   setInterval(load, 60000);  // live: picks up new purchases every minute
   setTimeout(() => map.invalidateSize(), 300);
+  new ResizeObserver(() => map.invalidateSize()).observe($("map"));  // the tab can open while hidden
 })();
 </script>
 </body>

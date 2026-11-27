@@ -782,22 +782,42 @@ PREBUILD_STATE = DATA_DIR / "prebuild_all.json"
 _pre = {"thread": None, "stop": False}
 
 
+_svc_cache: dict = {}
+
+
 def service_zips() -> list[str]:
-    """ZIPs mostly (>= 20%) inside the counties we cover, smallest first."""
+    """ZIPs mostly (>= 20%) inside the counties we cover, smallest first.
+    Asked county by county: one box around counties in several states is too
+    big for the Census server."""
     from shapely.geometry import shape
-    from shapely.ops import unary_union
     from .gis import _esri_to_geojson_geom, get_json
-    u = unary_union(list(counties.boundaries().values()))
-    d = get_json(bulk._ZCTA + "/query", {"where": "1=1", "geometry": ",".join(map(str, u.bounds)),
-                                          "geometryType": "esriGeometryEnvelope", "inSR": 4326,
-                                          "spatialRel": "esriSpatialRelIntersects", "outFields": "ZCTA5",
-                                          "outSR": 4326, "geometryPrecision": 5, "f": "json"}, ttl=30 * 86400)
-    out = []
-    for f in d.get("features") or []:
-        g = shape(_esri_to_geojson_geom(f["geometry"]))
-        if g.area and g.intersection(u).area / g.area >= 0.2:
-            out.append((g.area, f["attributes"]["ZCTA5"]))
-    return [z for _, z in sorted(out)]
+    bounds = counties.boundaries()
+    key = tuple(sorted(bounds))
+    if _svc_cache.get("key") == key:
+        return list(_svc_cache["zips"])
+    inside: dict = {}
+    for cid, cg in bounds.items():
+        try:
+            d = get_json(bulk._ZCTA + "/query", {"where": "1=1", "geometry": ",".join(f"{v:.4f}" for v in cg.bounds),
+                                                  "geometryType": "esriGeometryEnvelope", "inSR": 4326,
+                                                  "spatialRel": "esriSpatialRelIntersects", "outFields": "ZCTA5",
+                                                  "outSR": 4326, "geometryPrecision": 5, "f": "json"}, ttl=30 * 86400)
+        except Exception:
+            continue  # one slow county shouldn't hide the rest
+        for f in d.get("features") or []:
+            gj = _esri_to_geojson_geom(f["geometry"])
+            if not gj:
+                continue
+            g = shape(gj)
+            if not g.area or not g.intersects(cg):
+                continue
+            z = f["attributes"]["ZCTA5"]
+            area, got = inside.get(z, (g.area, 0.0))
+            inside[z] = (area, got + g.intersection(cg).area)
+    out = sorted((area, z) for z, (area, got) in inside.items() if got / area >= 0.2)
+    zips = [z for _, z in out]
+    _svc_cache.update(key=key, zips=zips)
+    return list(zips)
 
 
 def prebuild_status() -> dict:
@@ -1071,14 +1091,60 @@ def zip_shapes(zips: list[str]) -> dict:
     return {z: have[z] for z in zips if z in have}
 
 
-def zip_heat() -> dict:
-    """Every ZIP we cover, with how often it's been bought, revenue, whether
-    it's measured and whether it's locked: a GeoJSON for the owner's map."""
+_ZIP_POINTS = DATA_DIR / "zip_points.json"
+_heat: dict = {"zips": None, "at": 0, "thread": None, "error": None}
+
+
+def zip_points(zips: list[str]) -> dict:
+    """{zip: [lat, lon]} from Census (no outlines, so it's quick), kept on disk."""
+    from .gis import get_json
+    have = json.loads(_ZIP_POINTS.read_text()) if _ZIP_POINTS.exists() else {}
+    need = [z for z in zips if z not in have]
+    for i in range(0, len(need), 150):
+        chunk = need[i:i + 150]
+        d = get_json(bulk._ZCTA + "/query", {"where": "ZCTA5 IN (" + ",".join(f"'{z}'" for z in chunk) + ")",
+                                              "outFields": "ZCTA5,INTPTLAT,INTPTLON", "returnGeometry": "false",
+                                              "f": "json"}, ttl=365 * 86400)
+        for f in d.get("features") or []:
+            a = f["attributes"]
+            have[a["ZCTA5"]] = [round(float(a["INTPTLAT"]), 5), round(float(a["INTPTLON"]), 5)]
+        _ZIP_POINTS.write_text(json.dumps(have))  # save as we go: a later chunk can fail
+    return {z: have[z] for z in zips if z in have}
+
+
+def _covered_zips() -> set:
     from . import coverage
-    zips = set(service_zips())
+    zips: set = set()
+    try:
+        zips |= set(service_zips())
+    except Exception as e:
+        _heat["error"] = str(e)[:200]
     for m in coverage.metros():
         if m["status"] == "live" and isinstance(m.get("zips"), list):
             zips |= set(m["zips"])
+    return zips
+
+
+def _refresh_heat() -> None:
+    try:
+        zips = _covered_zips()
+        _heat["zips"] = sorted(zips)
+        zip_points(sorted(zips | {o["zip"] for o in list_orders(100000)}))
+        _heat["at"] = time.time()
+    except Exception as e:
+        _heat["error"] = str(e)[:200]
+        _heat["at"] = time.time() - 240  # try again in about a minute
+
+
+def zip_heat() -> dict:
+    """Every ZIP we cover, as a dot, with how often it's been bought, revenue,
+    whether it's measured and whether it's locked. The ZIP list and locations
+    refresh in the background so the map always answers at once."""
+    t = _heat["thread"]
+    if (time.time() - _heat["at"] > 300) and not (t and t.is_alive()):
+        _heat["thread"] = threading.Thread(target=_refresh_heat, daemon=True)
+        _heat["thread"].start()
+        _heat["thread"].join(8)  # small setups finish right away
     stats: dict = {}
     for o in list_orders(100000):
         z = o["zip"]
@@ -1090,20 +1156,29 @@ def zip_heat() -> dict:
             s["last"] = max(s["last"], o.get("paid") or o["created"])
         elif o["status"] == "awaiting_payment":
             s["pending"] += 1
-    zips |= set(stats)
-    measured = {p.stem.split("_")[0] for p in ZIPS_DIR.glob("*.json")
-                if (json.loads(p.read_text()) or {}).get("status") == "ready"}
+    measured = set()
+    for p in ZIPS_DIR.glob("*.json"):
+        try:
+            if (json.loads(p.read_text()) or {}).get("status") == "ready":
+                measured.add(p.stem.split("_")[0])
+        except Exception:
+            pass
     with _db() as con:
         locked = {r[0] for r in con.execute("SELECT DISTINCT zip FROM zip_locks WHERE until>?", (time.time(),))}
-    shapes = zip_shapes(sorted(zips))
-    feats = []
-    for z in sorted(zips):
-        if z not in shapes:
-            continue
-        s = stats.get(z, {"orders": 0, "paid": 0, "cents": 0, "pending": 0, "last": 0})
-        feats.append({"type": "Feature", "geometry": shapes[z],
-                      "properties": {"zip": z, **s, "measured": z in measured, "locked": z in locked}})
-    return {"type": "FeatureCollection", "features": feats,
-            "totals": {"zips": len(feats), "bought": sum(1 for f in feats if f["properties"]["paid"]),
-                       "measured": sum(1 for f in feats if f["properties"]["measured"]),
-                       "cents": sum(f["properties"]["cents"] for f in feats)}}
+    zips = set(_heat["zips"] or []) | set(stats) | measured
+    pts = json.loads(_ZIP_POINTS.read_text()) if _ZIP_POINTS.exists() else {}
+    blank = {"orders": 0, "paid": 0, "cents": 0, "pending": 0, "last": 0}
+    rows = [{"zip": z, "lat": pts[z][0], "lon": pts[z][1], **stats.get(z, blank),
+             "measured": z in measured, "locked": z in locked} for z in sorted(zips) if z in pts]
+    building = bool(_heat["thread"] and _heat["thread"].is_alive())
+    return {"zips": rows, "building": building, "waiting": len(zips) - len(rows),
+            "error": None if building or rows else _heat["error"],
+            "totals": {"zips": len(zips), "bought": sum(1 for r in rows if r["paid"]),
+                       "measured": sum(1 for r in rows if r["measured"]), "cents": sum(r["cents"] for r in rows)}}
+
+
+def zip_outlines(zips: list[str]) -> dict:
+    """GeoJSON outlines for the ZIPs on screen (at most 400 at a time)."""
+    shapes = zip_shapes(sorted(set(zips))[:400])
+    return {"type": "FeatureCollection",
+            "features": [{"type": "Feature", "geometry": g, "properties": {"zip": z}} for z, g in shapes.items()]}
