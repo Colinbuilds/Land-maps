@@ -168,11 +168,11 @@ function measurementCards(r, keys, labels) {
   // The command center is one page (/command) with a tab per section; the
   // other owner pages open inside it. Opened on their own, they forward there.
   const OWNER_TAB = { "/command/data": "data", "/command/postcards": "postcards", "/command/tools": "measure",
-    "/command/settings": "settings", "/demo": "demo", "/business": "measure", "/command/marketing": "marketing", "/command/safety": "safety", "/command/coverage": "coverage", "/command/map": "map" };
+    "/command/settings": "settings", "/demo": "demo", "/business": "measure", "/command/safety": "safety", "/command/coverage": "coverage", "/command/map": "map" };
   let embedded = false;
   try { embedded = window.top !== window.self; } catch (e) { embedded = true; }
   if (owner && here !== "/command") {
-    if (!embedded) { location.replace("/command#" + (OWNER_TAB[here] || "companies")); return; }
+    if (!embedded) { location.replace("/command#" + (OWNER_TAB[here] || "status")); return; }
     const st = document.createElement("style");  // inside the command center: its own menu is enough
     st.textContent = "header.top, .tabbar, .site-nav { display: none !important; } body { padding-bottom: 0 !important; }";
     document.documentElement.classList.add("embedded");
@@ -180,12 +180,12 @@ function measurementCards(r, keys, labels) {
     return;
   }
   const links = owner ? [
+    { href: "/command#status", label: "Live", icon: "📡" },
     { href: "/command#companies", label: "Companies", icon: "🏢" },
     { href: "/command#map", label: "Map", icon: "🗺️" },
     { href: "/command#data", label: "ZIP data", icon: "🗂️" },
     { href: "/command#coverage", label: "Coverage", icon: "🌎" },
     { href: "/command#postcards", label: "Postcards", icon: "✉️" },
-    { href: "/command#marketing", label: "Marketing", icon: "🎬" },
     { href: "/command#measure", label: "Measure", icon: "📏" },
     { href: "/command#demo", label: "Demo", icon: "🧪" },
     { href: "/command#safety", label: "Safety", icon: "🛡️" },
@@ -197,7 +197,7 @@ function measurementCards(r, keys, labels) {
     { href: "/crm", label: "CRM", icon: "📋" },
     { href: "/join", label: "Membership", icon: "⭐" },
   ];
-  const tabNow = (location.hash || "#companies").slice(1);
+  const tabNow = (location.hash || "#status").slice(1);
   const isActive = (h) => (h === "/" ? here === "/" : h.startsWith("/command#") ? h.slice(9) === tabNow
     : here === h || here.startsWith(h + "/") || (h === "/reports" && here.startsWith("/r/")));
   const build = () => {

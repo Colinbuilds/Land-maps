@@ -743,12 +743,7 @@ def _trees(veg, ft_px, sqft_px, sparse=False):
         return crown, []
     chm = ndi.grey_dilation(np.where(v > 0, v, 0), size=r(2.0))  # fill sparse holes
     chm = ndi.gaussian_filter(chm, r(2.5 if sparse else 1.5))
-    peak = np.zeros(chm.shape, bool)
-    for lo, hi, rad in ((12, 30, 5.0), (30, 45, 7.5), (45, 999, 10.5)):
-        band = (chm > lo) & (chm <= hi)
-        if band.any():
-            peak |= band & (chm >= ndi.maximum_filter(chm, footprint=_disk(r(rad))) - 1e-3)
-    peak &= crown
+    peak = _disk_peaks(chm, crown, r)
     lab, n = ndi.label(peak)
     tops = []
     if n:
@@ -757,6 +752,31 @@ def _trees(veg, ft_px, sqft_px, sparse=False):
             r0, c0 = int(rr.mean()) + sl_r.start, int(cc.mean()) + sl_c.start
             tops.append((r0, c0, float(chm[r0, c0])))
     return crown, tops
+
+def _disk_peaks(chm, crown, r):
+    """Tree tops: pixels at least as tall as everything within the crown
+    radius for their height. Same answer as a full disk maximum filter, but
+    only pixels that already top their 3x3 neighbourhood are checked (a disk
+    filter over the whole raster was the slowest step of a home)."""
+    peak = np.zeros(chm.shape, bool)
+    cand = crown & (chm > 12) & (chm >= ndi.maximum_filter(chm, size=3) - 1e-3)
+    if not cand.any():
+        return peak
+    H, W = chm.shape
+    disks = {}
+    for y, x in zip(*np.nonzero(cand)):
+        h = chm[y, x]
+        rad = r(5.0 if h <= 30 else 7.5 if h <= 45 else 10.5)
+        d = disks.get(rad)
+        if d is None:
+            d = disks[rad] = _disk(rad)
+        y0, y1, x0, x1 = max(0, y - rad), min(H, y + rad + 1), max(0, x - rad), min(W, x + rad + 1)
+        win = chm[y0:y1, x0:x1]
+        fp = d[y0 - (y - rad):y1 - (y - rad), x0 - (x - rad):x1 - (x - rad)]
+        if h >= win[fp].max() - 1e-3:
+            peak[y, x] = True
+    return peak
+
 
 def _disk(rad: int) -> np.ndarray:
     yy, xx = np.ogrid[-rad:rad + 1, -rad:rad + 1]

@@ -45,6 +45,31 @@
   table.t { width: 100%; font-size: 13.5px; border-collapse: collapse; }
   table.t td { padding: 6px 4px; border-bottom: 1px solid var(--line); }
   .acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  /* live multiscreen */
+  #tabStatus { max-width: 1500px; }
+  .screens { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+  .scr { background: #0f172a; color: #e2e8f0; border-radius: 16px; padding: 14px 16px; min-height: 180px; display: flex; flex-direction: column; gap: 8px; position: relative; }
+  .scr.big { grid-column: span 2; } @media (max-width: 760px) { .scr.big { grid-column: auto; } }
+  .scr h3 { margin: 0; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: #94a3b8; display: flex; align-items: center; gap: 8px; }
+  .scr h3 a { margin-left: auto; color: #7dd3fc; font-size: 12px; text-transform: none; letter-spacing: 0; text-decoration: none; }
+  .scr .live { width: 8px; height: 8px; border-radius: 50%; background: #475569; }
+  .scr .live.on { background: #22c55e; box-shadow: 0 0 0 0 rgba(34,197,94,.6); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); } }
+  .scr .nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 8px; }
+  .scr .nums div { background: #1e293b; border-radius: 10px; padding: 7px 9px; }
+  .scr .nums .l { font-size: 11px; color: #94a3b8; } .scr .nums .v { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; color: #f8fafc; }
+  .scr .row { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13px; }
+  .scr .row b { color: #f8fafc; font-variant-numeric: tabular-nums; }
+  .scr .dim { color: #94a3b8; font-size: 12.5px; }
+  .scr .bar { height: 8px; background: #1e293b; border-radius: 99px; overflow: hidden; }
+  .scr .bar i { display: block; height: 100%; background: linear-gradient(90deg, #22c55e, #4ade80); border-radius: 99px; transition: width .6s; }
+  .scr .bar.amber i { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+  .scr .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .scr .chips span { background: #1e293b; border-radius: 99px; padding: 2px 9px; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .scr .bad { color: #fca5a5; } .scr .ok { color: #86efac; }
+  .scr button.mini { background: #334155; color: #e2e8f0; padding: 4px 10px; min-height: 0; font-size: 12px; border-radius: 99px; }
+  .scr button.go { background: #16a34a; color: #fff; padding: 6px 14px; min-height: 0; font-size: 13px; border-radius: 99px; }
+  .scr .empty { color: #64748b; font-size: 13px; }
   .hidden { display: none !important; }
   #tabFrame iframe { display: block; width: 100%; height: calc(100vh - 64px); border: 0; background: #f3f4f1; }
   @media (max-width: 760px) { #tabFrame iframe { height: calc(100vh - 64px - 70px); } }
@@ -56,7 +81,12 @@
   <div class="contact"><a href="/" class="small" target="_blank">Customer site ↗</a></div>
 </header>
 <section id="tabFrame" class="hidden"><iframe id="frame" title="Command center section"></iframe></section>
-<div class="wrap" id="tabCompanies">
+<div class="wrap hidden" id="tabStatus">
+  <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap"><h1>Live</h1><span class="small muted" id="stUpd"></span></div>
+  <div id="stKey" class="card stack hidden" style="max-width:420px"><b>Owner access</b><input id="stTok" type="password" placeholder="Admin key"><button id="stGo">Open</button></div>
+  <div class="screens" id="screens"></div>
+</div>
+<div class="wrap hidden" id="tabCompanies">
   <div id="tokBox" class="card stack hidden" style="max-width:420px">
     <b>Owner access</b><input id="tok" type="password" placeholder="Admin token (ESTIMATOR_ADMIN_TOKEN)"><button id="tokGo">Open</button><div id="tokMsg" class="small"></div>
   </div>
@@ -72,18 +102,21 @@
     <div class="lib" id="lib"></div>
   </div>
 </div>
-<script src="/static/common.js?v=22"></script>
+<script src="/static/common.js?v=23"></script>
 <script>
 // one page, a tab per section: #companies (here), the rest open inside
 (function () {
-  const PAGES = { data: "/command/data", postcards: "/command/postcards", marketing: "/command/marketing", safety: "/command/safety", coverage: "/command/coverage", map: "/command/map", measure: "/command/tools",
+  const PAGES = { data: "/command/data", postcards: "/command/postcards", safety: "/command/safety", coverage: "/command/coverage", map: "/command/map", measure: "/command/tools",
                   demo: "/demo", settings: "/command/settings" };
-  const TITLES = { companies: "Companies", data: "ZIP data", postcards: "Postcard studio", marketing: "Marketing hub", safety: "Safety", coverage: "Coverage", map: "ZIP map", measure: "Measure tools", demo: "Demo", settings: "Settings" };
+  const TITLES = { status: "Live", companies: "Companies", data: "ZIP data", postcards: "Postcard studio", safety: "Safety", coverage: "Coverage", map: "ZIP map", measure: "Measure tools", demo: "Demo", settings: "Settings" };
   const loaded = {};
   function show() {
-    const tab = (location.hash || "#companies").slice(1);
+    let tab = (location.hash || "#status").slice(1);
+    if (tab === "marketing") tab = "status";
     const page = PAGES[tab];
-    document.getElementById("tabCompanies").classList.toggle("hidden", !!page);
+    document.getElementById("tabCompanies").classList.toggle("hidden", tab !== "companies");
+    document.getElementById("tabStatus").classList.toggle("hidden", tab !== "status");
+    window.dispatchEvent(new CustomEvent("cc-tab", { detail: tab }));
     document.getElementById("tabFrame").classList.toggle("hidden", !page);
     if (page) {
       const f = document.getElementById("frame");
@@ -266,6 +299,99 @@
     };
   }
   load();
+})();
+</script>
+<script>
+// Live: every moving part on one wall of screens, refreshed every 5 seconds
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const usd = (c) => "$" + Math.round((c || 0) / 100).toLocaleString();
+  const n = (v) => (v || 0).toLocaleString();
+  const ago = (t) => { if (!t) return "—"; const s = Date.now() / 1000 - t; return s < 60 ? "just now" : s < 3600 ? Math.floor(s / 60) + " min ago" : s < 86400 ? Math.floor(s / 3600) + " h ago" : Math.floor(s / 86400) + " d ago"; };
+  const dur = (s) => s == null ? "—" : s < 90 ? Math.round(s) + " s" : s < 5400 ? Math.round(s / 60) + " min" : (s / 3600).toFixed(1) + " h";
+  const pct = (a, b) => b ? Math.min(100, Math.round(100 * a / b)) : 0;
+  const bar = (a, b, cls = "") => `<div class="bar ${cls}"><i style="width:${pct(a, b)}%"></i></div>`;
+  const nums = (arr) => `<div class="nums">${arr.map(([l, v, c]) => `<div><div class="l">${l}</div><div class="v ${c || ""}">${v}</div></div>`).join("")}</div>`;
+  const head = (t, live, link) => `<h3><span class="live ${live ? "on" : ""}"></span>${t}${link ? `<a href="/command#${link}">Open →</a>` : ""}</h3>`;
+  let timer = null, on = false;
+
+  function render(S) {
+    const P = S.prebuild, M = S.measuring, Sh = S.sheets, O = S.orders, D = S.downloads, C = S.coverage, Co = S.companies, Y = S.system;
+    const scr = [];
+    // 1. ZIPs measuring right now
+    scr.push(`<div class="scr big">${head("ZIPs measuring now", M.length, "data")}
+      ${M.length ? M.map((j) => `<div><div class="row"><b>${j.zip}</b><span>${j.stage === "measuring" ? `${n(j.done)} of ${n(j.total)} homes` : esc(j.stage)}</span>
+        <span class="dim">${j.per_min ? j.per_min + "/min · " + dur(j.eta_s) + " left" : ""}</span></div>${bar(j.done, j.total)}
+        ${j.errors ? `<div class="dim bad">${j.errors} homes couldn't be measured</div>` : ""}</div>`).join("")
+        : '<div class="empty">Nothing measuring. Start the queue below, or buyers will start one when they order.</div>'}
+      <div style="margin-top:auto">
+        <div class="row"><b>Queue</b><span>${n(P.done)} of ${n(P.total)} ZIPs done${P.failed ? ` · <span class="bad">${P.failed} failed</span>` : ""}</span>
+          <span>${P.running ? '<button class="mini" data-act="stop">Stop</button>' : '<button class="go" data-act="start">Measure all ZIPs</button>'}</span></div>
+        ${bar(P.done, P.total)}
+        ${P.next.length ? `<div class="dim" style="margin-top:6px">Up next</div><div class="chips">${P.next.map((z) => `<span>${z}</span>`).join("")}</div>` : ""}
+      </div></div>`);
+    // 2. downloads
+    scr.push(`<div class="scr">${head("Downloads", D.recent.length && Date.now() / 1000 - D.recent[0].ts < 600)}
+      ${nums([["Today", n(D.today)], ["This week", n(D.week)]])}
+      ${D.recent.slice(0, 6).map((d) => `<div class="row"><b>${d.zip}</b><span>${d.kind === "premier" ? "Premier folder" : "Spreadsheet"}</span><span class="dim">${ago(d.ts)}</span></div>`).join("")
+        || '<div class="empty">No downloads yet.</div>'}</div>`);
+    // 3. orders
+    scr.push(`<div class="scr">${head("ZIP orders", O.processing.length, "data")}
+      ${nums([["Paid today", n(O.paid_today)], ["Sales today", usd(O.cents_today)], ["Unpaid", n(O.awaiting)]])}
+      ${O.processing.length ? '<div class="dim">Getting ready for the buyer</div>' + O.processing.slice(0, 5).map((o) => { const p = o.progress || {};
+          return `<div><div class="row"><b>${o.zip}</b><span>${o.product === "premier" ? "Premier" : "Sheet"} · ${esc(o.company)}</span><span class="dim">${p.total ? pct(p.done, p.total) + "%" : p.status === "building" ? "starting" : "queued"}</span></div>${bar(p.done, p.total, "amber")}</div>`; }).join("")
+        : O.recent.slice(0, 5).map((o) => `<div class="row"><b>${o.zip}</b><span>${usd(o.amount_cents)} · ${o.status === "ready" ? '<span class="ok">ready</span>' : esc(o.status)}</span><span class="dim">${ago(o.paid || o.created)}</span></div>`).join("")
+          || '<div class="empty">No orders yet.</div>'}</div>`);
+    // 4. ready to sell
+    scr.push(`<div class="scr">${head("Ready to sell", false, "data")}
+      ${nums([["ZIPs ready", n(Sh.ready_total)], ["Homes", n(Sh.homes)], ["Done today", n(Sh.today)]])}
+      ${Sh.ready.slice(0, 4).map((r) => `<div class="row"><b>${r.zip}</b><span>${n(r.count)} homes${r.errors ? ` · ${r.errors} missed` : ""}${r.skipped && r.skipped.length ? ` · <span class="bad">no ${esc(r.skipped.join(", "))}</span>` : ""}</span><span class="dim">${ago(r.finished)}</span></div>`).join("")}
+      ${Sh.failed_total ? `<div class="dim bad" style="margin-top:4px">${Sh.failed_total} failed</div>` + Sh.failed.slice(0, 3).map((r) => `<div class="row"><b>${r.zip}</b><span class="bad">failed ${ago(r.finished)}</span><span><button class="mini" data-retry="${r.zip}">Retry</button></span></div>`).join("") : ""}</div>`);
+    // 5. coverage
+    const by = C.by_status || {};
+    scr.push(`<div class="scr">${head("Coverage", C.running, "coverage")}
+      ${nums([["Metros mapped", `${n(C.mapped)}<span class="dim" style="font-size:13px"> / ${n(C.metros)}</span>`], ["Counties live", n(by.live)], ["ZIPs", n(C.zips)]])}
+      <div class="chips">${Object.entries(by).map(([k, v]) => `<span>${esc(k)} ${n(v)}</span>`).join("")}</div>
+      <div class="dim">${C.running ? "▶ " + esc(C.now || "Working") : "Idle. Runs again tonight."}</div></div>`);
+    // 6. companies
+    scr.push(`<div class="scr">${head("Companies", Co.active_today, "companies")}
+      ${nums([["Companies", n(Co.total)], ["Members", n(Co.members)], ["Active today", n(Co.active_today)], ["Reports today", n(Co.reports_today)]])}
+      <div class="dim">${n(Co.reports_30d)} reports in the last 30 days</div></div>`);
+    // 7. server
+    const dk = Y.disk || {};
+    scr.push(`<div class="scr">${head("Server", true, "safety")}
+      ${nums([["Memory", Y.memory_mb != null ? Y.memory_mb + " MB" : "—"], ["Disk free", dk.free_gb != null ? dk.free_gb + " GB" : "—", dk.free_gb != null && dk.free_gb < 2 ? "bad" : ""], ["Up", dur(S.uptime_s)]])}
+      ${dk.total_gb ? bar(dk.used_gb, dk.total_gb, dk.used_gb / dk.total_gb > .85 ? "amber" : "") + `<div class="dim">${dk.used_gb} of ${dk.total_gb} GB used</div>` : ""}
+      ${Y.cache && Y.cache.limit ? `<div class="dim">Download cache ${(Y.cache.bytes / 1e9).toFixed(1)} of ${(Y.cache.limit / 1e9).toFixed(0)} GB (oldest cleared automatically)</div>` : ""}
+      <div class="row"><b>Backup</b><span class="${Y.last_backup && Date.now() / 1000 - Y.last_backup < 2 * 86400 ? "ok" : "bad"}">${Y.last_backup ? ago(Y.last_backup) : "none yet"}</span><span></span></div>
+      ${Y.lockouts ? `<div class="bad">${Y.lockouts} sign-in lockout${Y.lockouts === 1 ? "" : "s"} right now</div>` : ""}</div>`);
+    $("screens").innerHTML = scr.join("");
+    $("stUpd").textContent = "Live · " + new Date().toLocaleTimeString();
+    $("screens").querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
+      b.disabled = true;
+      try { await api("/api/admin/data/prebuild-all", { method: "POST", json: { start: b.dataset.act === "start" } }); } catch (e) { alert(e.message); }
+      tick();
+    });
+    $("screens").querySelectorAll("[data-retry]").forEach((b) => b.onclick = async () => {
+      b.disabled = true;
+      try { await api("/api/admin/data/prebuild", { method: "POST", json: { zip: b.dataset.retry } }); } catch (e) { alert(e.message); }
+      tick();
+    });
+  }
+  async function tick() {
+    clearTimeout(timer);
+    if (!on) return;
+    try { const S = await api("/api/admin/status"); $("stKey").classList.add("hidden"); render(S); }
+    catch (e) {
+      if (/admin|401|key/i.test(e.message)) { $("stKey").classList.remove("hidden"); return; }
+      $("stUpd").textContent = "Reconnecting… (" + e.message + ")";
+    }
+    timer = setTimeout(tick, document.hidden ? 30000 : 5000);
+  }
+  $("stGo").onclick = () => { localStorage.setItem("adminToken", $("stTok").value.trim()); tick(); };
+  addEventListener("cc-tab", (e) => { on = e.detail === "status"; if (on) tick(); else clearTimeout(timer); });
+  document.addEventListener("visibilitychange", () => { if (on && !document.hidden) tick(); });
+  if (((location.hash || "#status").slice(1)) === "status") { on = true; tick(); }
 })();
 </script>
 </body>

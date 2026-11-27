@@ -218,3 +218,78 @@ class ChunkedPolygonLayer:
                 if g.intersects(clip_local):
                     out.append(g.intersection(clip_local))
         return out
+
+
+# ------------------------------------------------------------ cache upkeep
+_PRUNE_DIRS = ("bin", "lidar", "json", "chunks", "ept", "lean")
+_cache_info: dict = {"bytes": 0, "limit": 0, "pruned": 0, "at": 0}
+
+
+def cache_limit_bytes() -> int:
+    """How big the download cache may grow: CACHE_MAX_GB, else 40% of the
+    disk (at most 40 GB). Measured sheets and orders live elsewhere and are
+    never touched."""
+    env = os.environ.get("CACHE_MAX_GB")
+    if env:
+        try:
+            return int(float(env) * 1e9)
+        except ValueError:
+            pass
+    import shutil
+    try:
+        total = shutil.disk_usage(str(CACHE_DIR)).total
+    except Exception:
+        total = 20e9
+    return int(min(40e9, total * 0.4))
+
+
+def prune_cache() -> dict:
+    """Delete the oldest cached downloads (map tiles, LiDAR, county answers)
+    once the cache is over its limit, down to 75% of it. Anything deleted is
+    simply downloaded again if it's needed."""
+    files = []
+    for d in _PRUNE_DIRS:
+        root = CACHE_DIR / d
+        if not root.exists():
+            continue
+        for dirpath, _, names in os.walk(root):
+            for nm in names:
+                fp = os.path.join(dirpath, nm)
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                files.append((st.st_mtime, st.st_size, fp))
+    size = sum(f[1] for f in files)
+    limit = cache_limit_bytes()
+    freed = 0
+    if size > limit:
+        files.sort()
+        target = size - int(limit * 0.75)
+        for _, sz, fp in files:
+            if freed >= target:
+                break
+            try:
+                os.remove(fp)
+                freed += sz
+            except OSError:
+                pass
+    _cache_info.update(bytes=size - freed, limit=limit, pruned=_cache_info["pruned"] + freed, at=time.time())
+    return dict(_cache_info)
+
+
+def start_cache_pruner(every_s: int = 900) -> None:
+    import threading
+
+    def loop():
+        while True:
+            try:
+                prune_cache()
+            except Exception:
+                pass
+            time.sleep(every_s)
+    threading.Thread(target=loop, daemon=True, name="cache-pruner").start()
+
+
+def cache_info() -> dict:
+    return dict(_cache_info)
