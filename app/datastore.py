@@ -46,8 +46,6 @@ COLUMNS = [
     ("driveway_sqft", "Driveway sq ft"), ("sidewalk_sqft", "Public sidewalk sq ft"),
     ("other_hardscape_sqft", "Patios & walks sq ft"), ("structures_sqft", "Decks/sheds/play sets sq ft"),
     ("beds_sqft", "Landscape beds sq ft"), ("frontage_ft", "Street frontage ft"),
-    ("tree_count", "Trees on lot"), ("tree_canopy_sqft", "Tree canopy sq ft"),
-    ("lawn_under_trees_sqft", "Lawn under trees sq ft"),
     ("wall_sqft", "House wall area sq ft (siding)"), ("est_windows", "Windows & doors (estimate)"),
     ("quality", "Quality (ok / review)"), ("notes", "Notes"),
     ("lat", "Latitude"), ("lon", "Longitude"), ("pin", "Property id"),
@@ -62,7 +60,6 @@ MEASURE_TYPES = [
     ("patios", "Patios & walks", ["other_hardscape_sqft"]),
     ("structures", "Decks, sheds & play sets", ["structures_sqft"]),
     ("beds", "Landscape beds", ["beds_sqft"]),
-    ("trees", "Trees (count, canopy, lawn under trees)", ["tree_count", "tree_canopy_sqft", "lawn_under_trees_sqft"]),
     ("building", "Building footprint", ["building_sqft"]),
     ("walls", "House walls & windows (siding)", ["wall_sqft", "est_windows"]),
     # add-on, not a measurement: each home's assessed value as a column (+5c)
@@ -824,6 +821,28 @@ def service_zips() -> list[str]:
     return list(zips)
 
 
+def queue_order(zips: list[str], fetch: bool = True) -> list[str]:
+    """ZIPs nearest home first (Omaha outward). ZIPs whose location isn't
+    known yet go last, in the order given."""
+    from . import coverage
+    from .coverage import miles_from_home
+    first = {}
+    for m in coverage.metros():  # ZIPs of the priority metros go first, in their order
+        if m["cbsa"] in coverage.PRIORITY and isinstance(m.get("zips"), list):
+            for z in m["zips"]:
+                first.setdefault(z, coverage.PRIORITY.index(m["cbsa"]))
+    try:
+        pts = zip_points(list(zips)) if fetch else (json.loads(_ZIP_POINTS.read_text()) if _ZIP_POINTS.exists() else {})
+    except Exception:
+        pts = json.loads(_ZIP_POINTS.read_text()) if _ZIP_POINTS.exists() else {}
+    idx = {z: i for i, z in enumerate(zips)}
+    def key(z):
+        d = miles_from_home(*pts[z]) if z in pts else 1e9
+        grp = first.get(z, 0 if d <= 35 else 99)  # home's own metro always leads
+        return (grp, d, idx[z])
+    return sorted(zips, key=key)
+
+
 def prebuild_status() -> dict:
     st = json.loads(PREBUILD_STATE.read_text()) if PREBUILD_STATE.exists() else {"status": "idle"}
     st["running"] = bool(_pre["thread"] and _pre["thread"].is_alive())
@@ -868,12 +887,14 @@ def prebuild_all(classes: list[str] | None = None, start: bool = True, zips: lis
     _pre["stop"] = False
 
     def run():
-        for z in st["zips"]:  # the list can grow while running
+        while True:  # the list can grow while running; always take the nearest ZIP left
             if _pre["stop"]:
                 st.update(status="stopped", current=None); _save_pre(st)
                 return
-            if z in st["done"]:
-                continue
+            left = queue_order([z for z in st["zips"] if z not in st["done"] and z not in st["failed"]])
+            if not left:
+                break
+            z = left[0]
             st["current"] = z; _save_pre(st)
             ev = threading.Event()
             try:
@@ -911,7 +932,7 @@ init()
 # ------------------------------------------------------- totals (owner)
 TOTAL_KEYS = [("home_value", "Assessed value $"), ("lot_sqft", "Lot"), ("lawn_sqft", "Lawn"), ("parkway_sqft", "Parkway"), ("driveway_sqft", "Driveway"),
               ("sidewalk_sqft", "Sidewalk"), ("other_hardscape_sqft", "Patios & walks"), ("beds_sqft", "Beds"),
-              ("building_sqft", "Building footprint"), ("wall_sqft", "House walls"), ("tree_canopy_sqft", "Tree canopy"),
+              ("building_sqft", "Building footprint"), ("wall_sqft", "House walls"),
               ("living_sqft", "House size (assessor)")]
 _totals_cache: dict = {}
 

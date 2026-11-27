@@ -254,7 +254,6 @@ function yardCard(d) {
         <div>${y.photo_jpg ? `<img alt="Aerial photo of the lot with lawn, driveway, sidewalk and beds shaded" src="data:image/jpeg;base64,${y.photo_jpg}">` : ""}</div>
         <div><table class="kv">
           ${rows.map(([c, k, v]) => `<tr><td><span class="sw2" style="background:${c};height:10px"></span>${k}</td><td>${n(v)}</td></tr>`).join("")}
-          <tr><td>Trees on the lot</td><td>${y.tree_count ?? "–"}${y.tree_canopy_sqft ? ` · ${n(y.tree_canopy_sqft)} sq ft canopy` : ""}</td></tr>
           <tr><td>Street frontage</td><td>${n(y.frontage_ft)} ft</td></tr>
           <tr><td><b>Lot</b></td><td>${n(y.lot_sqft)}</td></tr>
         </table>

@@ -448,3 +448,18 @@ def test_auto_approve_rules(monkeypatch):
     cv._set("counties", "fips", "99995", name="Broken", state="XX", status="found",
             candidates=__import__("json").dumps([good]))
     assert cv.auto_approve("99995") is None and "fail" in cv.county("99995")["note"]
+
+
+def test_queue_goes_omaha_first(monkeypatch):
+    from app import coverage as cv
+    from app import datastore as ds
+    pts = {"68102": [41.26, -95.93], "50309": [41.59, -93.62], "80202": [39.75, -105.0], "66603": [39.05, -95.68],
+           "64105": [39.10, -94.59]}
+    monkeypatch.setattr(ds, "zip_points", lambda zs: {z: pts[z] for z in zs if z in pts})
+    monkeypatch.setattr(cv, "metros", lambda: [
+        {"cbsa": "19740", "zips": ["80202"], "lat": 39.7, "lon": -105.0},
+        {"cbsa": "28140", "zips": ["64105"], "lat": 39.1, "lon": -94.6},
+        {"cbsa": "19780", "zips": ["50309"], "lat": 41.6, "lon": -93.6},
+        {"cbsa": "45820", "zips": ["66603"], "lat": 39.0, "lon": -95.7}])
+    # Omaha, then the priority metros in order (Des Moines, KC, Denver), then the rest nearest first
+    assert ds.queue_order(["66603", "80202", "64105", "50309", "68102", "99999"]) == ["68102", "50309", "64105", "80202", "66603", "99999"]

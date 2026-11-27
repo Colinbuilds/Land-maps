@@ -42,7 +42,6 @@ DEFAULT_COPY = {
     "roofing": ("Your roof, measured.", "A free inspection and an exact quote, from your roof's real size."),
     "siding": ("Your home, measured.", "Siding and paint priced from your home's exact wall area."),
     "solar": ("Your roof, measured.", "See how much of your roof faces the sun. Call for a free solar estimate."),
-    "trees": ("Your trees, counted.", "Trimming, removal and care for every tree on your lot."),
     "landscaping": ("Your yard, measured.", "Mulch, rock and planting priced from your exact bed size."),
     "irrigation": ("Your lawn, measured.", "Sprinkler installs, repairs and winterizing sized to your lawn."),
     "pest": ("Your property, measured.", "Pest and mosquito control sized to your yard and home."),

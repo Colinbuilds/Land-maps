@@ -11,6 +11,8 @@ All results are square feet (lengths in feet).
 """
 from __future__ import annotations
 
+import os
+
 import base64
 import io
 import math
@@ -30,6 +32,10 @@ from .imagery import Mosaic, ndvi_for
 from .lidar import LidarSource
 from . import corrections
 
+# Trees (count, canopy, lawn under trees) are switched off: not measured,
+# not sold. MEASURE_TREES=1 brings them back.
+MEASURE_TREES = os.environ.get("MEASURE_TREES", "0") == "1"
+
 MEASUREMENTS = {
     "lot_sqft": "Lot (total parcel)",
     "building_sqft": "Building footprint / roof",
@@ -42,9 +48,6 @@ MEASUREMENTS = {
     "beds_sqft": "Landscape beds & shrubs",
     "wall_sqft": "House wall area (siding, gross)",
     "est_windows": "Windows & doors (estimate)",
-    "tree_count": "Trees on the lot (count)",
-    "tree_canopy_sqft": "Tree canopy over the lot",
-    "lawn_under_trees_sqft": "Lawn under tree canopy",
     "frontage_ft": "Street frontage (linear ft)",
 }
 
@@ -234,6 +237,10 @@ class Measurer:
             struct = _drop_small(struct, 30.0 / (ft_px * ft_px))
         veg = np.asarray(smp["veg"], np.float32)
         r_ = lambda ft: max(1, int(round(ft / ft_px)))
+        if not MEASURE_TREES:  # trees aren't counted or sold: skip the work
+            fence = _fences(np.asarray(smp["obj"], np.float32), np.asarray(smp["veg"], np.float32), ft_px, bldg_m)
+            none = np.zeros(veg.shape, bool)
+            return struct, bed, canopy, none, [], fence
         if bldg_m is not None and bldg_m.any():
             # pulses that clip a gutter come back as "vegetation" at roof
             # height: right around a house only taller growth is a tree
@@ -631,12 +638,11 @@ class Measurer:
             "fence_ft": round(fence_ft),  # beta: not sold until validated
             "fenced_yard": fenced_yard,
             "beds_sqft": round(beds_sqft),
-            "tree_count": len(lot_tops),
-            "tree_canopy_sqft": round(tree_canopy_sqft),
-            "lawn_under_trees_sqft": round(lawn_under_trees_sqft),
-            "trees": [{"lat": round(la, 7), "lon": round(lo, 7), "height_ft": round(hh)}
-                      for la, lo, hh in ((mos.px_to_lonlat(c + 0.5, r + 0.5)[1], mos.px_to_lonlat(c + 0.5, r + 0.5)[0], h_)
-                                         for r, c, h_ in lot_tops)],
+            **({"tree_count": len(lot_tops), "tree_canopy_sqft": round(tree_canopy_sqft),
+                "lawn_under_trees_sqft": round(lawn_under_trees_sqft),
+                "trees": [{"lat": round(la, 7), "lon": round(lo, 7), "height_ft": round(hh)}
+                          for la, lo, hh in ((mos.px_to_lonlat(c + 0.5, r + 0.5)[1], mos.px_to_lonlat(c + 0.5, r + 0.5)[0], h_)
+                                             for r, c, h_ in lot_tops)]} if MEASURE_TREES else {}),
             "frontage_ft": round(frontage_ft),
             **self._house_walls(P_wgs, env, lid is not None),
             "home_value": _num(attrs.get("home_value")),

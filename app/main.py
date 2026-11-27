@@ -2054,8 +2054,9 @@ def admin_status():
     queue = pre.get("zips") or []
     pre_out = {"running": pre.get("running"), "status": pre.get("status", "idle"), "current": pre.get("current"),
                "total": len(queue), "done": len(pre.get("done") or []), "failed": len(pre.get("failed") or []),
-               "next": [z for z in queue if z not in set(pre.get("done") or []) and z not in set(pre.get("failed") or [])
-                        and z != pre.get("current")][:6], "started": pre.get("started")}
+               "next": datastore.queue_order([z for z in queue if z not in set(pre.get("done") or [])
+                                              and z not in set(pre.get("failed") or []) and z != pre.get("current")], fetch=False)[:6],
+               "started": pre.get("started")}
     orders = datastore.list_orders(400)
     day = time.time() - 86400
     def o_row(o):

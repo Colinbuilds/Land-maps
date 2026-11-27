@@ -351,7 +351,7 @@
       const r = await api("/api/data/sample", { method: "POST", json: { email, zip: q.zip, classes: $("cls").value.split(",") } });
       $("sMsg").innerHTML = `<span class="ok">Here are ${r.rows.length} properties.</span>`;
       const num = (k) => /_sqft$|_ft$|_count$|^est_/.test(k);
-      const show = ["address", "city", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft", "building_sqft", "lot_sqft", "beds_sqft", "tree_count", "wall_sqft", "est_windows"].filter((k) => r.keys.includes(k));
+      const show = ["address", "city", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft", "building_sqft", "lot_sqft", "beds_sqft", "wall_sqft", "est_windows"].filter((k) => r.keys.includes(k));
       const lab = Object.fromEntries(r.columns.map((c) => [c.key, c.label]));
       $("sampleTable").innerHTML = `<thead><tr>${show.map((k) => `<th class="${num(k) ? "num" : ""}">${esc(lab[k])}</th>`).join("")}</tr></thead>
         <tbody>${r.rows.map((row) => `<tr>${show.map((k) => `<td class="${num(k) ? "num" : ""}">${num(k) ? fmt(row[k]) : esc(row[k])}</td>`).join("")}</tr>`).join("")}</tbody>`;
