@@ -410,6 +410,28 @@
   .dp .tradepresets .chips button { flex: 0 0 auto; min-height: 38px; padding: 7px 13px; font-size: 13.5px; font-weight: 600;
     background: var(--field, #f3f5f0); color: var(--ink); border-radius: 99px; box-shadow: none; white-space: nowrap; }
   .dp .tradepresets .chips button.on { background: var(--ink); color: #fff; }
+
+  /* ---- compact layout: tight sections, each block on its own colour ---- */
+  .dp .sec { padding: 28px 0 !important; }
+  @media (min-width: 900px) { .dp .sec { padding: 40px 0 !important; } }
+  .dp .sec-head { margin-bottom: 16px; }
+  .dp .sec-head h2 { font-size: clamp(26px, 4.6vw, 36px); margin: 0 0 8px; }
+  .dp .sec-head p.eyebrow { margin: 0 0 8px; }
+  .dp .hero-sec { padding: 18px 0 26px !important; }
+  @media (min-width: 900px) { .dp .hero-sec { padding: 28px 0 36px !important; } .dp .hero { gap: 36px; } }
+  .dp #result { margin-top: 22px; }
+  .dp .trust { margin-top: 14px; }
+  .dp main > section { border-top: 1px solid rgba(21, 52, 43, .07); }
+  .dp main > section.hero-sec { background: #f6f7f2; border-top: 0; }
+  .dp main > section:nth-of-type(6n+2) { background: #fdf4ee; }   /* warm: the problem */
+  .dp main > section:nth-of-type(6n+3) { background: #e7f4eb; }   /* green: membership */
+  .dp main > section:nth-of-type(6n+4) { background: #edf2f8; }   /* blue */
+  .dp main > section:nth-of-type(6n+5) { background: #faf6ea; }   /* sand */
+  .dp main > section:nth-of-type(6n+6) { background: #f1eef8; }   /* lavender */
+  .dp main > section:nth-of-type(6n+7) { background: #ffffff; }   /* white */
+  .dp main > section.cta-sec { background: #11302a; background: color-mix(in srgb, var(--accent) 14%, #0e2a22); color: #fff; }
+  .dp .cta-sec h2 { font-size: clamp(28px, 5vw, 40px); margin: 0 0 10px; }
+  .dp .cta-sec p { margin: 0 auto 18px; }
 </style>
 </head>
 <body class="dp">
@@ -599,7 +621,7 @@
   </section>
 
   <!-- ============================================================ who -->
-  <section class="sec" style="padding-top:24px">
+  <section class="sec">
     <div class="wrap">
       <div class="sec-head split">
         <div>
