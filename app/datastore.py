@@ -510,7 +510,8 @@ def ensure_dataset(zip_code: str, classes: list[str], on_ready=None) -> str:
             src = bulk.csv_path(job["id"])
             with open(src, newline="") as fh:
                 rows = [r for r in csv.DictReader(fh)
-                        if r.get("lawn_sqft") not in (None, "") and (r.get("address") or "").strip()]
+                        if r.get("lawn_sqft") not in (None, "") and (r.get("address") or "").strip()
+                        and _has_house(r)]
             tmp = dataset_path(zip_code, classes).with_suffix(".tmp")
             with open(tmp, "w", newline="") as fh:
                 w = csv.DictWriter(fh, fieldnames=[k for k, _ in COLUMNS], extrasaction="ignore")
@@ -539,6 +540,16 @@ def ensure_dataset(zip_code: str, classes: list[str], on_ready=None) -> str:
     job = bulk.start_job(zip_code, classes, list(MEASUREMENTS), None, False, workers=8, on_done=done)
     meta_p.write_text(json.dumps({"status": "building", "job": job["id"], "started": time.time()}))
     return "building"
+
+
+def _has_house(r: dict) -> bool:
+    """Sell homes, not empty lots: a building on the photo or living area on the record."""
+    def num(k):
+        try:
+            return float(r.get(k) or 0)
+        except ValueError:
+            return 0.0
+    return num("building_sqft") >= 200 or num("living_sqft") > 0
 
 
 def dataset_progress(zip_code: str, classes: list[str]) -> dict:

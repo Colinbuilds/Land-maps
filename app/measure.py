@@ -35,6 +35,7 @@ from . import corrections
 # Trees (count, canopy, lawn under trees) are switched off: not measured,
 # not sold. MEASURE_TREES=1 brings them back.
 MEASURE_TREES = os.environ.get("MEASURE_TREES", "0") == "1"
+FRONTAGE_MAX_FT = 40.0
 
 MEASUREMENTS = {
     "lot_sqft": "Lot (total parcel)",
@@ -237,10 +238,13 @@ class Measurer:
             struct = _drop_small(struct, 30.0 / (ft_px * ft_px))
         veg = np.asarray(smp["veg"], np.float32)
         r_ = lambda ft: max(1, int(round(ft / ft_px)))
+        # roof-height returns: where the photo and the building outline disagree
+        # by a few feet, the roof edge must not be read as a patio
+        high = ndi.binary_opening(np.asarray(smp["obj"], np.float32) > 7.0, iterations=1)
         if not MEASURE_TREES:  # trees aren't counted or sold: skip the work
             fence = _fences(np.asarray(smp["obj"], np.float32), np.asarray(smp["veg"], np.float32), ft_px, bldg_m)
             none = np.zeros(veg.shape, bool)
-            return struct, bed, canopy, none, [], fence
+            return struct, bed, canopy, none, [], fence, high
         if bldg_m is not None and bldg_m.any():
             # pulses that clip a gutter come back as "vegetation" at roof
             # height: right around a house only taller growth is a tree
@@ -258,7 +262,7 @@ class Measurer:
             crowns = crowns & ~bad[lab]
             tops = [t for t in tops if crowns[t[0], t[1]]]
         fence = _fences(np.asarray(smp["obj"], np.float32), np.asarray(smp["veg"], np.float32), ft_px, bldg_m)
-        return struct, bed, canopy, crowns, tops, fence
+        return struct, bed, canopy, crowns, tops, fence, high
 
     # --------------------------------------------------------------- measure
     def measure(self, parcel_feature: dict, want_overlay: bool = False, want_photo: bool = False) -> dict:
@@ -302,6 +306,18 @@ class Measurer:
             # street side of the lot can still be found.
             neigh = [g for g in neigh
                      if not (g.area > 2.0 * P.area and 4 * math.pi * g.area / max(g.length, 1.0) ** 2 < 0.08)]
+        if self.streets and neigh:
+            # A "neighbour" a street centreline runs down the middle of is the
+            # right-of-way mapped as a parcel (common in Iowa and Texas data):
+            # dropping it lets the street side of the lot be found.
+            try:
+                cl = [self.proj.to_local(f["geometry"]) for f in self.streets.query(env)]
+                cl = unary_union(cl) if cl else None
+                if cl is not None and not cl.is_empty:
+                    neigh = [g for g in neigh if g.buffer(-3.0).intersection(cl).length < 40.0
+                             or g.intersection(P.buffer(1.0)).area > 0.5 * g.area]
+            except Exception:
+                pass
         if rest_of_lot is not None and not rest_of_lot.is_empty:
             neigh.append(rest_of_lot)
         N = unary_union(neigh) if neigh else None
@@ -334,7 +350,9 @@ class Measurer:
         frontage = P.exterior.intersection(row.buffer(2.0)) if not row.is_empty else None
         frontage = _lines(frontage)
         if V is not None and frontage:
-            near = V.buffer(60)
+            # front lot lines sit 10-25 ft from the curb; a road 40+ ft past the
+            # back fence (homes backing onto an arterial) isn't this lot's street
+            near = V.buffer(FRONTAGE_MAX_FT)
             frontage = [seg for seg in _lines(unary_union(frontage).intersection(near)) if seg.length > 8]
         else:
             frontage = [seg for seg in frontage if seg.length > 8] if V is not None else []
@@ -543,7 +561,13 @@ class Measurer:
         struct_m = bed_m = canopy_m = crown_m = fence_m = np.zeros(hard.shape, bool)
         tops = []
         if lid is not None:
-            struct_m, bed_m, canopy_m, crown_m, tops, fence_m = lid
+            struct_m, bed_m, canopy_m, crown_m, tops, fence_m, high_m = lid
+            roofish = high_m & ndi.binary_dilation(bldg_m, iterations=max(1, int(round(6.0 / ft_px))))
+            if roofish.any():  # roof edges the photo called paving: neither patio nor lawn
+                other_m &= ~roofish
+                other_sqft = float(other_m.sum()) * sqft_px
+                bldg_m = bldg_m | roofish
+                yard = yard & ~roofish
             crown_m = crown_m & ~bldg_m
             struct_m &= yard
             canopy_m &= yard & ~struct_m
@@ -613,6 +637,9 @@ class Measurer:
             why.append("driveway unusually large")
         if (drive_lot_sqft + other_sqft) > 0.6 * open_area:
             why.append("most of the yard reads as paving")
+        liv = _num(attrs.get("bldg_sqft"))
+        if liv and building_sqft > max(6000.0, 4 * liv):
+            why.append("buildings much bigger than the house on record")
         if lawn_sqft < 50 and open_area > 2000 and not why:
             why.append("no lawn found")
         if why:

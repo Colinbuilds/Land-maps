@@ -286,6 +286,26 @@ def _ept_index() -> list:
     return _EPT["rows"]
 
 
+def ept_urls_at(lon: float, lat: float) -> list[str]:
+    """USGS point clouds covering one spot, newest first."""
+    from shapely.geometry import Point, shape
+    pt = Point(lon, lat)
+    hits = []
+    for (x0, y0, x1, y1), f in _ept_index():
+        if not (x0 <= lon <= x1 and y0 <= lat <= y1):
+            continue
+        try:
+            if not shape(f["geometry"]).contains(pt):
+                continue
+        except Exception:
+            continue
+        name = f["properties"].get("name", "")
+        yr = max((int(y) for y in re.findall(r"(20\d\d)", name)), default=0)
+        if f["properties"].get("url"):
+            hits.append((yr, f["properties"]["url"]))
+    return [u for _, u in sorted(hits, reverse=True)]
+
+
 def _lidar_for(geom) -> dict | None:
     """The newest USGS 3DEP point clouds covering the county."""
     from shapely.geometry import shape
@@ -342,7 +362,7 @@ def base_config(fips: str) -> dict:
 FIELD_PATTERNS = {
     "pin": [r"^PARCEL_?ID$", r"^PROP_?ID$", r"^GEO_?ID$", r"^ACCOUNT_?(NO|NUM|NUMBER)?$", r"^PARCELID$", r"^PIN$", r"^APN$", r"^PARCEL_?(NO|NUM|NUMBER)$", r"^GPIN$", r"^PID$",
             r"^PARCEL$", r"^PARID$", r"^PARCELNUMB$", r"^MAPNO$", r"^KEYPIN$", r"^QUICKREFID$"],
-    "address": [r"^SITUS_?CONCAT(_?SHORT)?$", r"^SITUS_?FULL(_?ADDR(ESS)?)?$", r"^SITE_?ADDR(ESS)?$", r"^SITUS(_?ADDR(ESS)?)?$", r"^PROP(ERTY)?_?ADDR(ESS)?$", r"^PHY(SICAL)?_?ADDR(ESS)?$",
+    "address": [r"^SITUS_?CONCAT(_?SHORT)?$", r"^SITUS_?ADDRESS_?LINE_?1$", r"^PHY_?ADDR_?1$", r"^SITE_?ADDR_?1$", r"^SITUS_?FULL(_?ADDR(ESS)?)?$", r"^SITE_?ADDR(ESS)?$", r"^SITUS(_?ADDR(ESS)?)?$", r"^PROP(ERTY)?_?ADDR(ESS)?$", r"^PHY(SICAL)?_?ADDR(ESS)?$",
                 r"^SITEADDRESS$", r"^FULL_?ADDR(ESS)?$", r"^ADDRESS$", r"^LOC(ATION)?_?ADDR(ESS)?$", r"^STREET_?ADDR(ESS)?$",
                 r"^SITUSADDR$", r"^ADDR$", r"^SITE_?ADD$", r"^PROPADDR$", r"^SITUS_ADDRESS$"],
     "city": [r"^SITE_?CITY$", r"^SITUS_?CITY$", r"^PROP(ERTY)?_?CITY$", r"^CITY$", r"^MUNICIPALITY$", r"^PHY_?CITY$"],
@@ -355,7 +375,9 @@ FIELD_PATTERNS = {
     "land_value": [r"^LAND_?VAL(UE)?$", r"^LNDVALUE$", r"^LANDVAL$", r"^LAND_?APPR$"],
     "year_built": [r"^YEAR_?BUILT$", r"^YR_?BUILT$", r"^YRBLT$", r"^RESYRBLT$", r"^YEARBLT$", r"^BUILT$", r"^YEARBUILT$"],
     "bldg_sqft": [r"^(BLDG|BUILDING|LIVING|HEATED|FIN(ISHED)?)_?(SQ_?FT|AREA|SF)$", r"^RESFLRAREA$", r"^SQ_?FT$",
-                  r"^LIVING_?AREA$", r"^TOT_?SQFT$", r"^GLA$", r"^IMPRV_?MAIN_?AREA$"],
+                  r"^LIVING_?AREA$", r"^LIVING_?ARE$", r"^TOT_?SQFT$", r"^GLA$", r"^IMPRV_?MAIN_?AREA$",
+                  r"^RES_?ABOVE_?GRADE_?AREA$", r"^ABOVE_?GRADE_?(AREA|SQ_?FT)$", r"^TOT_?LVG_?AR(EA)?$", r"^SQ_?FT_?LIVING$",
+                  r"^HEATED_?AREA$", r"^FINISHED_?AREA$"],
     "lot_acres": [r"^(GIS_?|CALC_?|DEED_?)?ACRE(S|AGE)?$", r"^ACRES$", r"^ACREAGE$", r"^LAND_?SIZE_?ACRES$"],
     "lot_sqft": [r"^LOT_?(SIZE|SQ_?FT|AREA)$", r"^LAND_?SQ_?FT$", r"^SQFT_?LOT$", r"^LAND_?SIZE_?SQ_?FT$"],
     "class": [r"^(PROP(ERTY)?_?)?CLASS(_?CODE|CD)?$", r"^CLASSCD$", r"^LAND_?USE(_?CODE)?$", r"^LUC$", r"^USE_?CODE$",
@@ -370,7 +392,7 @@ FIELD_PATTERNS = {
 # Looser second pass (field names cut to 10 characters by shapefiles, odd
 # naming): (must contain, must not contain, preferred words)
 FALLBACKS = {
-    "address": (r"ADDR|ADRS|SITUS", r"MAIL|OWN|PSTL|TAXP|BILL|CITY|ZIP|STATE|NUM|NBR|NO$|UNIT|APT|SUITE|PREFIX|SUFFIX|DIR|TYPE",
+    "address": (r"ADDR|ADRS|SITUS", r"MAIL|OWN|PSTL|TAXP|BILL|CITY|ZIP|STATE|NUM|NBR|NO$|UNIT|APT|SUITE|PREFIX|SUFFIX|DIR|TYPE|COORD|_X_|_Y_|LINE_?2|ADDR_?2|_ID$|ID$",
                 r"CONCAT|FULL|SITE|SITUS|PROP|PHY|LOC"),
     "owner": (r"OWN|TAXPAYER|GRANTEE", r"ADDR|ADR|CITY|ZIP|STATE|ST$|TYPE|CODE|PCT|SHIP|DATE|DATA|SOURCE", r"NAME|NM|1"),
     "home_value": (r"VAL|APPR|ASSESS|MKT", r"LAND|LND|BLDG|IMP|PER|ACRE|YEAR|DATE|PRIOR|PREV|_1$|EXEMPT", r"TOT|ASSESS|MARKET|APPR|FULL"),
@@ -383,17 +405,22 @@ FALLBACKS = {
 
 def guess_fields(fields: list[dict]) -> dict:
     names = [f["name"] for f in fields if f.get("type") not in ("esriFieldTypeGeometry", "esriFieldTypeOID")]
+    kind = {f["name"]: f.get("type") for f in fields}
+    NUMERIC = {"home_value", "land_value", "bldg_sqft", "lot_sqft", "lot_acres", "year_built"}
     out = {}
     for key, pats in FIELD_PATTERNS.items():
         for p in pats:  # first pattern wins: they're in order of preference
-            hit = next((n for n in names if re.match(p, n, re.I)), None)
+            # a date field can't be a value or a size ("APPRAISAL_" = appraisal date, cut to 10 letters)
+            hit = next((n for n in names if re.match(p, n, re.I)
+                        and not (key in NUMERIC and kind.get(n) == "esriFieldTypeDate")), None)
             if hit:
                 out[key] = hit
                 break
     for key, (must, never, prefer) in FALLBACKS.items():
         if key in out:
             continue
-        cands = [n for n in names if re.search(must, n, re.I) and not re.search(never, n, re.I) and n not in out.values()]
+        cands = [n for n in names if re.search(must, n, re.I) and not re.search(never, n, re.I) and n not in out.values()
+                 and not (key in NUMERIC and kind.get(n) == "esriFieldTypeDate")]
         if cands:
             cands.sort(key=lambda n: (0 if re.search(prefer, n, re.I) else 1, len(n)))
             out[key] = cands[0]
@@ -509,7 +536,11 @@ def class_values(url: str, field: str) -> list[dict]:
                                   "outStatistics": json.dumps([{"statisticType": "count", "onStatisticField": field,
                                                                 "outStatisticFieldName": "n"}]),
                                   "orderByFields": "n DESC", "f": "json"}, ttl=86400)
-    return [{"value": f["attributes"].get(field), "n": f["attributes"].get("n")} for f in (d.get("features") or [])[:40]]
+    out = []
+    for f in (d.get("features") or [])[:40]:
+        a = {k.lower(): v for k, v in f["attributes"].items()}  # some servers answer "N" or "COUNT"
+        out.append({"value": a.get(field.lower()), "n": a.get("n")})
+    return out
 
 
 def approve(fips: str, url: str, fields: dict, residential_where: str | None = None, imagery_url: str | None = None,
@@ -546,15 +577,21 @@ def approve(fips: str, url: str, fields: dict, residential_where: str | None = N
 
 
 # ------------------------------------------------------------ auto-approve
-_RES_TEXT = re.compile(r"RESID|SINGLE|SFR|S\.F\.|DUPLEX|TOWN ?HO|CONDO|DWELL|MOBILE HOME|MANUFACTURED|PLANNED UNIT|"
+_RES_TEXT = re.compile(r"RESID|SINGLE|SFR|S\.F\.|DUPLEX|TOWN ?HO|ROW ?HOUSE|DWELL|MOBILE HOME|MANUFACTURED|PLANNED UNIT|"
                        r"\bSTORY\b|RANCH|SPLIT LEVEL|BI ?-?LEVEL|TRI ?-?LEVEL|BUNGALOW|COTTAGE", re.I)
 _NOT_RES = re.compile(r"VACANT|COMMERC|NON[- ]?RES|EXEMPT|BPP|OFFICE|INDUSTR|RETAIL|WAREHOUSE|APARTMENTS? ABOVE|"
                       r"BANK|STORE|SHOP|CHURCH|SCHOOL|HOTEL|MOTEL|RESTAURANT|MEDICAL|CLINIC|HOSPITAL|AUTO|SERVICE|"
-                      r"GARAGE, ?(SERVICE|REPAIR|PARKING)|DAY ?CARE|NURSING|ASSISTED|FRATERNAL|THEATER|BAR\b|TAVERN", re.I)
+                      r"GARAGE|DAY ?CARE|NURSING|ASSISTED|FRATERNAL|THEATER|BAR\b|TAVERN|"
+                      # homes we can sell to: not bare land, common areas, apartments, condo stacks or parks
+                      r"\bLAND\b|COMMON|\bHOA\b|APART|\bAPTS?\b|\bUNITS\b|MULTI|CONDO|HOME PARK|\bPARK\b|STORAGE|PARKING", re.I)
 _RES_CODES = {"R", "RES", "RS", "R1", "R-1", "R2", "R-2", "SF", "SFR", "RESIDENTIAL",
-              "A1", "A2", "A3", "A",  # Texas appraisal: A = single family (A1 house, A2 mobile, A3 condo)
-              "0100", "0101", "0102", "0103", "0104", "0105", "0106", "01",  # Florida DOR: 01xx single family
-              "1112", "1212", "1215"}  # Colorado residential abstract codes
+              "A1", "A2", "A",  # Texas appraisal: A = single family (A1 house, A2 mobile; A3 condo left out)
+              }
+_RES_CODES_STATE = {
+    "FL": {"0100", "0101", "0102", "0103", "0104", "0105", "0106", "01"},  # Florida DOR: 01xx single family
+    # Colorado abstract codes: 1112/1212 single family, 1215 manufactured, 1225 duplex-triplex (0100 is vacant land)
+    "CO": {"1112", "1212", "1215", "1225"},
+}
 _NOT_A = {"IA", "NE", "KS", "MO", "SD", "ND", "MN", "WI", "IL", "IN", "OH"}  # states where "A" means agricultural
 
 
@@ -568,29 +605,36 @@ def _res_values(vals: list[dict], state: str) -> tuple[list, int]:
         t = str(raw).strip().upper()
         tokens = [x.strip() for x in re.split(r"[,;/]", t) if x.strip()]
         is_res = (_RES_TEXT.search(t) and not _NOT_RES.search(t)) or \
-            (t in _RES_CODES and not (t == "A" and state in _NOT_A)) or \
-            (len(tokens) > 1 and all(x in _RES_CODES for x in tokens))
+            ((t in _RES_CODES or t in _RES_CODES_STATE.get(state, ())) and not (t == "A" and state in _NOT_A)) or \
+            (len(tokens) > 1 and all(x in _RES_CODES or x in _RES_CODES_STATE.get(state, ()) for x in tokens))
         if is_res:
             keep.append(raw)
             n += int(v.get("n") or 1)
     return keep, n
 
 
-def guess_residential(url: str, field: str | None, state: str, other_fields: list[str] | None = None) -> str | None:
+def guess_residential(url: str, field: str | None, state: str, other_fields: list[str] | None = None,
+                      living_field: str | None = None) -> str | None:
     """A homes-only filter from a layer's own values, when they say so
     plainly: the class field first, then any other land-use / property-type
     field, picking the one that marks the most parcels as homes. None when
     nothing is readable (the county goes live with every parcel, flagged)."""
     best = (0, None, [])
-    for f in [x for x in [field] + list(other_fields or []) if x][:7]:
+    for f in list(dict.fromkeys(x for x in [field] + list(other_fields or []) if x))[:7]:
         try:
-            keep, n = _res_values(class_values(url, f), state)
+            vals = class_values(url, f)
+            keep, n = _res_values(vals, state)
         except Exception:
             continue
-        if keep and n > best[0]:
+        counted = all(v.get("n") is not None for v in vals)
+        total = sum(int(v.get("n") or 1) for v in vals) or 1
+        # homes are most parcels: a sliver means the wrong field (only checkable when the server counts)
+        if keep and n > best[0] and (not counted or n / total >= 0.25):
             best = (n, f, keep)
     if not best[1]:
-        return None
+        # no readable land use: a home is a parcel with living area on the assessor record
+        # (under 8,000 sq ft: bigger "living area" is apartments or a care home)
+        return f"{living_field} > 0 AND {living_field} < 8000" if living_field else None
     quote = lambda x: str(x) if isinstance(x, (int, float)) else "'" + str(x).replace("'", "''") + "'"
     return f"{best[1]} IN ({','.join(quote(k) for k in best[2])})"
 
@@ -643,7 +687,8 @@ def auto_approve(fips: str) -> dict | None:
             others = _type_fields(k["url"])
         except Exception:
             others = []
-        where = guess_residential(k["url"], (k.get("fields") or {}).get("class"), c["state"], others)
+        where = guess_residential(k["url"], (k.get("fields") or {}).get("class"), c["state"], others,
+                                  (k.get("fields") or {}).get("bldg_sqft"))
         approve(fips, k["url"], k["fields"], where, None, k.get("oid") or "OBJECTID", samples)
         check = [] if where else ["homes-only filter (every parcel is included)"]
         if not (k.get("fields") or {}).get("home_value"):
@@ -655,6 +700,41 @@ def auto_approve(fips: str) -> dict | None:
         _set("counties", "fips", fips, note=note, auto=1, needs_check=1 if check else 0)
         return {"fips": fips, "url": k["url"], "where": where, "check": check}
     return None
+
+
+def refresh_live_configs() -> list[str]:
+    """Re-run today's field and homes-only detection on counties that went
+    live automatically (or with no homes-only filter), so improvements reach
+    counties approved before them. Counties set up by hand are left alone."""
+    import glob
+    changed = []
+    for c in counties():
+        if c["status"] != "live" or not isinstance(c.get("config"), dict):
+            continue
+        cfg = c["config"]
+        p = cfg.get("parcels") or {}
+        if not cfg.get("auto") or not (c.get("auto") or (p.get("classes") or {}).get("R") in (None, "1=1")):
+            continue
+        try:
+            meta = get_json(p["url"], {"f": "json"}, ttl=86400)
+            fm = guess_fields(meta.get("fields") or [])
+            if "pin" not in fm or "address" not in fm:
+                continue
+            where = guess_residential(p["url"], fm.get("class"), c["state"], _type_fields(p["url"]), fm.get("bldg_sqft"))
+        except Exception:
+            continue
+        old_fm = {k: v for k, v in (p.get("fields") or {}).items() if v and k != "lot_sqft"}
+        new_fm = {k: v for k, v in fm.items() if v and k not in ("lot_sqft", "lot_acres")}
+        old_where = (p.get("classes") or {}).get("R")
+        if (where or "1=1") == old_where and all(old_fm.get(k) == v for k, v in new_fm.items()):
+            continue
+        samples = [{"address": "x, y"}] if p.get("address_trim_comma") else []
+        approve(c["fips"], p["url"], fm, where, None, p.get("oid") or "OBJECTID", samples)
+        check = [] if where else ["homes-only filter (every parcel is included)"]
+        _set("counties", "fips", c["fips"], auto=1, needs_check=1 if check else 0,
+             note="Auto-approved (updated detection)" + (" · check " + ", ".join(check) if check else ""))
+        changed.append(c["name"])
+    return changed
 
 
 def approve_all_found() -> int:
@@ -814,6 +894,10 @@ def start_continuous():
                     while _worker["thread"] and _worker["thread"].is_alive():
                         time.sleep(30)
                     if auto_settings().get("auto_approve"):
+                        try:
+                            refresh_live_configs()  # newer detection reaches counties approved earlier
+                        except Exception:
+                            pass
                         approve_all_found()
                     auto_pull()
             except Exception:
