@@ -284,11 +284,12 @@ class EptLidar:
             return self._cache[key]
         x0, y0 = self._wgs_to_3857.transform(env_wgs[0], env_wgs[1])
         x1, y1 = self._wgs_to_3857.transform(env_wgs[2], env_wgs[3])
-        parts = [p.points((x0 - pad_m, y0 - pad_m, x1 + pad_m, y1 + pad_m)) for p in self.projects if p.ok]
-        parts = [q for q in parts if len(q["x"])]
-        if not parts:
+        box = (x0 - pad_m, y0 - pad_m, x1 + pad_m, y1 + pad_m)
+        r = self._newest_points(box)
+        if r is None:  # the county's projects miss this spot: any USGS project that covers it
+            r = self._newest_points(box, self._projects_at((env_wgs[0] + env_wgs[2]) / 2, (env_wgs[1] + env_wgs[3]) / 2))
+        if r is None:
             return None
-        r = {k: np.concatenate([q[k] for q in parts]) for k in parts[0]}
         X, Y = self._3857_to_las.transform(r["x"], r["y"])
         r["x"], r["y"] = np.asarray(X), np.asarray(Y)
         r["z"] = r["z"] / 0.3048006096  # metres -> US survey feet
@@ -299,6 +300,40 @@ class EptLidar:
             self._cache.pop(next(iter(self._cache)))
         self._cache[key] = r
         return r
+
+    def _newest_points(self, box, projects=None):
+        """Points from the newest project that really covers the box. Projects
+        are newest first; mixing scans years apart blurs heights (houses
+        built, trees grown), so the first with enough points wins."""
+        best = None
+        for p in (self.projects if projects is None else projects):
+            if not p.ok:
+                continue
+            try:
+                q = p.points(box)
+            except Exception:
+                continue
+            n = len(q["x"])
+            if n >= 400:
+                return q
+            if n and (best is None or n > len(best["x"])):
+                best = q
+        return best
+
+    def _projects_at(self, lon, lat):
+        from .ept import EptProject
+        try:
+            from .coverage import ept_urls_at
+            urls = [u for u in ept_urls_at(lon, lat) if u not in {p.url + "/ept.json" for p in self.projects}][:3]
+        except Exception:
+            return []
+        out = []
+        for u in urls:
+            try:
+                out.append(EptProject(u))
+            except Exception:
+                pass
+        return out
 
     def _ground_z(self, r, xs, ys):
         g = r["cls"] == 2

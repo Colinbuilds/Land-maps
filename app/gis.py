@@ -243,6 +243,22 @@ def cache_limit_bytes() -> int:
     return int(min(40e9, total * 0.4))
 
 
+def clear_orphans() -> int:
+    """Half-downloaded LiDAR tiles (raw .las, often hundreds of MB each) left
+    behind when the server restarted or ran out of memory mid-download."""
+    freed = 0
+    root = CACHE_DIR / "lidar"
+    if root.exists():
+        for fp in root.glob("*.las"):
+            try:
+                if time.time() - fp.stat().st_mtime > 3600:
+                    freed += fp.stat().st_size
+                    fp.unlink()
+            except OSError:
+                pass
+    return freed
+
+
 def prune_cache() -> dict:
     """Delete the oldest cached downloads (map tiles, LiDAR, county answers)
     once the cache is over its limit, down to 75% of it. Anything deleted is
@@ -284,6 +300,7 @@ def start_cache_pruner(every_s: int = 900) -> None:
     def loop():
         while True:
             try:
+                clear_orphans()
                 prune_cache()
             except Exception:
                 pass

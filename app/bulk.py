@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import threading
 import time
 import traceback
@@ -39,6 +40,10 @@ def zip_polygon(zip_code: str):
     return shape(_esri_to_geojson_geom(feats[0]["geometry"]))
 
 
+# ZIP sheets skip parcels bigger than this (farmland, ranches, golf courses)
+MAX_ACRES = 40.0
+
+
 def _class_where(m, classes: list[str]) -> str:
     table = m.c["parcels"].get("classes", {})
     parts = [f"({table[c]})" for c in classes if c in table]
@@ -54,6 +59,7 @@ def _zip_parcels(zip_code: str, classes: list[str], limit: int | None = None, sk
     out = []
     cids = counties.counties_in(zp.bounds)
     fails = []
+    seen = set()
     for cid in cids:
         m = measurer_for(cid)
         geom = {"geometry": json.dumps({"rings": [list(map(list, r.coords)) for p in getattr(zp.simplify(0.0003), "geoms", [zp.simplify(0.0003)])
@@ -66,8 +72,18 @@ def _zip_parcels(zip_code: str, classes: list[str], limit: int | None = None, sk
             fails.append((m.c["name"], e))
             continue
         for f in feats:
-            if f["geometry"] is not None and zp.contains(f["geometry"].representative_point()):
-                out.append((cid, f))
+            g = f["geometry"]
+            if g is None or not zp.contains(g.representative_point()):
+                continue
+            c = g.centroid
+            acres = g.area * (111_320.0 ** 2) * math.cos(math.radians(c.y)) / 4046.86
+            if acres > MAX_ACRES:  # farms, ranches, golf courses: not a home's yard, and slow
+                continue
+            key = (round(c.x, 6), round(c.y, 6), round(acres, 3))
+            if key in seen:  # the same lot listed twice (stacked records, split accounts)
+                continue
+            seen.add(key)
+            out.append((cid, f))
         if limit and len(out) >= limit:
             break
     if fails and len(fails) == len(cids):
