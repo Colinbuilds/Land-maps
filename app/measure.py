@@ -265,7 +265,13 @@ class Measurer:
         return struct, bed, canopy, crowns, tops, fence, high
 
     # --------------------------------------------------------------- measure
-    def measure(self, parcel_feature: dict, want_overlay: bool = False, want_photo: bool = False) -> dict:
+    def feature_by_pin(self, pin: str):
+        return self.get_parcel(pin)
+
+    def measure(self, parcel_feature: dict, want_overlay: bool = False, want_photo: bool = False,
+                internals: bool = False) -> dict:
+        """``internals``: also return the photo and masks, measured without this
+        lot's hand fix (used to learn from that fix)."""
         attrs = self.parcel_attrs(parcel_feature["attributes"])
         P_wgs = parcel_feature["geometry"]
         P = self.proj.to_local(P_wgs).buffer(0)
@@ -398,6 +404,12 @@ class Measurer:
             hard &= ~veg | plain_concrete
             hard = ndi.binary_opening(hard, iterations=1)
         hard &= ~bldg_m
+        if True:  # what people's fixes taught us about this county's photos
+            try:
+                from . import learning
+                hard = learning.adjust_hard(self.cid, str(img.get("source", "")), mos.rgb, hard, parcel_m & ~bldg_m)
+            except Exception:
+                pass
         if not self.pavement and street_lines:
             # No edge-of-pavement layer: the street is the paving outside the
             # lots that connects to a street centreline (handles wide
@@ -648,7 +660,10 @@ class Measurer:
             est_cut = est_in_lot
         # hand corrections saved by the business for this property
         from .counties import DEFAULT_COUNTY
-        corr = corrections.get(f"{self.cid}:{pin}") or (corrections.get(pin) if self.cid == DEFAULT_COUNTY else None)
+        corr = None if internals else (corrections.get(f"{self.cid}:{pin}") or (corrections.get(pin) if self.cid == DEFAULT_COUNTY else None))
+        if internals:
+            internals_out = {"mos": mos, "lawn": lawn_m.copy(), "yard": yard.copy(), "paved": (hard | drive_m) & yard,
+                             "source": str(img.get("source", ""))}
         if corr:
             for g in corr.get("exclude", []):
                 lawn_m &= ~mos.rasterize(shape(g))
@@ -775,6 +790,8 @@ class Measurer:
             if want_photo:
                 result["photo_jpg"] = result["overlay"].pop("photo_jpg", "")
             result["parcel_geojson"] = _geojson(P_wgs)
+        if internals:
+            result["_internals"] = internals_out
         return result
 
 
