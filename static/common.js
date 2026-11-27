@@ -175,6 +175,7 @@ function measurementCards(r, keys, labels) {
     if (!embedded) { location.replace("/command#" + (OWNER_TAB[here] || "companies")); return; }
     const st = document.createElement("style");  // inside the command center: its own menu is enough
     st.textContent = "header.top, .tabbar, .site-nav { display: none !important; } body { padding-bottom: 0 !important; }";
+    document.documentElement.classList.add("embedded");
     document.head.appendChild(st);
     return;
   }

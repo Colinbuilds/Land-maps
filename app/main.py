@@ -2568,3 +2568,8 @@ def page_zipmap():
 def admin_zipmap():
     """Every covered ZIP with purchases, revenue, measured and locked."""
     return datastore.zip_heat()
+
+
+@app.get("/api/admin/zipmap/outlines", dependencies=[Depends(admin)])
+def admin_zipmap_outlines(zips: str = ""):
+    return datastore.zip_outlines([z for z in zips.split(",") if len(z) == 5 and z.isdigit()])

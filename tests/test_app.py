@@ -382,14 +382,34 @@ def test_zip_heat_counts_paid_purchases(monkeypatch):
     from app import datastore as ds
     monkeypatch.setattr(ds, "service_zips", lambda: ["99990", "99991"])
     monkeypatch.setattr(ds, "zip_shapes", lambda zs: {z: {"type": "Point", "coordinates": [0, 0]} for z in zs})
+    monkeypatch.setattr(ds, "zip_points", lambda zs: ds._ZIP_POINTS.write_text(__import__("json").dumps({z: [41.0, -96.0] for z in zs})))
+    monkeypatch.setitem(ds._heat, "at", 0)
     monkeypatch.setattr(ds, "list_orders", lambda n: [
         {"zip": "99990", "status": "ready", "amount_cents": 2500, "created": 1, "paid": 2},
         {"zip": "99990", "status": "processing", "amount_cents": 3000, "created": 1, "paid": 3},
         {"zip": "99991", "status": "awaiting_payment", "amount_cents": 2500, "created": 1}])
     h = ds.zip_heat()
-    p = {f["properties"]["zip"]: f["properties"] for f in h["features"]}
+    p = {r["zip"]: r for r in h["zips"]}
     assert p["99990"]["paid"] == 2 and p["99990"]["cents"] == 5500 and p["99991"]["paid"] == 0 and p["99991"]["pending"] == 1
-    assert h["totals"]["bought"] == 1
+    assert h["totals"]["bought"] == 1 and p["99990"]["lat"] == 41.0
+    assert ds.zip_outlines(["99990"])["features"][0]["properties"]["zip"] == "99990"
+
+
+def test_service_zips_asks_county_by_county(monkeypatch):
+    from shapely.geometry import box
+    from app import datastore as ds
+    from app import gis
+    monkeypatch.setattr(ds.counties, "boundaries", lambda: {"a": box(0, 0, 1, 1), "b": box(30, 30, 31, 31)})
+    ds._svc_cache.clear()
+    asked = []
+    def fake(url, params, **k):
+        asked.append(params["geometry"])
+        x = float(params["geometry"].split(",")[0])
+        ring = [[x, x], [x, x + .5], [x + .5, x + .5], [x + .5, x], [x, x]]  # clockwise = outer ring
+        return {"features": [{"attributes": {"ZCTA5": f"{int(x):05d}"}, "geometry": {"rings": [ring]}}]}
+    monkeypatch.setattr(gis, "get_json", fake)
+    assert sorted(ds.service_zips()) == ["00000", "00030"] and len(asked) == 2
+    ds._svc_cache.clear()
 
 
 def test_auto_approve_rules(monkeypatch):
