@@ -13,8 +13,8 @@ from __future__ import annotations
 
 TRADES = [
     # key, label, list preset (sheet measurement types), premier?, pitch
-    ("lawn", "Lawn care & fertilizer", ["lawn", "beds", "trees"], False,
-     "Grass-only square footage, parkway, beds and trees for every home."),
+    ("lawn", "Lawn care & fertilizer", ["lawn", "beds"], False,
+     "Grass-only square footage, parkway and beds for every home."),
     ("snow", "Snow removal", ["driveway", "sidewalk"], False,
      "Driveway and public sidewalk area per home, to price routes and seasons."),
     ("concrete", "Concrete & sealcoating", ["driveway", "patios", "sidewalk"], False,
@@ -33,14 +33,12 @@ TRADES = [
      "House wall area per home; full reports add sides, corners, soffit and fascia."),
     ("solar", "Solar", [], True,
      "Roof area by direction faced, pitch and tree shade (full reports)."),
-    ("trees", "Tree service", ["trees"], False,
-     "Tree count, canopy and lawn under trees; full reports add trees over the roof."),
-    ("landscaping", "Landscaping & mulch", ["beds", "lawn", "trees"], False,
-     "Landscape bed area for mulch and rock, plus lawn and trees."),
+    ("landscaping", "Landscaping & mulch", ["beds", "lawn"], False,
+     "Landscape bed area for mulch and rock, plus lawn."),
     ("irrigation", "Sprinklers & irrigation", ["lawn"], False,
      "Lawn and parkway area: size systems and winterizations."),
-    ("pest", "Pest & mosquito control", ["lawn", "beds", "trees", "building"], False,
-     "Yard, bed, canopy and house footprint: the areas you treat."),
+    ("pest", "Pest & mosquito control", ["lawn", "beds", "building"], False,
+     "Yard, bed and house footprint: the areas you treat."),
     ("hvac", "HVAC & insulation", ["building"], False,
      "House size, year built and value from the assessor, plus footprint."),
     ("fencing", "Fencing (beta)", ["building"], False,
@@ -95,8 +93,7 @@ def metrics(key: str, d: dict) -> list[dict]:
     flat = sum(float(y.get(k) or 0) for k in ("driveway_sqft", "other_hardscape_sqft", "sidewalk_sqft"))
     if key == "lawn":
         add("Lawn (grass only)", y.get("lawn_sqft")); add("Parkway grass", y.get("parkway_sqft"))
-        add("Lawn under trees", y.get("lawn_under_trees_sqft")); add("Landscape beds", y.get("beds_sqft"))
-        add("Trees on the lot", y.get("tree_count"), "trees"); add("Lot", y.get("lot_sqft"))
+        add("Landscape beds", y.get("beds_sqft")); add("Lot", y.get("lot_sqft"))
     elif key == "snow":
         add("Driveway", y.get("driveway_sqft")); add("Public sidewalk", y.get("sidewalk_sqft"))
         add("Driveway + sidewalk", (y.get("driveway_sqft") or 0) + (y.get("sidewalk_sqft") or 0))
@@ -138,18 +135,15 @@ def metrics(key: str, d: dict) -> list[dict]:
         for k_ in ("South", "West", "East", "North", "Flat"):
             add(f"Roof facing {k_.lower()}" if k_ != "Flat" else "Flat roof", fac[k_])
         add("Predominant pitch", d.get("pitch_label"), ""); add("Roof under trees (shade)", d.get("tree_overhang_sqft"))
-    elif key == "trees":
-        add("Trees on the lot", y.get("tree_count"), "trees"); add("Tree canopy over the lot", y.get("tree_canopy_sqft"))
-        add("Roof under trees", d.get("tree_overhang_sqft")); add("Lawn under trees", y.get("lawn_under_trees_sqft"))
     elif key == "landscaping":
         add("Landscape beds (mulch/rock)", y.get("beds_sqft")); add("Lawn", y.get("lawn_sqft"))
-        add("Trees on the lot", y.get("tree_count"), "trees"); add("Lot", y.get("lot_sqft"))
+        add("Lot", y.get("lot_sqft"))
     elif key == "irrigation":
         add("Lawn (grass only)", y.get("lawn_sqft")); add("Parkway grass", y.get("parkway_sqft"))
         add("Lawn + parkway", (y.get("lawn_sqft") or 0) + (y.get("parkway_sqft") or 0)); add("Lot", y.get("lot_sqft"))
     elif key == "pest":
         add("Lot", y.get("lot_sqft")); add("Lawn", y.get("lawn_sqft")); add("Landscape beds", y.get("beds_sqft"))
-        add("Tree canopy", y.get("tree_canopy_sqft")); add("House perimeter", w.get("wall_perimeter_ft"), "ft")
+        add("House perimeter", w.get("wall_perimeter_ft"), "ft")
     elif key == "hvac":
         add("House size (assessor)", y.get("living_sqft")); add("Year built", y.get("year_built"), "year")
         add("Stories (estimate)", w.get("stories"), ""); add("Building footprint", y.get("building_sqft"))
@@ -218,7 +212,6 @@ PRICE_RULES = {
     "roofing": ("roof", "squares", 1, "to replace", 450.0, 6000.0, [], lambda d: d.get("squares")),
     "siding": ("house walls", "sq ft", 1, "installed", 8.0, 5000.0, ["wall_sqft"], _w("gross_wall_sqft")),
     "solar": ("roof", "sq ft", 1, "system estimate", 0.0, 0.0, [], lambda d: d.get("roof_sqft")),
-    "trees": ("trees", "trees", 1, "per trim", 150.0, 250.0, ["tree_count"], _y("tree_count")),
     "landscaping": ("beds", "sq ft", 1, "to mulch", 0.75, 150.0, ["beds_sqft"], _y("beds_sqft")),
     "irrigation": ("lawn + parkway", "sq ft", 1000, "to winterize", 5.0, 60.0, ["lawn_sqft", "parkway_sqft"],
                    _sum(_y("lawn_sqft"), _y("parkway_sqft"))),
@@ -296,7 +289,7 @@ SECTIONS = ("roof", "walls", "elevations", "yard")
 TRADE_SECTIONS = {
     "lawn": {"yard"}, "snow": {"yard"}, "concrete": {"yard"}, "pressure": {"yard", "walls"},
     "windows": {"walls", "elevations"}, "gutters": {"roof", "walls"}, "lights": {"roof"},
-    "roofing": {"roof"}, "siding": {"walls", "elevations"}, "solar": {"roof"}, "trees": {"yard"},
+    "roofing": {"roof"}, "siding": {"walls", "elevations"}, "solar": {"roof"},
     "landscaping": {"yard"}, "irrigation": {"yard"}, "pest": {"yard", "walls"}, "hvac": {"walls"},
     "fencing": {"yard"}, "pets": {"yard"}, "pools": {"yard"},
 }

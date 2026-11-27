@@ -45,23 +45,35 @@ def _class_where(m, classes: list[str]) -> str:
     return " OR ".join(parts) if parts else "1=1"
 
 
-def _zip_parcels(zip_code: str, classes: list[str], limit: int | None = None):
+def _zip_parcels(zip_code: str, classes: list[str], limit: int | None = None, skipped: list | None = None):
     """[(county_id, feature)] for parcels whose centre lies in the ZIP, across
-    every county the ZIP touches."""
+    every county the ZIP touches. A county whose parcel server is down is
+    skipped (named in ``skipped``) so the rest of the ZIP still gets measured;
+    if every county fails, the error is raised."""
     zp = zip_polygon(zip_code)
     out = []
-    for cid in counties.counties_in(zp.bounds):
+    cids = counties.counties_in(zp.bounds)
+    fails = []
+    for cid in cids:
         m = measurer_for(cid)
         geom = {"geometry": json.dumps({"rings": [list(map(list, r.coords)) for p in getattr(zp.simplify(0.0003), "geoms", [zp.simplify(0.0003)])
                                                   for r in [p.exterior]], "spatialReference": {"wkid": 4326}}),
                 "geometryType": "esriGeometryPolygon", "inSR": 4326, "spatialRel": "esriSpatialRelIntersects"}
-        feats = query_features(m.c["parcels"]["url"], where=_class_where(m, classes), geometry=geom,
-                               limit=(limit - len(out)) if limit else None)
+        try:
+            feats = query_features(m.c["parcels"]["url"], where=_class_where(m, classes), geometry=geom,
+                                   limit=(limit - len(out)) if limit else None)
+        except Exception as e:
+            fails.append((m.c["name"], e))
+            continue
         for f in feats:
             if f["geometry"] is not None and zp.contains(f["geometry"].representative_point()):
                 out.append((cid, f))
         if limit and len(out) >= limit:
             break
+    if fails and len(fails) == len(cids):
+        raise fails[0][1]
+    if skipped is not None:
+        skipped += [name for name, _ in fails]
     return out[:limit] if limit else out
 
 
@@ -211,6 +223,11 @@ def list_jobs() -> list[dict]:
     return sorted(jobs.values(), key=lambda j: j["started"], reverse=True)
 
 
+def list_running() -> list[dict]:
+    with _lock:
+        return [dict(j) for j in _jobs.values() if not j.get("finished")]
+
+
 def csv_path(job_id: str):
     return JOBS_DIR / f"{job_id}.csv"
 
@@ -222,7 +239,10 @@ def _save(job):
 def _run(job: dict, workers: int, on_done=None):
     try:
         job["status"] = "loading parcels"
-        items = _zip_parcels(job["zip"], job["classes"], job["limit"] or None)
+        skipped: list = []
+        items = _zip_parcels(job["zip"], job["classes"], job["limit"] or None, skipped)
+        if skipped:
+            job["skipped"] = skipped  # those counties' homes are missing until their server is back
         # Process in spatial order so neighbouring lots share cached downloads.
         def cell(item):
             c = item[1]["geometry"].centroid
@@ -230,6 +250,7 @@ def _run(job: dict, workers: int, on_done=None):
         items.sort(key=cell)
         job["total"] = len(items)
         job["status"] = "measuring"
+        job["measure_started"] = time.time()
         _save(job)
 
         cols = (["pin", "county", "address", "city", "zip", "class", "home_value", "year_built", "living_sqft"]

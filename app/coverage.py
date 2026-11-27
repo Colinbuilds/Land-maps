@@ -37,6 +37,51 @@ CFG_DIR.mkdir(exist_ok=True)
 _lock = threading.Lock()
 MIN_POP = 150_000
 RADIUS_MI = 15.0
+# Work spreads out from home: nearest metros are mapped, searched and
+# measured first (Omaha, then Lincoln, Des Moines, Kansas City, Denver...).
+HOME = (float(__import__("os").environ.get("HOME_LAT", 41.2565)), float(__import__("os").environ.get("HOME_LON", -95.9345)))
+CBSA_LAYER = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/CBSA/MapServer/9"
+
+
+# Metros done first, in this order (Omaha, Lincoln, Des Moines, Kansas City,
+# Denver); every other metro follows nearest first. PRIORITY_METROS overrides.
+PRIORITY = [c.strip() for c in __import__("os").environ.get("PRIORITY_METROS", "36540,30700,19780,28140,19740").split(",") if c.strip()]
+
+
+def metro_rank(m: dict) -> tuple:
+    if m["cbsa"] in PRIORITY:
+        return (0, PRIORITY.index(m["cbsa"]))
+    return (1, miles_from_home(m.get("lat"), m.get("lon")))
+
+
+def miles_from_home(lat, lon) -> float:
+    if lat is None or lon is None:
+        return 1e9
+    p1, p2 = math.radians(HOME[0]), math.radians(lat)
+    dl = math.radians(lon - HOME[1])
+    a = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 3958.8 * 2 * math.asin(math.sqrt(min(1.0, a)))
+
+
+def fill_metro_points() -> int:
+    """Rough centre of every metro (Census), so the work can go nearest first
+    before a metro is mapped. Mapping later replaces it with the main city."""
+    need = {m["cbsa"] for m in metros() if m.get("lat") is None}
+    if not need:
+        return 0
+    d = get_json(CBSA_LAYER + "/query", {"where": "1=1", "outFields": "CBSA,INTPTLAT,INTPTLON",
+                                          "returnGeometry": "false", "f": "json"}, ttl=180 * 86400)
+    n = 0
+    for f in d.get("features") or []:
+        a = f["attributes"]
+        if a["CBSA"] in need:
+            _set("metros", "cbsa", a["CBSA"], lat=float(a["INTPTLAT"]), lon=float(a["INTPTLON"]))
+            n += 1
+    return n
+
+
+def metros_nearest_first() -> list[dict]:
+    return sorted(metros(), key=metro_rank)
 
 POP_CSV = "https://www2.census.gov/programs-surveys/popest/datasets/2020-2024/metro/totals/cbsa-est2024-alldata.csv"
 GEOCODER = "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates"
@@ -665,7 +710,11 @@ def run_all(limit: int | None = None):
         try:
             if not metros():
                 load_metro_list()
-            todo = [m for m in metros() if m["status"] in ("new", "error")][:limit]
+            try:
+                fill_metro_points()
+            except Exception:
+                pass
+            todo = [m for m in metros_nearest_first() if m["status"] in ("new", "error")][:limit]
             for m in todo:
                 if _worker["stop"]:
                     return
@@ -676,7 +725,9 @@ def run_all(limit: int | None = None):
                     _set("metros", "cbsa", m["cbsa"], status="error", note=str(e)[:200])
             from . import counties as _co
             builtin = {c["fips"] for c in _co.COUNTIES.values()}
-            for c in counties():
+            rank = {m["cbsa"]: metro_rank(m) for m in metros()}
+            near = lambda c: min([rank.get(x, (2, 0)) for x in (c.get("metros") or [])] or [(2, 0)])
+            for c in sorted(counties(), key=near):
                 if _worker["stop"]:
                     return
                 if c["status"] != "new" or c["fips"] in builtin:
@@ -729,7 +780,7 @@ def auto_pull() -> list[str]:
     """Queue every metro whose 15-mile counties are all live (once)."""
     from . import datastore
     pulled = []
-    for m in metros():
+    for m in metros_nearest_first():
         if m["status"] == "live":
             continue
         zs = metro_ready_zips(m["cbsa"])

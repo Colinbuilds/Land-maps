@@ -546,7 +546,6 @@ def _yard_page(c, rep, company, y, page, total_pages):
             ("#3b82f6", "Driveway", n(y.get("driveway_sqft"))), ("#ec4899", "Public sidewalk", n(y.get("sidewalk_sqft"))),
             ("#eab308", "Patios & walks", n(y.get("other_hardscape_sqft"))), ("#ef4444", "Decks, sheds, play sets", n(y.get("structures_sqft"))),
             ("#a855f7", "Landscape beds", n(y.get("beds_sqft"))), ("#64748b", "Buildings", n(y.get("building_sqft"))),
-            (None, "Trees on the lot", str(y.get("tree_count") if y.get("tree_count") is not None else "-")),
             (None, "Street frontage", n(y.get("frontage_ft")) + " ft"), (None, "Lot", n(y.get("lot_sqft")))]
     x0, yy = M + 320, top - 12
     for col, k, v in rows:

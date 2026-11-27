@@ -46,8 +46,6 @@ COLUMNS = [
     ("driveway_sqft", "Driveway sq ft"), ("sidewalk_sqft", "Public sidewalk sq ft"),
     ("other_hardscape_sqft", "Patios & walks sq ft"), ("structures_sqft", "Decks/sheds/play sets sq ft"),
     ("beds_sqft", "Landscape beds sq ft"), ("frontage_ft", "Street frontage ft"),
-    ("tree_count", "Trees on lot"), ("tree_canopy_sqft", "Tree canopy sq ft"),
-    ("lawn_under_trees_sqft", "Lawn under trees sq ft"),
     ("wall_sqft", "House wall area sq ft (siding)"), ("est_windows", "Windows & doors (estimate)"),
     ("quality", "Quality (ok / review)"), ("notes", "Notes"),
     ("lat", "Latitude"), ("lon", "Longitude"), ("pin", "Property id"),
@@ -62,7 +60,6 @@ MEASURE_TYPES = [
     ("patios", "Patios & walks", ["other_hardscape_sqft"]),
     ("structures", "Decks, sheds & play sets", ["structures_sqft"]),
     ("beds", "Landscape beds", ["beds_sqft"]),
-    ("trees", "Trees (count, canopy, lawn under trees)", ["tree_count", "tree_canopy_sqft", "lawn_under_trees_sqft"]),
     ("building", "Building footprint", ["building_sqft"]),
     ("walls", "House walls & windows (siding)", ["wall_sqft", "est_windows"]),
     # add-on, not a measurement: each home's assessed value as a column (+5c)
@@ -179,6 +176,8 @@ def init():
         for col in ("grp", "grp_token"):  # several ZIPs bought together, paid in one checkout
             if col not in have:
                 con.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
+        con.execute("""CREATE TABLE IF NOT EXISTS downloads (
+            id INTEGER PRIMARY KEY, order_id TEXT, zip TEXT, email TEXT, kind TEXT, ts REAL NOT NULL)""")
         # Exclusive ZIP locks: one holder per (ZIP, measurement type)
         con.execute("""CREATE TABLE IF NOT EXISTS zip_locks (
             zip TEXT NOT NULL, type TEXT NOT NULL, email TEXT NOT NULL, order_id TEXT NOT NULL,
@@ -214,8 +213,10 @@ def dataset_meta(zip_code: str, classes: list[str]) -> dict | None:
 
 def dataset_ready(zip_code: str, classes: list[str]) -> bool:
     m = dataset_meta(zip_code, classes)
+    # a sheet missing a county (its server was down) is redone after 3 days
+    max_age = 3 if m and m.get("skipped") else DATASET_MAX_AGE_DAYS
     return bool(m and m.get("status") == "ready" and dataset_path(zip_code, classes).exists()
-                and time.time() - m.get("finished", 0) < DATASET_MAX_AGE_DAYS * 86400)
+                and time.time() - m.get("finished", 0) < max_age * 86400)
 
 
 # ------------------------------------------------------------------- quotes
@@ -519,7 +520,7 @@ def ensure_dataset(zip_code: str, classes: list[str], on_ready=None) -> str:
             shutil.move(tmp, dataset_path(zip_code, classes))
         meta_p.write_text(json.dumps({"status": "ready" if ok else "failed", "job": job["id"],
                                       "count": job.get("done"), "errors": job.get("errors"),
-                                      "finished": time.time()}))
+                                      "skipped": job.get("skipped") or [], "finished": time.time()}))
         with _lock:
             cbs = _building.pop(key, {}).get("callbacks", [])
         if not ok:
@@ -820,6 +821,28 @@ def service_zips() -> list[str]:
     return list(zips)
 
 
+def queue_order(zips: list[str], fetch: bool = True) -> list[str]:
+    """ZIPs nearest home first (Omaha outward). ZIPs whose location isn't
+    known yet go last, in the order given."""
+    from . import coverage
+    from .coverage import miles_from_home
+    first = {}
+    for m in coverage.metros():  # ZIPs of the priority metros go first, in their order
+        if m["cbsa"] in coverage.PRIORITY and isinstance(m.get("zips"), list):
+            for z in m["zips"]:
+                first.setdefault(z, coverage.PRIORITY.index(m["cbsa"]))
+    try:
+        pts = zip_points(list(zips)) if fetch else (json.loads(_ZIP_POINTS.read_text()) if _ZIP_POINTS.exists() else {})
+    except Exception:
+        pts = json.loads(_ZIP_POINTS.read_text()) if _ZIP_POINTS.exists() else {}
+    idx = {z: i for i, z in enumerate(zips)}
+    def key(z):
+        d = miles_from_home(*pts[z]) if z in pts else 1e9
+        grp = first.get(z, 0 if d <= 35 else 99)  # home's own metro always leads
+        return (grp, d, idx[z])
+    return sorted(zips, key=key)
+
+
 def prebuild_status() -> dict:
     st = json.loads(PREBUILD_STATE.read_text()) if PREBUILD_STATE.exists() else {"status": "idle"}
     st["running"] = bool(_pre["thread"] and _pre["thread"].is_alive())
@@ -864,12 +887,14 @@ def prebuild_all(classes: list[str] | None = None, start: bool = True, zips: lis
     _pre["stop"] = False
 
     def run():
-        for z in st["zips"]:  # the list can grow while running
+        while True:  # the list can grow while running; always take the nearest ZIP left
             if _pre["stop"]:
                 st.update(status="stopped", current=None); _save_pre(st)
                 return
-            if z in st["done"]:
-                continue
+            left = queue_order([z for z in st["zips"] if z not in st["done"] and z not in st["failed"]])
+            if not left:
+                break
+            z = left[0]
             st["current"] = z; _save_pre(st)
             ev = threading.Event()
             try:
@@ -907,7 +932,7 @@ init()
 # ------------------------------------------------------- totals (owner)
 TOTAL_KEYS = [("home_value", "Assessed value $"), ("lot_sqft", "Lot"), ("lawn_sqft", "Lawn"), ("parkway_sqft", "Parkway"), ("driveway_sqft", "Driveway"),
               ("sidewalk_sqft", "Sidewalk"), ("other_hardscape_sqft", "Patios & walks"), ("beds_sqft", "Beds"),
-              ("building_sqft", "Building footprint"), ("wall_sqft", "House walls"), ("tree_canopy_sqft", "Tree canopy"),
+              ("building_sqft", "Building footprint"), ("wall_sqft", "House walls"),
               ("living_sqft", "House size (assessor)")]
 _totals_cache: dict = {}
 
@@ -1182,3 +1207,69 @@ def zip_outlines(zips: list[str]) -> dict:
     shapes = zip_shapes(sorted(set(zips))[:400])
     return {"type": "FeatureCollection",
             "features": [{"type": "Feature", "geometry": g, "properties": {"zip": z}} for z, g in shapes.items()]}
+
+
+# ------------------------------------------------------- live status (owner)
+def log_download(o: dict, kind: str) -> None:
+    try:
+        with _db() as con:
+            con.execute("INSERT INTO downloads (order_id, zip, email, kind, ts) VALUES (?,?,?,?,?)",
+                        (o["id"], o["zip"], o["email"], kind, time.time()))
+    except Exception:
+        pass  # never block a customer's download over a log line
+
+
+def recent_downloads(limit: int = 12) -> dict:
+    day = time.time() - 86400
+    with _db() as con:
+        rows = [dict(r) for r in con.execute("SELECT * FROM downloads ORDER BY ts DESC LIMIT ?", (limit,))]
+        today = con.execute("SELECT COUNT(*) FROM downloads WHERE ts>?", (day,)).fetchone()[0]
+        week = con.execute("SELECT COUNT(*) FROM downloads WHERE ts>?", (time.time() - 7 * 86400,)).fetchone()[0]
+    return {"recent": rows, "today": today, "week": week}
+
+
+def measuring_now() -> list[dict]:
+    """ZIP sheets being measured right now, with speed and time left."""
+    out = []
+    now = time.time()
+    for j in bulk.list_running():
+        rate = None
+        if j.get("measure_started") and j.get("done"):
+            rate = j["done"] / max(1.0, now - j["measure_started"]) * 60  # homes a minute
+        left = (j["total"] - j["done"]) / rate * 60 if rate and j.get("total") else None
+        out.append({"zip": j["zip"], "stage": j["status"], "done": j["done"], "total": j["total"], "errors": j["errors"],
+                    "started": j["started"], "per_min": round(rate, 1) if rate else None,
+                    "eta_s": round(left) if left is not None else None})
+    return out
+
+
+_sheets_cache: dict = {"at": 0, "v": None}
+
+
+def recent_sheets(limit: int = 10) -> dict:
+    """Measured ZIP sheets (cached 20 s: the Live screen asks every 5 s)."""
+    if _sheets_cache["v"] is not None and time.time() - _sheets_cache["at"] < 20:
+        return _sheets_cache["v"]
+    v = _recent_sheets(limit)
+    _sheets_cache.update(at=time.time(), v=v)
+    return v
+
+
+def _recent_sheets(limit: int = 10) -> dict:
+    ready, failed = [], []
+    for p in ZIPS_DIR.glob("*.json"):
+        try:
+            m = json.loads(p.read_text())
+        except Exception:
+            continue
+        row = {"zip": p.stem.split("_")[0], "count": m.get("count"), "errors": m.get("errors"), "finished": m.get("finished"),
+               "skipped": m.get("skipped") or []}
+        if m.get("status") == "ready":
+            ready.append(row)
+        elif m.get("status") == "failed":
+            failed.append(row)
+    ready.sort(key=lambda r: r["finished"] or 0, reverse=True)
+    failed.sort(key=lambda r: r["finished"] or 0, reverse=True)
+    return {"ready": ready[:limit], "ready_total": len(ready), "homes": sum(r["count"] or 0 for r in ready),
+            "failed": failed[:limit], "failed_total": len(failed),
+            "today": sum(1 for r in ready if (r["finished"] or 0) > time.time() - 86400)}

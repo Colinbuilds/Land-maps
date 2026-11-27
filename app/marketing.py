@@ -175,7 +175,7 @@ PROBLEM (3-10s)
 "Every quote costs you 30 minutes of drive time and gas, and half of them never book."
 
 DEMO (10-35s, screen recording)
-"Type the address. 30 seconds later: 6,796 square feet of grass, the parkway, the beds, the trees. And your price, already figured: $45 a mow. Tap once and it's an estimate you text to the homeowner."
+"Type the address. 30 seconds later: 6,796 square feet of grass, the parkway, the beds. And your price, already figured: $45 a mow. Tap once and it's an estimate you text to the homeowner."
 
 CTA (35-45s)
 "Every home in your ZIP, measured and priced, before you knock. Home Service Info. Link in bio."

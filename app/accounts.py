@@ -222,14 +222,14 @@ def touch(cid: int):
 
 def company_stats(cid: int | None = None) -> dict:
     """{company id: {reports, reports_30d, last_report}} for the owner's library."""
-    q = """SELECT company_id, COUNT(*) n, SUM(created > ?) n30, MAX(created) last FROM reports
+    q = """SELECT company_id, COUNT(*) n, SUM(created > ?) n30, SUM(created > ?) n1, MAX(created) last FROM reports
            {} GROUP BY company_id"""
-    args = [time.time() - 30 * 86400]
+    args = [time.time() - 30 * 86400, time.time() - 86400]
     w = ""
     if cid is not None:
         w, args = "WHERE company_id=?", args + [cid]
     with _db() as con:
-        return {r["company_id"]: {"reports": r["n"], "reports_30d": r["n30"] or 0, "last_report": r["last"]}
+        return {r["company_id"]: {"reports": r["n"], "reports_30d": r["n30"] or 0, "reports_today": r["n1"] or 0, "last_report": r["last"]}
                 for r in con.execute(q.format(w), args)}
 
 

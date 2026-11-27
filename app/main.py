@@ -1328,6 +1328,7 @@ def data_order_csv(oid: str, t: str | None = None):
         bands = datastore.order_bands(o)
         if not premier.ready(o["zip"], classes, bands) or o["status"] not in ("ready", "processing"):
             raise HTTPException(409, "Your Premier list isn't ready yet.")
+        datastore.log_download(o, "premier")
         return FileResponse(premier.path(o["zip"], classes, bands), media_type="application/zip",
                             filename=f"premier_{o['zip']}_{o['id']}.zip")
     if o["status"] != "ready" and not (o["status"] == "processing" and datastore.dataset_ready(o["zip"], classes)):
@@ -1338,6 +1339,7 @@ def data_order_csv(oid: str, t: str | None = None):
     buyer = accounts.company_by_email(o["email"])
     if buyer:
         rows, cols = datastore.add_prices(rows, cols, (accounts.get_company(buyer["id"]) or {}).get("rates"))
+    datastore.log_download(o, "sheet")
     return Response(datastore.to_csv(rows, cols), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="properties_{o["zip"]}_{o["id"]}.csv"'})
 
@@ -1545,10 +1547,18 @@ def admin_data_release_lock(zip_code: str, type_key: str):
 @app.on_event("startup")
 def _resume_prebuild():
     from . import coverage
-    coverage.load_saved_configs()  # counties approved in the Coverage tab
-    datastore.resume_prebuild()
-    if os.environ.get("COVERAGE_AUTO", "1") != "0":
-        coverage.start_continuous()  # daily: new metros, county searches, auto-pull
+    from . import gis as _gis
+    coverage.load_saved_configs()  # counties approved in the Coverage tab (local files, quick)
+
+    def later():  # network work after the site is up, so a deploy never misses its health check
+        try:
+            datastore.resume_prebuild()
+        except Exception:
+            pass
+        if os.environ.get("COVERAGE_AUTO", "1") != "0":
+            coverage.start_continuous()  # daily: new metros, county searches, auto-pull
+        _gis.start_cache_pruner()
+    threading.Thread(target=later, daemon=True, name="startup").start()
 
 
 # ================================================================ CRM portal
@@ -2024,6 +2034,68 @@ def _orders_by_email() -> dict:
 @app.get("/command")
 def page_command():
     return FileResponse(STATIC / "command.html")
+
+
+_BOOT = time.time()
+
+
+def gis_cache_info():
+    from . import gis as _g
+    return _g.cache_info()
+
+
+@app.get("/api/admin/status", dependencies=[Depends(admin)])
+def admin_status():
+    """Everything moving right now, for the command center's live screens."""
+    import shutil as _sh
+    from . import coverage as _cov
+    from . import premier as _pr
+    pre = datastore.prebuild_status()
+    queue = pre.get("zips") or []
+    pre_out = {"running": pre.get("running"), "status": pre.get("status", "idle"), "current": pre.get("current"),
+               "total": len(queue), "done": len(pre.get("done") or []), "failed": len(pre.get("failed") or []),
+               "next": datastore.queue_order([z for z in queue if z not in set(pre.get("done") or [])
+                                              and z not in set(pre.get("failed") or []) and z != pre.get("current")], fetch=False)[:6],
+               "started": pre.get("started")}
+    orders = datastore.list_orders(400)
+    day = time.time() - 86400
+    def o_row(o):
+        r = {k: o.get(k) for k in ("id", "zip", "count", "amount_cents", "status", "product", "created", "paid")}
+        r["company"] = o["email"].split("@")[0][:2] + "…@" + o["email"].split("@")[-1]
+        if o["status"] == "processing":
+            cls = o["classes"].split(",") if o["classes"] else ["R"]
+            r["progress"] = (_pr.progress(o["zip"], cls, datastore.order_bands(o)) if (o.get("product") or "") == "premier"
+                             else datastore.dataset_progress(o["zip"], cls))
+        return r
+    st = accounts.company_stats()
+    comps = [c for c in accounts.list_companies() if c["email"] not in (_DEMO_EMAIL, _TEST_EMAIL)]
+    try:
+        du = _sh.disk_usage(str(DATA_DIR))
+        disk = {"used_gb": round((du.total - du.free) / 1e9, 1), "free_gb": round(du.free / 1e9, 1), "total_gb": round(du.total / 1e9, 1)}
+    except Exception:
+        disk = None
+    try:
+        rss = int(next(l for l in open("/proc/self/status") if l.startswith("VmRSS")).split()[1]) // 1024
+    except Exception:
+        rss = None
+    bks = safety.backups()
+    return {
+        "now": time.time(), "uptime_s": round(time.time() - _BOOT),
+        "measuring": datastore.measuring_now(), "prebuild": pre_out, "sheets": datastore.recent_sheets(),
+        "orders": {"processing": [o_row(o) for o in orders if o["status"] == "processing"][:10],
+                   "awaiting": sum(1 for o in orders if o["status"] == "awaiting_payment"),
+                   "recent": [o_row(o) for o in orders if o["status"] in ("processing", "ready")][:8],
+                   "paid_today": sum(1 for o in orders if o["status"] in ("processing", "ready") and (o.get("paid") or 0) > day),
+                   "cents_today": sum(o["amount_cents"] or 0 for o in orders if o["status"] in ("processing", "ready") and (o.get("paid") or 0) > day)},
+        "downloads": datastore.recent_downloads(),
+        "coverage": {**_cov.summary(), **_cov.status()},
+        "companies": {"total": len(comps), "members": sum(1 for c in comps if c.get("member")),
+                      "active_today": sum(1 for c in comps if (c.get("last_seen") or 0) > day),
+                      "reports_today": sum((st.get(c["id"]) or {}).get("reports_today", 0) for c in comps),
+                      "reports_30d": sum((st.get(c["id"]) or {}).get("reports_30d", 0) for c in comps)},
+        "system": {"disk": disk, "memory_mb": rss, "cache": gis_cache_info(), "last_backup": bks[0]["created"] if bks else None,
+                   "lockouts": len(safety.lockouts())},
+    }
 
 
 @app.get("/api/admin/library", dependencies=[Depends(admin)])
