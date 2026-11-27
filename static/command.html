@@ -362,7 +362,7 @@
     scr.push(`<div class="scr">${head("Server", true, "safety")}
       ${nums([["Memory", Y.memory_mb != null ? Y.memory_mb + " MB" : "—"], ["Disk free", dk.free_gb != null ? dk.free_gb + " GB" : "—", dk.free_gb != null && dk.free_gb < 2 ? "bad" : ""], ["Up", dur(S.uptime_s)]])}
       ${dk.total_gb ? bar(dk.used_gb, dk.total_gb, dk.used_gb / dk.total_gb > .85 ? "amber" : "") + `<div class="dim">${dk.used_gb} of ${dk.total_gb} GB used</div>` : ""}
-      ${Y.cache && Y.cache.limit ? `<div class="dim">Download cache ${(Y.cache.bytes / 1e9).toFixed(1)} of ${(Y.cache.limit / 1e9).toFixed(0)} GB (oldest cleared automatically)</div>` : ""}
+      ${Y.cache && Y.cache.limit ? `<div class="dim">Download cache ${(Y.cache.bytes / 1e9).toFixed(1)} GB · room for ${(Y.cache.limit / 1e9).toFixed(0)} GB (oldest cleared only if the disk gets nearly full)</div>` : ""}
       <div class="row"><b>Backup</b><span class="${Y.last_backup && Date.now() / 1000 - Y.last_backup < 2 * 86400 ? "ok" : "bad"}">${Y.last_backup ? ago(Y.last_backup) : "none yet"}</span><span></span></div>
       ${Y.lockouts ? `<div class="bad">${Y.lockouts} sign-in lockout${Y.lockouts === 1 ? "" : "s"} right now</div>` : ""}</div>`);
     $("screens").innerHTML = scr.join("");
