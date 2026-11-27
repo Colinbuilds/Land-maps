@@ -98,6 +98,10 @@ def init():
             fips TEXT PRIMARY KEY, name TEXT, state TEXT, status TEXT, candidates TEXT, config TEXT,
             note TEXT, metros TEXT, updated REAL);
         """)
+        have = {r[1] for r in con.execute("PRAGMA table_info(counties)")}
+        for col in ("auto", "needs_check"):  # auto-approved counties, and ones to look at
+            if col not in have:
+                con.execute(f"ALTER TABLE counties ADD COLUMN {col} INTEGER")
 
 
 def _set(table: str, key: str, keyval: str, **f):
@@ -213,12 +217,38 @@ def _county_geom(fips: str):
     return shape(_esri_to_geojson_geom(f["geometry"])) if f else None
 
 
+_EPT: dict = {}
+
+
+def _ept_index() -> list:
+    """The USGS point-cloud index, parsed once, with each project's box."""
+    if "rows" not in _EPT or time.time() - _EPT.get("t", 0) > 7 * 86400:
+        idx = json.loads(get_bytes(EPT_INDEX, ttl=30 * 86400))
+        rows = []
+        for f in idx.get("features") or []:
+            xs, ys = [], []
+
+            def walk(c):
+                if c and isinstance(c[0], (int, float)):
+                    xs.append(c[0]); ys.append(c[1])
+                else:
+                    for cc in c or []:
+                        walk(cc)
+            walk((f.get("geometry") or {}).get("coordinates"))
+            if xs:
+                rows.append(((min(xs), min(ys), max(xs), max(ys)), f))
+        _EPT.update(rows=rows, t=time.time())
+    return _EPT["rows"]
+
+
 def _lidar_for(geom) -> dict | None:
     """The newest USGS 3DEP point clouds covering the county."""
     from shapely.geometry import shape
-    idx = json.loads(get_bytes(EPT_INDEX, ttl=30 * 86400))
     hits = []
-    for f in idx.get("features") or []:
+    gx0, gy0, gx1, gy1 = geom.bounds
+    for (x0, y0, x1, y1), f in _ept_index():
+        if x1 < gx0 or x0 > gx1 or y1 < gy0 or y0 > gy1:  # cheap box test first
+            continue
         try:
             g = shape(f["geometry"])
         except Exception:
@@ -265,9 +295,9 @@ def base_config(fips: str) -> dict:
 
 # --------------------------------------------------------- parcel discovery
 FIELD_PATTERNS = {
-    "pin": [r"^PARCEL_?ID$", r"^PARCELID$", r"^PIN$", r"^APN$", r"^PARCEL_?(NO|NUM|NUMBER)$", r"^GPIN$", r"^PID$",
+    "pin": [r"^PARCEL_?ID$", r"^PROP_?ID$", r"^GEO_?ID$", r"^ACCOUNT_?(NO|NUM|NUMBER)?$", r"^PARCELID$", r"^PIN$", r"^APN$", r"^PARCEL_?(NO|NUM|NUMBER)$", r"^GPIN$", r"^PID$",
             r"^PARCEL$", r"^PARID$", r"^PARCELNUMB$", r"^MAPNO$", r"^KEYPIN$", r"^QUICKREFID$"],
-    "address": [r"^SITE_?ADDR(ESS)?$", r"^SITUS(_?ADDR(ESS)?)?$", r"^PROP(ERTY)?_?ADDR(ESS)?$", r"^PHY(SICAL)?_?ADDR(ESS)?$",
+    "address": [r"^SITUS_?CONCAT(_?SHORT)?$", r"^SITUS_?FULL(_?ADDR(ESS)?)?$", r"^SITE_?ADDR(ESS)?$", r"^SITUS(_?ADDR(ESS)?)?$", r"^PROP(ERTY)?_?ADDR(ESS)?$", r"^PHY(SICAL)?_?ADDR(ESS)?$",
                 r"^SITEADDRESS$", r"^FULL_?ADDR(ESS)?$", r"^ADDRESS$", r"^LOC(ATION)?_?ADDR(ESS)?$", r"^STREET_?ADDR(ESS)?$",
                 r"^SITUSADDR$", r"^ADDR$", r"^SITE_?ADD$", r"^PROPADDR$", r"^SITUS_ADDRESS$"],
     "city": [r"^SITE_?CITY$", r"^SITUS_?CITY$", r"^PROP(ERTY)?_?CITY$", r"^CITY$", r"^MUNICIPALITY$", r"^PHY_?CITY$"],
@@ -280,9 +310,9 @@ FIELD_PATTERNS = {
     "land_value": [r"^LAND_?VAL(UE)?$", r"^LNDVALUE$", r"^LANDVAL$", r"^LAND_?APPR$"],
     "year_built": [r"^YEAR_?BUILT$", r"^YR_?BUILT$", r"^YRBLT$", r"^RESYRBLT$", r"^YEARBLT$", r"^BUILT$", r"^YEARBUILT$"],
     "bldg_sqft": [r"^(BLDG|BUILDING|LIVING|HEATED|FIN(ISHED)?)_?(SQ_?FT|AREA|SF)$", r"^RESFLRAREA$", r"^SQ_?FT$",
-                  r"^LIVING_?AREA$", r"^TOT_?SQFT$", r"^GLA$"],
-    "lot_acres": [r"^(GIS_?|CALC_?|DEED_?)?ACRE(S|AGE)?$", r"^ACRES$", r"^ACREAGE$"],
-    "lot_sqft": [r"^LOT_?(SIZE|SQ_?FT|AREA)$", r"^LAND_?SQ_?FT$", r"^SQFT_?LOT$"],
+                  r"^LIVING_?AREA$", r"^TOT_?SQFT$", r"^GLA$", r"^IMPRV_?MAIN_?AREA$"],
+    "lot_acres": [r"^(GIS_?|CALC_?|DEED_?)?ACRE(S|AGE)?$", r"^ACRES$", r"^ACREAGE$", r"^LAND_?SIZE_?ACRES$"],
+    "lot_sqft": [r"^LOT_?(SIZE|SQ_?FT|AREA)$", r"^LAND_?SQ_?FT$", r"^SQFT_?LOT$", r"^LAND_?SIZE_?SQ_?FT$"],
     "class": [r"^(PROP(ERTY)?_?)?CLASS(_?CODE|CD)?$", r"^CLASSCD$", r"^LAND_?USE(_?CODE)?$", r"^LUC$", r"^USE_?CODE$",
               r"^PROP_?TYPE$", r"^PROPERTY_?TYPE$", r"^ZONING$", r"^DOR_?UC$", r"^USECD$"],
     "mail_address": [r"^MAIL(ING)?_?ADDR(ESS)?1?$", r"^PSTLADDRESS$", r"^OWN(ER)?_?ADDR(ESS)?1?$"],
@@ -295,11 +325,12 @@ FIELD_PATTERNS = {
 # Looser second pass (field names cut to 10 characters by shapefiles, odd
 # naming): (must contain, must not contain, preferred words)
 FALLBACKS = {
-    "address": (r"ADDR|ADRS|SITUS", r"MAIL|OWN|PSTL|TAXP|BILL|CITY|ZIP|STATE|NUM|NBR|NO$", r"SITE|SITUS|FULL|PROP|PHY|LOC"),
+    "address": (r"ADDR|ADRS|SITUS", r"MAIL|OWN|PSTL|TAXP|BILL|CITY|ZIP|STATE|NUM|NBR|NO$|UNIT|APT|SUITE|PREFIX|SUFFIX|DIR|TYPE",
+                r"CONCAT|FULL|SITE|SITUS|PROP|PHY|LOC"),
     "owner": (r"OWN|TAXPAYER|GRANTEE", r"ADDR|ADR|CITY|ZIP|STATE|ST$|TYPE|CODE|PCT|SHIP|DATE|DATA|SOURCE", r"NAME|NM|1"),
     "home_value": (r"VAL|APPR|ASSESS|MKT", r"LAND|LND|BLDG|IMP|PER|ACRE|YEAR|DATE|PRIOR|PREV|_1$|EXEMPT", r"TOT|ASSESS|MARKET|APPR|FULL"),
     "year_built": (r"YR|YEAR", r"SALE|DATE|ASSESS|TAX", r"BLT|BUILT|BUILD"),
-    "pin": (r"PARC|PIN|APN|PID", r"OLD|PREV|ALT|ADDR|PARENT", r"ID|NO|NUM|PIN"),
+    "pin": (r"PARC|PIN|APN|PID", r"OLD|PREV|ALT|ADDR|PARENT|MAP|SPLIT|GROUP", r"ID|NO|NUM|PIN"),
     "city": (r"CITY|MUNI|TOWN", r"MAIL|OWN|PSTL|BILL", r"SITE|SITUS|PROP|PHY"),
     "zip": (r"ZIP", r"MAIL|OWN|PSTL|BILL|4$", r"SITE|SITUS|PROP|PHY"),
 }
@@ -437,7 +468,7 @@ def class_values(url: str, field: str) -> list[dict]:
 
 
 def approve(fips: str, url: str, fields: dict, residential_where: str | None = None, imagery_url: str | None = None,
-            oid: str = "OBJECTID") -> dict:
+            oid: str = "OBJECTID", samples: list | None = None) -> dict:
     """Make the county live with this parcel layer (no deploy needed)."""
     cfg = base_config(fips)
     fm = {k: v for k, v in fields.items() if v}
@@ -449,6 +480,8 @@ def approve(fips: str, url: str, fields: dict, residential_where: str | None = N
     cfg["parcels"] = {"url": url, "fields": fm, "oid": oid,
                       "address_has_city_zip": not fm.get("city"),
                       "row_parcels": True,  # skip street right-of-way strips mapped as parcels
+                      # addresses that carry ", CITY, ST ZIP" while city and ZIP have their own fields
+                      "address_trim_comma": bool(fm.get("city")) and any("," in str(sm.get("address") or "") for sm in samples or []),
                       "classes": {"R": residential_where or "1=1"}}
     if imagery_url == "esri":  # sharp, nationwide; commercial use needs an Esri account
         cfg["imagery"] = {**cfg["imagery"], "tile_url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -459,12 +492,136 @@ def approve(fips: str, url: str, fields: dict, residential_where: str | None = N
     (CFG_DIR / f"{cfg['id']}.json").write_text(json.dumps(cfg, indent=1, default=list))
     from . import counties as _co
     _co.register(cfg)
-    _set("counties", "fips", fips, status="live", config=json.dumps(cfg, default=list), note="Live")
+    _set("counties", "fips", fips, status="live", config=json.dumps(cfg, default=list), note="Live", auto=0, needs_check=0)
     try:
         auto_pull()  # a metro may be complete now
     except Exception:
         pass
     return cfg
+
+
+# ------------------------------------------------------------ auto-approve
+_RES_TEXT = re.compile(r"RESID|SINGLE|SFR|S\.F\.|DUPLEX|TOWN ?HO|CONDO|DWELL|MOBILE HOME|MANUFACTURED|PLANNED UNIT|"
+                       r"\bSTORY\b|RANCH|SPLIT LEVEL|BI ?-?LEVEL|TRI ?-?LEVEL|BUNGALOW|COTTAGE", re.I)
+_NOT_RES = re.compile(r"VACANT|COMMERC|NON[- ]?RES|EXEMPT|BPP|OFFICE|INDUSTR|RETAIL|WAREHOUSE|APARTMENTS? ABOVE|"
+                      r"BANK|STORE|SHOP|CHURCH|SCHOOL|HOTEL|MOTEL|RESTAURANT|MEDICAL|CLINIC|HOSPITAL|AUTO|SERVICE|"
+                      r"GARAGE, ?(SERVICE|REPAIR|PARKING)|DAY ?CARE|NURSING|ASSISTED|FRATERNAL|THEATER|BAR\b|TAVERN", re.I)
+_RES_CODES = {"R", "RES", "RS", "R1", "R-1", "R2", "R-2", "SF", "SFR", "RESIDENTIAL",
+              "A1", "A2", "A3", "A",  # Texas appraisal: A = single family (A1 house, A2 mobile, A3 condo)
+              "0100", "0101", "0102", "0103", "0104", "0105", "0106", "01",  # Florida DOR: 01xx single family
+              "1112", "1212", "1215"}  # Colorado residential abstract codes
+_NOT_A = {"IA", "NE", "KS", "MO", "SD", "ND", "MN", "WI", "IL", "IN", "OH"}  # states where "A" means agricultural
+
+
+def _res_values(vals: list[dict], state: str) -> tuple[list, int]:
+    """Which of a field's values mean a home, and how many parcels they cover."""
+    keep, n = [], 0
+    for v in vals:
+        raw = v.get("value")
+        if raw in (None, ""):
+            continue
+        t = str(raw).strip().upper()
+        tokens = [x.strip() for x in re.split(r"[,;/]", t) if x.strip()]
+        is_res = (_RES_TEXT.search(t) and not _NOT_RES.search(t)) or \
+            (t in _RES_CODES and not (t == "A" and state in _NOT_A)) or \
+            (len(tokens) > 1 and all(x in _RES_CODES for x in tokens))
+        if is_res:
+            keep.append(raw)
+            n += int(v.get("n") or 1)
+    return keep, n
+
+
+def guess_residential(url: str, field: str | None, state: str, other_fields: list[str] | None = None) -> str | None:
+    """A homes-only filter from a layer's own values, when they say so
+    plainly: the class field first, then any other land-use / property-type
+    field, picking the one that marks the most parcels as homes. None when
+    nothing is readable (the county goes live with every parcel, flagged)."""
+    best = (0, None, [])
+    for f in [x for x in [field] + list(other_fields or []) if x][:7]:
+        try:
+            keep, n = _res_values(class_values(url, f), state)
+        except Exception:
+            continue
+        if keep and n > best[0]:
+            best = (n, f, keep)
+    if not best[1]:
+        return None
+    quote = lambda x: str(x) if isinstance(x, (int, float)) else "'" + str(x).replace("'", "''") + "'"
+    return f"{best[1]} IN ({','.join(quote(k) for k in best[2])})"
+
+
+def _type_fields(url: str) -> list[str]:
+    """Text fields that may say what a parcel is (land use, class, style)."""
+    meta = get_json(url, {"f": "json"}, ttl=7 * 86400)
+    out = []
+    for f in meta.get("fields") or []:
+        n = f.get("name", "")
+        if f.get("type") == "esriFieldTypeString" and re.search(r"USE|CLASS|TYPE|LUC|DESC|DSC|ZON|DOR|CAT|STYLE|STRUCT", n, re.I) \
+                and not re.search(r"USER|LEGAL|EDIT|CREAT|ADDR|OWNER|NAME", n, re.I):
+            out.append(n)
+    return out
+
+
+def auto_settings() -> dict:
+    from .pricing import load_settings
+    return {"auto_approve": True, **(load_settings().get("coverage") or {})}
+
+
+def live_query_ok(url: str, geom) -> bool:
+    """Run the same kind of map search the measuring uses (fresh, not cached).
+    Some layers answer the sample test but refuse real searches."""
+    from . import gis
+    x, y = _sample_points(geom)[0]
+    d = 0.002
+    try:
+        gis.query_features(url, envelope=(x - d, y - d, x + d, y + d), out_fields="*", limit=5)
+        return True
+    except Exception:
+        return False
+
+
+def auto_approve(fips: str) -> dict | None:
+    """Approve the county's best parcel layer when it clearly works: parcels
+    at most test spots and real addresses in the samples. Sets the homes-only
+    filter when the class values are readable; flags the county for a check."""
+    c = county(fips)
+    cands = c.get("candidates") if c and isinstance(c.get("candidates"), list) else []
+    for k in cands:
+        samples = k.get("samples") or []
+        with_addr = sum(1 for sm in samples if str(sm.get("address") or "").strip())
+        if not k.get("points") or k["coverage"] / k["points"] < 0.6 or with_addr < max(1, len(samples) // 2):
+            continue
+        if not live_query_ok(k["url"], _county_geom(fips)):
+            _set("counties", "fips", fips, note=f"Auto-approve skipped {k.get('name') or 'a layer'}: its map searches fail right now")
+            continue
+        try:
+            others = _type_fields(k["url"])
+        except Exception:
+            others = []
+        where = guess_residential(k["url"], (k.get("fields") or {}).get("class"), c["state"], others)
+        approve(fips, k["url"], k["fields"], where, None, k.get("oid") or "OBJECTID", samples)
+        check = [] if where else ["homes-only filter (every parcel is included)"]
+        if not (k.get("fields") or {}).get("home_value"):
+            check.append("assessed value field")
+        if not (k.get("fields") or {}).get("owner"):
+            check.append("owner field")
+        note = "Auto-approved: " + (k.get("item") or k.get("name") or "layer") + (
+            " · check " + ", ".join(check) if check else "")
+        _set("counties", "fips", fips, note=note, auto=1, needs_check=1 if check else 0)
+        return {"fips": fips, "url": k["url"], "where": where, "check": check}
+    return None
+
+
+def approve_all_found() -> int:
+    n = 0
+    for c in counties():
+        if c["status"] == "found":
+            try:
+                if auto_approve(c["fips"]):
+                    n += 1
+            except Exception as e:
+                _set("counties", "fips", c["fips"], note=f"Auto-approve failed: {str(e)[:150]}")
+    return n
 
 
 def metro_ready_zips(cbsa: str) -> list[str]:
@@ -527,6 +684,8 @@ def run_all(limit: int | None = None):
                 _worker["now"] = f"Searching {c['name']}, {c['state']}"
                 try:
                     discover(c["fips"])
+                    if auto_settings().get("auto_approve"):
+                        auto_approve(c["fips"])
                 except Exception as e:
                     _set("counties", "fips", c["fips"], status="error", note=str(e)[:200])
         finally:
@@ -603,6 +762,8 @@ def start_continuous():
                     run_all()
                     while _worker["thread"] and _worker["thread"].is_alive():
                         time.sleep(30)
+                    if auto_settings().get("auto_approve"):
+                        approve_all_found()
                     auto_pull()
             except Exception:
                 pass

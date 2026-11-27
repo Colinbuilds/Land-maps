@@ -175,6 +175,9 @@ class Measurer:
             out.update(_split_situs(str(out["address"]), out.get("city"), out.get("zip")))
         if out.get("address"):
             out["address"] = str(out["address"]).strip()
+            if self.c["parcels"].get("address_trim_comma") and "," in out["address"]:
+                # "2933 E UNIVERSITY DR , MCKINNEY, TX 75069": city/ZIP have their own fields
+                out["address"] = out["address"].split(",")[0].strip()
         return out
 
     def get_parcel(self, pin: str) -> dict | None:

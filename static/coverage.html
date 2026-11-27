@@ -43,6 +43,8 @@
     <div class="tot" id="tot"></div>
     <div class="bar">
       <button id="run">Run now: map metros &amp; search counties</button><button class="secondary" id="stop">Stop</button>
+      <label class="small" style="display:flex;gap:6px;align-items:center;margin-left:8px"><input type="checkbox" id="auto" style="width:auto"> Auto-approve counties that pass the checks</label>
+      <button class="secondary" id="approveAll">Approve all found now</button>
       <span id="worker" class="small muted"></span>
     </div>
     <div class="bar" id="tabs"></div>
@@ -63,8 +65,10 @@
       ["Counties live", by.live || 0], ["Need approval", by.found || 0], ["Measuring queue", q.zips ? `${(q.done || []).length}/${q.zips.length}` : "–"]]
       .map(([l, v]) => `<div><div class="l">${l}</div><div class="v">${v}</div></div>`).join("");
     $("worker").textContent = D.worker.running ? `Working: ${D.worker.now || "…"}` : "Idle. Runs again by itself every day.";
-    const counts = { approve: by.found || 0, metros: D.metros.length, notfound: (by.not_found || 0) + (by.error || 0), live: by.live || 0, all: D.counties.length };
-    $("tabs").innerHTML = [["approve", "Needs approval"], ["metros", "Metros"], ["notfound", "No records found"], ["live", "Live counties"], ["all", "All counties"]]
+    $("auto").checked = !!(D.settings || {}).auto_approve;
+    const counts = { approve: by.found || 0, check: D.counties.filter((c) => c.needs_check && c.status === "live").length, metros: D.metros.length,
+                     notfound: (by.not_found || 0) + (by.error || 0), live: by.live || 0, all: D.counties.length };
+    $("tabs").innerHTML = [["approve", "Needs approval"], ["check", "Auto-approved: check"], ["metros", "Metros"], ["notfound", "No records found"], ["live", "Live counties"], ["all", "All counties"]]
       .map(([k, l]) => `<button class="chip ${tab === k ? "on" : ""}" data-t="${k}">${l} (${counts[k]})</button>`).join("");
     draw();
     clearTimeout(timer); if (D.worker.running) timer = setTimeout(load, 8000);
@@ -73,6 +77,8 @@
   $("tabs").onclick = (e) => { const b = e.target.closest("[data-t]"); if (b) { tab = b.dataset.t; load(); } };
   $("run").onclick = async () => { await api("/api/admin/coverage/run", { method: "POST" }); load(); };
   $("stop").onclick = async () => { await api("/api/admin/coverage/stop", { method: "POST" }); load(); };
+  $("auto").onchange = async () => { await api("/api/admin/coverage/auto", { method: "PUT", json: { auto_approve: $("auto").checked } }); load(); };
+  $("approveAll").onclick = async () => { await api("/api/admin/coverage/approve-all", { method: "POST" }); alert("Approving every found county that passes the checks. Refresh in a minute."); setTimeout(load, 15000); };
 
   function draw() {
     if (tab === "metros") {
@@ -87,13 +93,13 @@
       $("list").querySelectorAll("[data-pull]").forEach((b) => b.onclick = async () => { try { const r = await api(`/api/admin/coverage/metro/${b.dataset.pull}/pull`, { method: "POST" }); alert(`${r.queued} ZIPs added to the measuring queue.`); } catch (e) { alert(e.message); } load(); });
       return;
     }
-    const want = { approve: ["found"], notfound: ["not_found", "error"], live: ["live"], all: null }[tab];
-    const rows = D.counties.filter((c) => !want || want.includes(c.status));
+    const want = { approve: ["found"], check: ["live"], notfound: ["not_found", "error"], live: ["live"], all: null }[tab];
+    const rows = D.counties.filter((c) => (!want || want.includes(c.status)) && (tab !== "check" || c.needs_check));
     $("list").innerHTML = `<thead><tr><th>County</th><th>Metros</th><th>Status</th><th></th></tr></thead><tbody>${rows.map((c) => `<tr>
       <td><b>${esc(c.name)}, ${esc(c.state)}</b><div class="small muted">${esc(c.note || "")}</div></td>
       <td class="small">${(Array.isArray(c.metros) ? c.metros : []).map((cb) => esc((D.metros.find((m) => m.cbsa === cb) || {}).name || cb)).join("<br>")}</td>
       <td><span class="pill ${esc(c.status)}">${esc(LAB[c.status] || c.status)}</span></td>
-      <td>${c.status === "live" ? "" : `<button class="${c.status === "found" ? "" : "secondary"}" data-open="${c.fips}">${c.status === "found" ? "Review" : "Set up"}</button>`}</td></tr>`).join("")
+      <td>${c.status === "live" ? (c.auto ? `<button class="secondary" data-open="${c.fips}">Change</button>` : "") : `<button class="${c.status === "found" ? "" : "secondary"}" data-open="${c.fips}">${c.status === "found" ? "Review" : "Set up"}</button>`}</td></tr>`).join("")
       || '<tr><td colspan="4" class="muted">Nothing here. Tap Run now to map metros and search counties.</td></tr>'}</tbody>`;
     $("list").querySelectorAll("[data-open]").forEach((b) => b.onclick = () => open(b.dataset.open));
   }

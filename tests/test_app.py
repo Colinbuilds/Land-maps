@@ -390,3 +390,41 @@ def test_zip_heat_counts_paid_purchases(monkeypatch):
     p = {f["properties"]["zip"]: f["properties"] for f in h["features"]}
     assert p["99990"]["paid"] == 2 and p["99990"]["cents"] == 5500 and p["99991"]["paid"] == 0 and p["99991"]["pending"] == 1
     assert h["totals"]["bought"] == 1
+
+
+def test_auto_approve_rules(monkeypatch):
+    from app import coverage as cv
+    vals = {"TX": [{"value": "A1", "n": 900}, {"value": "F1", "n": 50}, {"value": "C1", "n": 10}],
+            "IA": [{"value": "R", "n": 900}, {"value": "A", "n": 300}, {"value": "C", "n": 40}],
+            "XX": [{"value": "Residential - Single Family", "n": 900}, {"value": "Vacant Residential", "n": 30},
+                   {"value": "Commercial", "n": 40}],
+            "ZZ": [{"value": "511", "n": 900}, {"value": "300", "n": 40}]}
+    st = {"v": "TX"}
+    monkeypatch.setattr(cv, "class_values", lambda url, f: vals[st["v"]])
+    assert cv.guess_residential("u", "Class", "TX") == "Class IN ('A1')"
+    st["v"] = "IA"
+    assert cv.guess_residential("u", "Class", "IA") == "Class IN ('R')"  # "A" is farmland in Iowa
+    st["v"] = "XX"
+    assert cv.guess_residential("u", "Use", "XX") == "Use IN ('Residential - Single Family')"
+    st["v"] = "ZZ"
+    assert cv.guess_residential("u", "Code", "ZZ") is None  # unreadable codes: no filter, flagged
+    calls = []
+    monkeypatch.setattr(cv, "approve", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(cv, "guess_residential", lambda *a: None)
+    monkeypatch.setattr(cv, "_county_geom", lambda f: None)
+    monkeypatch.setattr(cv, "_type_fields", lambda u: [])
+    broken = set()
+    monkeypatch.setattr(cv, "live_query_ok", lambda u, g: u not in broken)
+    good = {"url": "u1", "coverage": 4, "points": 5, "fields": {"pin": "P", "address": "A"}, "oid": "OBJECTID",
+            "samples": [{"address": "1 Main"}, {"address": "2 Main"}], "item": "Parcels"}
+    weak = {**good, "url": "u0", "coverage": 1}
+    blank = {**good, "url": "u2", "samples": [{"address": ""}, {"address": ""}]}
+    cv._set("counties", "fips", "99996", name="Auto Test", state="XX", status="found",
+            candidates=__import__("json").dumps([weak, blank, good]))
+    r = cv.auto_approve("99996")
+    assert r["url"] == "u1" and calls[0][1] == "u1" and "homes-only filter (every parcel is included)" in r["check"]
+    assert cv.county("99996")["needs_check"] == 1
+    broken.add("u1")  # a layer whose real map searches fail is never approved
+    cv._set("counties", "fips", "99995", name="Broken", state="XX", status="found",
+            candidates=__import__("json").dumps([good]))
+    assert cv.auto_approve("99995") is None and "fail" in cv.county("99995")["note"]

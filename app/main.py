@@ -2434,7 +2434,7 @@ def cov_overview():
             c["status"] = "live"
         c.pop("config", None)
     return {"summary": cv.summary(), "worker": cv.status(), "metros": cv.metros(), "counties": cos,
-            "queue": datastore.prebuild_status()}
+            "queue": datastore.prebuild_status(), "settings": cv.auto_settings()}
 
 
 @app.post("/api/admin/coverage/run", dependencies=[Depends(admin)])
@@ -2442,6 +2442,28 @@ def cov_run(limit: int | None = None):
     """Load the metro list, map every metro and search every county (background)."""
     from . import coverage as cv
     return cv.run_all(limit)
+
+
+class CovAuto(BaseModel):
+    auto_approve: bool
+
+
+@app.put("/api/admin/coverage/auto", dependencies=[Depends(admin)])
+def cov_auto(body: CovAuto):
+    """Turn automatic approval of found counties on or off."""
+    s = load_settings()
+    s["coverage"] = {**(s.get("coverage") or {}), "auto_approve": body.auto_approve}
+    save_settings(s)
+    from . import coverage as cv
+    return cv.auto_settings()
+
+
+@app.post("/api/admin/coverage/approve-all", dependencies=[Depends(admin)])
+def cov_approve_all():
+    """Approve every found county that passes the checks, now (background)."""
+    from . import coverage as cv
+    threading.Thread(target=cv.approve_all_found, daemon=True, name="approve-all").start()
+    return {"started": True}
 
 
 @app.post("/api/admin/coverage/stop", dependencies=[Depends(admin)])
@@ -2515,8 +2537,11 @@ def cov_approve(fips: str, body: CovApprove):
         raise HTTPException(400, "Imagery must be a tile URL with {z}, {y} and {x} in it.")
     if body.residential_where and re.search(r";|--|\b(drop|delete|insert|update)\b", body.residential_where, re.I):
         raise HTTPException(400, "That filter isn't allowed.")
+    c = cv.county(fips)
+    cands = c.get("candidates") if isinstance(c.get("candidates"), list) else []
+    samples = next((k.get("samples") for k in cands if k.get("url") == body.url), None)
     cfg = cv.approve(fips, body.url, {k: v for k, v in body.fields.items() if isinstance(v, str)},
-                     body.residential_where, body.imagery_url, body.oid)
+                     body.residential_where, body.imagery_url, body.oid, samples)
     return {"id": cfg["id"], "name": cfg["name"], "lidar": (cfg.get("lidar") or {}).get("source")}
 
 
