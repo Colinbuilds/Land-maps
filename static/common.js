@@ -195,6 +195,7 @@ function measurementCards(r, keys, labels) {
     { href: "/reports", label: "Reports", icon: "📐" },
     { href: "/crm", label: "CRM", icon: "📋" },
     { href: "/join", label: "Membership", icon: "⭐", cls: "member" },
+    { href: "/signin", label: "Sign in", icon: "👤", cls: "acct" },
   ];
   const tabNow = (location.hash || "#status").slice(1);
   const isActive = (h) => (h === "/" ? here === "/" : h.startsWith("/command#") ? h.slice(9) === tabNow
@@ -207,6 +208,19 @@ function measurementCards(r, keys, labels) {
       nav.setAttribute("aria-label", "Site");
       nav.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""} ${l.cls || ""}">${l.label}</a>`).join("");
       header.insertBefore(nav, header.children[1] || null);
+    }
+    // the account button: "Sign in", or who's signed in (owner -> command center)
+    if (!owner) {
+      const acct = () => document.querySelectorAll(".site-nav a.acct, .tabbar a.acct");
+      let ownerKey = "";
+      try { ownerKey = localStorage.getItem("adminToken") || ""; } catch (e) {}
+      fetch("/api/roof/me", { credentials: "same-origin" }).then((r) => r.ok ? r.json() : null).then((me) => {
+        acct().forEach((a) => {
+          const lbl = a.querySelector("span") ? a.lastChild : a;
+          if (me && me.name) { a.href = me.crm ? "/crm" : "/reports"; lbl.textContent = me.name.length > 18 ? me.name.slice(0, 17) + "…" : me.name; a.title = "Signed in"; }
+          else if (ownerKey) { a.href = "/command"; lbl.textContent = "Command"; a.title = "Owner command center"; }
+        });
+      }).catch(() => {});
     }
     // the logo is always the way home
     const brand = header && header.querySelector(".brand");
