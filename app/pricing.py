@@ -74,6 +74,25 @@ DEFAULT_SETTINGS = {
             "rate": 10.00, "rate_unit": "per sq ft",
             "minimum": 1200.0,
         },
+        # Irrigation: systems are sized to the grass they water (lawn + parkway)
+        "irrigation_install": {
+            "enabled": True,
+            "label": "Sprinkler system install",
+            "unit": "installed",
+            "measures": ["lawn_sqft", "parkway_sqft"],
+            "rate": 0.85, "rate_unit": "per sq ft",
+            "minimum": 2500.0,
+        },
+        "irrigation_service": {
+            "enabled": True,
+            "label": "Sprinkler start-up & winterizing",
+            "unit": "per visit",
+            "measures": ["lawn_sqft", "parkway_sqft"],
+            "rate": 5.00, "rate_unit": "per 1,000 sq ft",
+            "minimum": 65.0,
+            "applications_per_year": 2,
+            "program_note": "spring start-up + fall blowout",
+        },
     },
 }
 
@@ -127,7 +146,7 @@ def price_service(svc: dict, m: dict, spread: float, finish: str | None = None) 
     if svc.get("applications_per_year"):
         n = svc["applications_per_year"]
         out["annual"] = {"low": _round_price(out["low"] * n), "high": _round_price(out["high"] * n),
-                         "note": f"{n}-application program"}
+                         "note": svc.get("program_note") or f"{n}-application program"}
     if svc.get("season_pushes"):
         n = svc["season_pushes"]
         out["annual"] = {"low": _round_price(out["low"] * n), "high": _round_price(out["high"] * n),

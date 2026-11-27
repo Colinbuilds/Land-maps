@@ -132,7 +132,7 @@ def list_structures(pin: str) -> dict:
             "geometry_las": traced,
             "lean_ft": [round(lean[0], 2), round(lean[1], 2)],
             "trace": stats,
-            "geojson": mapping(_shift_las_to_photo_wgs(m, traced, lean)),
+            "geojson": mapping(_learned_shift(cid, _shift_las_to_photo_wgs(m, traced, lean))),
         })
     a = m.parcel_attrs(f["attributes"])
     info = {"pin": make_pid(cid, a["pin"]), "address": a.get("address") or "",
@@ -143,6 +143,20 @@ def list_structures(pin: str) -> dict:
     if len(_struct_cache) > 300:
         _struct_cache.pop(next(iter(_struct_cache)))
     return info
+
+
+def _learned_shift(cid: str, g):
+    """Nudge a proposed outline the way people consistently nudge them here."""
+    try:
+        from shapely.affinity import translate
+        from . import learning
+        dx, dy = learning.roof_shift_ft(cid)
+        if dx or dy:
+            lat = g.centroid.y
+            return translate(g, dx / (364567.0 * math.cos(math.radians(lat))), dy / 364567.0)
+    except Exception:
+        pass
+    return g
 
 
 def outline_from_photo_geojson(m, gj: dict, lean) -> "Polygon":
@@ -356,6 +370,11 @@ def build_report(pin: str, structure_ids: list[int] | None = None, pitch: float 
     for s in chosen:
         gj = (edited or {}).get(str(s["id"])) or (edited or {}).get(s["id"])
         if gj:
+            try:  # learn how people adjust our outlines in this county
+                from . import learning
+                learning.record_roof_edit(split_pid(pin)[0], pin, s.get("geojson"), gj)
+            except Exception:
+                pass
             s["geometry_las"] = outline_from_photo_geojson(m, gj, s.get("lean_ft") or (0, 0))
             s["geojson"] = gj
             s["edited"] = True

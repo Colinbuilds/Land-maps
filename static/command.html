@@ -357,7 +357,15 @@
     scr.push(`<div class="scr">${head("Companies", Co.active_today, "companies")}
       ${nums([["Companies", n(Co.total)], ["Members", n(Co.members)], ["Active today", n(Co.active_today)], ["Reports today", n(Co.reports_today)]])}
       <div class="dim">${n(Co.reports_30d)} reports in the last 30 days</div></div>`);
-    // 7. server
+    // 7. learning from people's fixes
+    const Lr = S.learning || { lawn: [], roof: [], fixes: 0, roof_edits: 0 };
+    const cname = (c) => esc(String(c).replace(/_([a-z]{2})$/, (m, st) => ", " + st.toUpperCase()).replace(/_/g, " ").replace(/\b\w/g, (x) => x.toUpperCase()));
+    scr.push(`<div class="scr">${head("Learning from fixes", Lr.fixes + Lr.roof_edits > 0, "measure")}
+      ${nums([["Lawn fixes", n(Lr.fixes)], ["Roof edits", n(Lr.roof_edits)], ["Counties using it", n(Lr.lawn.filter((r) => r.active).length)]])}
+      ${Lr.lawn.slice(0, 4).map((r) => `<div class="row"><b style="font-size:12px">${cname(r.county)}</b><span>${n(r.n)} fix${r.n === 1 ? "" : "es"}</span><span class="${r.active ? "ok" : "dim"}">${r.active ? "in use" : `${3 - r.n} more to start`}</span></div>`).join("")}
+      ${Lr.roof.slice(0, 3).map((r) => `<div class="row"><b style="font-size:12px">${cname(r.county)}</b><span>${n(r.n)} roof edits · outlines ${r.ratio > 1.03 ? "too small" : r.ratio < 0.97 ? "too big" : "right size"}</span><span class="dim">${r.shift_ft[0] || r.shift_ft[1] ? `nudged ${Math.hypot(...r.shift_ft).toFixed(1)} ft` : ""}</span></div>`).join("")}
+      ${Lr.fixes + Lr.roof_edits ? "" : '<div class="empty">Every lawn fix in Measure tools and every roof outline a company adjusts teaches the measuring for that county.</div>'}</div>`);
+    // 7b. server
     const dk = Y.disk || {};
     scr.push(`<div class="scr">${head("Server", true, "safety")}
       ${nums([["Memory", Y.memory_mb != null ? Y.memory_mb + " MB" : "—"], ["Disk free", dk.free_gb != null ? dk.free_gb + " GB" : "—", dk.free_gb != null && dk.free_gb < 2 ? "bad" : ""], ["Up", dur(S.uptime_s)]])}

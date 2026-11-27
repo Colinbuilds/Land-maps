@@ -37,6 +37,16 @@
   .dp .tile4:hover { transform: translateY(-2px); border-color: #86d3a0; }
   .dp .tile4 .ic { font-size: 28px; } .dp .tile4 h3 { margin: 0; font-size: 20px; } .dp .tile4 p { margin: 0; color: var(--muted); font-size: 15px; }
   .dp .tile4 b { color: #15803d; }
+  .dp .feature.pick { display: block; color: inherit; text-decoration: none; cursor: pointer; transition: transform .12s, border-color .12s, box-shadow .12s; border: 2px solid transparent; }
+  .dp .feature.pick:hover, .dp .feature.pick:focus-visible { transform: translateY(-2px); border-color: #86d3a0; box-shadow: 0 10px 24px -12px rgba(21,128,61,.45); }
+  .dp .feature.pick .go { display: block; margin-top: 12px; color: #15803d; font-size: 15px; }
+  .dp .feature .top { margin-bottom: 14px !important; }
+  .dp .feature { padding: 22px !important; }
+  @media (min-width: 760px) { .dp .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; } }
+  .dp .svcs { margin-top: 14px; padding: 16px 18px; }
+  .dp .svc-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .dp .svc-chips span { background: #e7f4eb; color: #14532d; border-radius: 99px; padding: 6px 12px; font-size: 14px; font-weight: 600; }
+  .dp .svc-chips span small { font-weight: 500; color: #3f6b50; margin-left: 4px; }
   .dp .signed { background: #fff; border-radius: 16px; padding: 12px 14px; margin-bottom: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   @media (max-width: 640px) {
     .dp table.mvt thead { display: none; }
@@ -410,6 +420,28 @@
   .dp .tradepresets .chips button { flex: 0 0 auto; min-height: 38px; padding: 7px 13px; font-size: 13.5px; font-weight: 600;
     background: var(--field, #f3f5f0); color: var(--ink); border-radius: 99px; box-shadow: none; white-space: nowrap; }
   .dp .tradepresets .chips button.on { background: var(--ink); color: #fff; }
+
+  /* ---- compact layout: tight sections, each block on its own colour ---- */
+  .dp .sec { padding: 28px 0 !important; }
+  @media (min-width: 900px) { .dp .sec { padding: 40px 0 !important; } }
+  .dp .sec-head { margin-bottom: 16px; }
+  .dp .sec-head h2 { font-size: clamp(26px, 4.6vw, 36px); margin: 0 0 8px; }
+  .dp .sec-head p.eyebrow { margin: 0 0 8px; }
+  .dp .hero-sec { padding: 18px 0 26px !important; }
+  @media (min-width: 900px) { .dp .hero-sec { padding: 28px 0 36px !important; } .dp .hero { gap: 36px; } }
+  .dp #result { margin-top: 22px; }
+  .dp .trust { margin-top: 14px; }
+  .dp main > section { border-top: 1px solid rgba(21, 52, 43, .07); }
+  .dp main > section.hero-sec { background: #f6f7f2; border-top: 0; }
+  .dp main > section:nth-of-type(6n+2) { background: #fdf4ee; }   /* warm: the problem */
+  .dp main > section:nth-of-type(6n+3) { background: #e7f4eb; }   /* green: membership */
+  .dp main > section:nth-of-type(6n+4) { background: #edf2f8; }   /* blue */
+  .dp main > section:nth-of-type(6n+5) { background: #faf6ea; }   /* sand */
+  .dp main > section:nth-of-type(6n+6) { background: #f1eef8; }   /* lavender */
+  .dp main > section:nth-of-type(6n+7) { background: #ffffff; }   /* white */
+  .dp main > section.cta-sec { background: #11302a; background: color-mix(in srgb, var(--accent) 14%, #0e2a22); color: #fff; }
+  .dp .cta-sec h2 { font-size: clamp(28px, 5vw, 40px); margin: 0 0 10px; }
+  .dp .cta-sec p { margin: 0 auto 18px; }
 </style>
 </head>
 <body class="dp">
@@ -425,7 +457,7 @@
       <div class="hero">
         <div>
           <div id="me"></div>
-          <p class="eyebrow">For lawn, snow, concrete, roofing, siding &amp; every home-service trade</p>
+          <p class="eyebrow">For lawn, irrigation, snow, concrete, roofing, siding &amp; every home-service trade</p>
           <h1>Stop driving out to quote. <span class="soft-t">Every home in your ZIP is already measured.</span></h1>
           <p class="lead">Lawn, driveway, sidewalk, roof and walls for every house, with the owner's name and your price on each one. Mail them, call them, quote them before you ever leave the shop. Check your ZIP and get 25 homes free:</p>
           <div class="soft" id="zipbox">
@@ -599,7 +631,7 @@
   </section>
 
   <!-- ============================================================ who -->
-  <section class="sec" style="padding-top:24px">
+  <section class="sec">
     <div class="wrap">
       <div class="sec-head split">
         <div>
@@ -609,26 +641,46 @@
         <p>Pick the ZIPs you want to work. Every home comes with the measurements your trade prices from.</p>
       </div>
       <div class="tiles">
-        <div class="soft feature">
-          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20v-8"/><path d="M12 12c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 14c0-3-2.5-5-6-5 0 3 2.5 5 6 5z"/><path d="M5 20h14"/></svg></span><span class="idx">01 / 04</span></div>
+        <a class="soft feature pick" href="#zipbox" data-trade="lawn">
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20v-8"/><path d="M12 12c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 14c0-3-2.5-5-6-5 0 3 2.5 5 6 5z"/><path d="M5 20h14"/></svg></span><span class="idx">01 / 06</span></div>
           <h3>Lawn care &amp; fertilizer</h3>
           <p>Grass-only square footage plus the parkway strip owners mow. Your rate &times; lawn size = a price for every home on the list.</p>
-        </div>
-        <div class="soft feature">
-          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M4.9 6l14.2 12M4.9 18L19.1 6"/><path d="M9 3.5l3 2 3-2M9 20.5l3-2 3 2"/></svg></span><span class="idx">02 / 04</span></div>
+          <b class="go">Get this list for my ZIP →</b>
+        </a>
+        <a class="soft feature pick" href="#zipbox" data-trade="irrigation">
+          <div class="top"><span class="ico" style="background:#dbeafe;color:#1d4ed8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20v-8"/><path d="M12 12c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 14c0-3-2.5-5-6-5 0 3 2.5 5 6 5z"/><path d="M5 20h14"/></svg></span><span class="idx">02 / 06</span></div>
+          <h3>Sprinklers &amp; irrigation</h3>
+          <p>Grass-only lawn plus parkway for every home: size new systems, quote installs and price spring start-ups and fall blowouts before you visit.</p>
+          <b class="go">Get this list for my ZIP →</b>
+        </a>
+        <a class="soft feature pick" href="#zipbox" data-trade="snow">
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M4.9 6l14.2 12M4.9 18L19.1 6"/><path d="M9 3.5l3 2 3-2M9 20.5l3-2 3 2"/></svg></span><span class="idx">03 / 06</span></div>
           <h3>Snow removal</h3>
           <p>Driveway and public sidewalk square footage, so you can price routes and seasonal contracts before the first snowfall.</p>
-        </div>
-        <div class="soft feature">
-          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M9 4v8M15 12v8"/></svg></span><span class="idx">03 / 04</span></div>
+          <b class="go">Get this list for my ZIP →</b>
+        </a>
+        <a class="soft feature pick" href="#zipbox" data-trade="concrete">
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M9 4v8M15 12v8"/></svg></span><span class="idx">04 / 06</span></div>
           <h3>Concrete &amp; sealing</h3>
           <p>Driveway, patio and walk areas show which streets have the big driveways worth a replacement or sealing offer.</p>
-        </div>
-        <div class="soft feature">
-          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><rect x="8" y="12" width="3" height="3"/><rect x="13" y="12" width="3" height="3"/><path d="M8 17h8"/></svg></span><span class="idx">04 / 04</span></div>
+          <b class="go">Get this list for my ZIP →</b>
+        </a>
+        <a class="soft feature pick" href="#zipbox" data-trade="siding">
+          <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><rect x="8" y="12" width="3" height="3"/><rect x="13" y="12" width="3" height="3"/><path d="M8 17h8"/></svg></span><span class="idx">05 / 06</span></div>
           <h3>Siding &amp; windows</h3>
           <p>Wall area of every house, gables included, plus an estimated window and door count. Quote siding, painting and window washing from your desk.</p>
-        </div>
+          <b class="go">Get this list for my ZIP →</b>
+        </a>
+        <a class="soft feature pick" href="#zipbox" data-trade="pressure">
+          <div class="top"><span class="ico" style="background:#e0f2fe;color:#0369a1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M9 4v8M15 12v8"/></svg></span><span class="idx">06 / 06</span></div>
+          <h3>Pressure washing</h3>
+          <p>Driveway, patio and sidewalk flatwork plus house-wall area for every home: price house washes and driveway cleaning before you pull up.</p>
+          <b class="go">Get this list for my ZIP →</b>
+        </a>
+      </div>
+      <div class="soft svcs">
+        <b>Prices it works out for every home, from your own rates:</b>
+        <div class="svc-chips" id="svcChips"></div>
       </div>
     </div>
   </section>
@@ -868,6 +920,26 @@
     $("mvCall").innerHTML = `One 3-measurement sheet for a ${n.toLocaleString()}-home ZIP saves <b>${usd(saved)}</b>. That's ${months >= 1 ? `<b>${months.toFixed(1)} months</b> of membership` : `<b>${Math.round(months * 100)}%</b> of a month's membership`}, paid for by one order${months >= 1 ? "" : ", before you count unlimited reports"}.`;
     $("mvNote").textContent = `Prices shown are the base rate per home. Homes in higher assessed-value bands cost a little more, and orders have a ${usd(minC)} minimum. Your exact price shows the moment you check your ZIP.`;
   }
+  try {  // every service the site prices (Settings decides which are on)
+    const cfg = await api("/api/config");
+    $("svcChips").innerHTML = Object.values(cfg.services || {}).map((v) =>
+      `<span>${esc(v.label)}<small>${esc(v.unit || "")}</small></span>`).join("");
+  } catch (e) { const b = $("svcChips"); if (b) b.closest(".svcs").remove(); }
+  // service tiles: one tap picks that trade's measurements and goes to the ZIP box
+  function pickTrade(k, tries = 0) {
+    const chip = document.querySelector(`#tradeChips button[data-k="${k}"]`);
+    if (!chip) { if (tries < 20) setTimeout(() => pickTrade(k, tries + 1), 250); return; }
+    chip.click();
+  }
+  document.querySelectorAll(".feature.pick").forEach((a) => a.addEventListener("click", (e) => {
+    e.preventDefault();
+    pickTrade(a.dataset.trade);
+    try { localStorage.setItem("pickedTrade", a.dataset.trade); } catch (e2) {}
+    $("zipbox").scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(() => { const z = $("zip"); if (z) z.focus({ preventScroll: true }); }, 450);
+    const msg = $("quoteMsg");
+    if (msg) msg.innerHTML = `<b>${esc(a.querySelector("h3").textContent)}</b> measurements picked. Type your ZIP to see the homes and the exact price.`;
+  }));
   $("mvN").addEventListener("input", draw);
   draw();
 })();

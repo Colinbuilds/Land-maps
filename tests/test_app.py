@@ -489,3 +489,36 @@ def test_home_is_the_buy_page(client=None):
     assert r.status_code == 200 and 'id="zipbox"' in r.text and 'id="member-value"' in r.text
     r = c.get("/data?zip=68022", follow_redirects=False)
     assert r.status_code == 301 and r.headers["location"] == "/?zip=68022#zipbox"
+
+
+def test_learning_from_fixes(monkeypatch, tmp_path):
+    import numpy as np
+    from app import learning as L
+    monkeypatch.setattr(L, "SAMPLES_DIR", tmp_path)
+    monkeypatch.setattr(L, "MIN_FIXES", 1)
+    L._models.clear()
+    # a photo: left half green grass, right half grey paving
+    rgb = np.zeros((40, 40, 3), np.float32)
+    rgb[:, :20] = [0.35, 0.55, 0.25]
+    rgb[:, 20:] = [0.6, 0.6, 0.6]
+    F = L.features(rgb)
+    L.add_pixels("test_cty", "src", F[:, 2:18].reshape(-1, 6), F[:, 22:38].reshape(-1, 6), "lawn_exclude", "x:1")
+    wrong = np.zeros((40, 40), bool)
+    wrong[:, :20] = True  # the colour rules called the grass paving
+    area = np.ones((40, 40), bool)
+    fixed = L.adjust_hard("test_cty", "src", rgb, wrong, area)
+    assert fixed[:, 3:17].sum() == 0 and fixed[:, 23:37].all()  # learned: left is grass, right is paving
+    assert L.adjust_hard("other_cty", "src", rgb, wrong, area) is wrong  # no fixes there: untouched
+    # roof edits: a steady 3 ft east nudge becomes the county's default
+    with L._db() as con:
+        con.execute("DELETE FROM roof_edits WHERE county='roof_cty'")
+        con.execute("DELETE FROM fixes WHERE county='test_cty'")
+    a = {"type": "Polygon", "coordinates": [[[-96, 41], [-96, 41.0001], [-95.9999, 41.0001], [-95.9999, 41], [-96, 41]]]}
+    e = {"type": "Polygon", "coordinates": [[[x + 3 / (364567 * np.cos(np.radians(41))), y] for x, y in a["coordinates"][0]]]}
+    for i in range(5):
+        L.record_roof_edit("roof_cty", f"p{i}", a, e)
+    dx, dy = L.roof_shift_ft("roof_cty")
+    assert 2.5 < dx < 3.5 and abs(dy) < 0.5
+    # once outlines start pre-shifted, a roofer who leaves them alone keeps the shift
+    L.record_roof_edit("roof_cty", "p6", e, e)
+    assert 2.5 < L.roof_shift_ft("roof_cty")[0] < 3.5

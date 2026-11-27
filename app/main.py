@@ -444,6 +444,9 @@ def put_corrections(pin: str, body: Corrections):
     cid, bare = counties.split_pid(pin)
     out = corrections.put(counties.make_pid(cid, bare), body.exclude, body.include)
     _measure_cached.cache_clear()
+    if body.exclude or body.include:  # every fix teaches the measuring for this county
+        from . import learning
+        learning.learn_async(counties.make_pid(cid, bare), body.exclude, body.include)
     return out
 
 
@@ -2042,6 +2045,14 @@ def page_command():
 _BOOT = time.time()
 
 
+def _learning_summary():
+    try:
+        from . import learning
+        return learning.summary()
+    except Exception:
+        return {"lawn": [], "roof": [], "fixes": 0, "roof_edits": 0}
+
+
 def gis_cache_info():
     from . import gis as _g
     return _g.cache_info()
@@ -2091,6 +2102,7 @@ def admin_status():
                    "paid_today": sum(1 for o in orders if o["status"] in ("processing", "ready") and (o.get("paid") or 0) > day),
                    "cents_today": sum(o["amount_cents"] or 0 for o in orders if o["status"] in ("processing", "ready") and (o.get("paid") or 0) > day)},
         "downloads": datastore.recent_downloads(),
+        "learning": _learning_summary(),
         "coverage": {**_cov.summary(), **_cov.status()},
         "companies": {"total": len(comps), "members": sum(1 for c in comps if c.get("member")),
                       "active_today": sum(1 for c in comps if (c.get("last_seen") or 0) > day),
