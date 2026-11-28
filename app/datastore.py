@@ -685,7 +685,7 @@ def demo_allowed(email: str, ip: str | None) -> str | None:
     """The home-page demo: one report per email (and a few per connection a day)."""
     with _db() as con:
         if con.execute("SELECT 1 FROM demo_uses WHERE lower(email)=lower(?)", (email,)).fetchone():
-            return "This email has already used its free test. Join to run reports on any address, or preview a ZIP free below."
+            return "This email has already used its free test. Join to run reports on any address, or buy a ZIP list below."
         if ip and con.execute("SELECT COUNT(*) FROM demo_uses WHERE ip=? AND ts>?", (ip, time.time() - 86400)).fetchone()[0] >= DEMOS_PER_IP_PER_DAY:
             return "Too many free tests from this connection today. Try again tomorrow."
     return None

@@ -1309,10 +1309,16 @@ def _preview_error(e):
     return JSONResponse({"detail": str(e), "problems": e.problems}, status_code=422)
 
 
+# The free 15-home preview is retired (one free address test is enough).
+FREE_PREVIEW = os.environ.get("FREE_PREVIEW", "0") == "1"
+
+
 @app.post("/api/data/sample/address")
 def data_sample_address(body: PreviewAddressReq):
     """Check one address for the free preview as it's picked (inside the
     selected area, a real lot, measurable). The preview checks them all again."""
+    if not FREE_PREVIEW:
+        raise HTTPException(410, "The free preview has ended. Measure one address free, or see the sample data.")
     from . import selection as sel
     try:
         spec = _sample_spec(body.zip, _classes(body.classes), body.spec)
@@ -1333,6 +1339,8 @@ def data_sample_address(body: PreviewAddressReq):
 def data_sample(body: SampleReq, request: Request):
     """Free preview: up to 5 of the contractor's addresses + up to 10 homes
     from the actual filtered purchase results, with an illustrative quote."""
+    if not FREE_PREVIEW:
+        raise HTTPException(410, "The free preview has ended. Measure one address free, or see the sample data.")
     from . import selection as sel
     try:
         spec = _sample_spec(body.zip, _classes(body.classes), body.spec)
@@ -1408,6 +1416,8 @@ def data_preview_postcard(body: PreviewPostcardReq):
     """One finished postcard for a home in the buyer's free preview, priced at
     the rate they entered. (Postcards for a whole list stay a paid Premier
     feature.)"""
+    if not FREE_PREVIEW:
+        raise HTTPException(410, "The free preview has ended. Measure one address free, or see the sample data.")
     from . import postcard, selection as sel
     pin = str(body.row.get("pin") or "")
     if pin not in datastore.preview_pins(body.token):
