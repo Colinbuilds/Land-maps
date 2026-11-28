@@ -100,6 +100,16 @@ def page_home():
     return FileResponse(STATIC / "data.html")
 
 
+@app.get("/how-it-works")
+@app.get("/sample")
+@app.get("/pricing")
+@app.get("/faq")
+def page_home_sections():
+    """The home page's deeper sections, each on its own page (same file; the
+    page shows only its own sections)."""
+    return FileResponse(STATIC / "data.html")
+
+
 @app.get("/estimate")
 def page_customer():
     """The homeowner lawn-estimate page (embeddable; not in the menus)."""

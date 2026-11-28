@@ -678,7 +678,7 @@ def take_preview(email: str, ip: str | None, spec: dict, addresses: list[str], r
             "match_count": b.get("count")}
 
 
-DEMOS_PER_IP_PER_DAY = 3
+DEMOS_PER_IP_PER_DAY = int(os.environ.get("DEMOS_PER_IP_PER_DAY", "3"))  # free tests per connection a day
 
 
 def demo_allowed(email: str, ip: str | None) -> str | None:
