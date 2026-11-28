@@ -109,6 +109,10 @@ def test_exclusive_zip_locks_and_pricing(monkeypatch):
     assert taken == ["lawn"] and rows[0]["lawn_sqft"] == "" and rows[0]["driveway_sqft"] == 600
     ds.release_lock(z, "lawn")
     assert ds.sale_blocked(z, ["lawn"], "standard", b) is None
+    # exclusives are no longer sold (locks already bought stay in force until they end)
+    import pytest
+    with pytest.raises(PermissionError):
+        ds.create_order(a, z, ["R"], ["lawn"], product="exclusive", account_email=a)
 
 
 def test_crm_flow_and_command_center():
@@ -847,3 +851,47 @@ def test_single_signin_admin_key_and_company(monkeypatch):
     r = c.post("/api/signin", json={"email": em, "password": "goodpass1"})
     assert r.status_code == 200 and r.json()["next"] in ("/reports", "/crm") and not r.json().get("admin")
     assert c.post("/api/signin", json={"email": em, "password": "nope"}).status_code == 401
+
+
+def test_coupon_admin_key_is_100_percent_off(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+    ds, sel, data = _two_zips(monkeypatch)
+    monkeypatch.setattr(ds, "add_owners", lambda rows, z, c: rows)
+    monkeypatch.setattr(ds, "_email_new_order", lambda o: None)
+    monkeypatch.setattr(ds, "_email_ready", lambda oid: None)
+    import app.mailer
+    monkeypatch.setattr(app.mailer, "notify_owner", lambda *a, **k: None)
+    monkeypatch.setattr(main, "ADMIN_TOKEN", "owner-key-xyz")
+    c = TestClient(main.app)
+    spec = {"area": {"zip": "11111"}, "types": ["driveway"]}
+    r = c.post("/api/data/select/order", json={"email": "o@x.co", "spec": spec, "coupon": "WRONG"})
+    assert r.status_code == 400 and "isn't valid" in r.json()["detail"]
+    r = c.post("/api/data/select/order", json={"email": "o@x.co", "spec": spec, "coupon": "owner-key-xyz"})
+    j = r.json()
+    assert r.status_code == 200 and j["amount_cents"] == 0 and "checkout_url" not in j
+    o = ds.get_order(j["id"])
+    assert o["status"] == "ready" and o["amount_cents"] == 0 and "100% off" in (o["note"] or "")
+    assert c.get(f"/api/data/order/{j['id']}/csv?t={j['token']}").status_code == 200
+
+
+def test_home_demo_one_test_per_email(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main, datastore as ds
+    monkeypatch.setattr(main, "locate", lambda q, magicKey=None: {"suggested_pin": "test_xx:1"})
+    monkeypatch.setattr(main, "_demo_report", lambda pin: {"id": "r1", "token": "t", "address": "1 Test St", "summaries": []})
+    monkeypatch.setattr(ds, "DEMOS_PER_IP_PER_DAY", 10 ** 6)
+    import app.mailer
+    monkeypatch.setattr(app.mailer, "notify_owner", lambda *a, **k: None)
+    c = TestClient(main.app)
+    em = f"demo{__import__('time').time_ns()}@x.co"
+    assert c.post("/api/demo/try", json={"email": em, "address": "1 Test St"}).status_code == 200
+    r = c.post("/api/demo/try", json={"email": em.upper(), "address": "2 Test St"})
+    assert r.status_code == 429 and "already used" in r.json()["detail"]
+    assert c.post("/api/demo/try", json={"email": "not-an-email", "address": "1 Test St"}).status_code == 422
+    # a report that fails doesn't use up the test
+    monkeypatch.setattr(main, "locate", lambda q, magicKey=None: {"suggested_pin": None})
+    em2 = f"demo2{__import__('time').time_ns()}@x.co"
+    assert c.post("/api/demo/try", json={"email": em2, "address": "nowhere"}).status_code == 404
+    monkeypatch.setattr(main, "locate", lambda q, magicKey=None: {"suggested_pin": "test_xx:1"})
+    assert c.post("/api/demo/try", json={"email": em2, "address": "1 Test St"}).status_code == 200

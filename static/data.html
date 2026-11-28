@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Home Service Info</title>
-<meta name="description" content="Stop driving out to quote. Every home in your ZIP already measured (lawn, driveway, roof, walls) with the owner's name and your price. Preview 15 homes free.">
+<meta name="description" content="Pick the area. Pick the job size. Buy only the homes that fit. Every home measured (lawn, driveway, sidewalk, walls) with the owner's name. Preview up to 15 homes free.">
 <meta name="theme-color" content="#f6f7f2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -216,6 +216,70 @@
   .dp #sampleTable th, .dp #sampleTable td { font-size: 13px; padding: 10px 10px; border-bottom-color: var(--hair); }
   .dp #sampleTable tbody tr:nth-child(odd) td { background: #fafbf8; }
   .dp #sampleTable tr.grp td { background: #e7f4eb !important; color: #14532d; font-weight: 800; font-size: 14px; padding-top: 14px; }
+  .dp .areatabs { display: flex; gap: 6px; background: #e9efeb; border-radius: 99px; padding: 4px; margin-bottom: 12px; }
+  .dp .areatabs button { flex: 1; background: transparent; color: var(--ink); min-height: 40px; padding: 8px 12px; box-shadow: none; font-size: 15px; }
+  .dp .areatabs button.on { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .dp .drawbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; background: #fff7e6;
+    border: 1.5px solid #f59e0b; border-radius: 14px; padding: 10px 12px; }
+  .dp .drawbar button { min-height: 38px; padding: 6px 14px; font-size: 14px; }
+  .dp #zmap.drawing { cursor: crosshair; }
+  .dp #zmap.drawing .leaflet-interactive { cursor: crosshair; }
+  .dp .drawbar .db-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .dp .jobsize { background: #f3f8f4; border-radius: 14px; padding: 12px; display: grid; gap: 8px; }
+  .dp .js-row { display: grid; grid-template-columns: minmax(0, 1.3fr) 1fr 1fr; gap: 8px; }
+  @media (max-width: 520px) { .dp .js-row { grid-template-columns: 1fr 1fr; } .dp .js-row label:first-child { grid-column: 1 / -1; } }
+  .dp .js-row label, .dp .q-row label { display: grid; gap: 3px; }
+  .dp .js-row input, .dp .js-row select, .dp .q-row input { min-height: 42px; font-size: 15px; }
+  .dp .js-presets button { font-size: 13px; }
+  .dp #fExplain b { color: #15803d; }
+  .dp .prodex { background: #f8faf9; border-radius: 12px; padding: 8px 12px; }
+  .dp .prodex summary { cursor: pointer; font-weight: 700; font-size: 14px; color: #15803d; }
+  .dp .prodex .ex-t { width: 100%; font-size: 12.5px; border-collapse: collapse; margin-top: 6px; }
+  .dp .prodex .ex-t th, .dp .prodex .ex-t td { padding: 5px 6px; border-bottom: 1px solid var(--hair); text-align: left; }
+  .dp .prodex .ex-t .num { text-align: right; }
+  .dp .ex-list { margin: 6px 0; padding-left: 18px; display: grid; gap: 4px; }
+  .dp .selsum { background: #f8faf9; border-radius: 12px; padding: 10px 12px; font-size: 14px; display: grid; gap: 4px; }
+  .dp .selsum:empty { display: none; }
+  .dp .selsum .ln { display: flex; justify-content: space-between; gap: 10px; }
+  .dp .selsum .ln span:last-child { font-variant-numeric: tabular-nums; text-align: right; }
+  .dp .selsum .tot { font-weight: 800; border-top: 1px solid var(--hair); padding-top: 4px; }
+  .dp .selsum .note { color: #92400e; font-size: 13px; }
+  .dp .qbox summary { cursor: pointer; font-weight: 700; font-size: 14px; color: #15803d; }
+  .dp .q-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .dp .tier { display: grid; grid-template-columns: 1fr 1fr 32px; gap: 6px; margin-top: 6px; align-items: end; }
+  .dp .tier input { min-height: 38px; }
+  .dp .tier button { min-height: 38px; padding: 0; background: #fee2e2; color: #991b1b; box-shadow: none; }
+  .dp .small-btn { min-height: 34px; padding: 4px 12px; font-size: 13px; margin-top: 6px; }
+  .dp .pv-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .dp .pc-out { margin-top: 14px; display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .dp .pc-out img { width: 100%; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.15); }
+  .dp .showcase { padding: 16px; }
+  .dp .showcase table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .dp .showcase th, .dp .showcase td { padding: 7px 8px; border-bottom: 1px solid var(--hair); text-align: left; white-space: nowrap; }
+  .dp .showcase td.num, .dp .showcase th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .dp .showcase tr.flag td { background: #fff7e6; }
+  .dp .pc-sample { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; align-items: center; }
+  @media (max-width: 760px) { .dp .pc-sample { grid-template-columns: 1fr; } }
+  .dp .pc-card { padding: 12px; display: grid; gap: 10px; }
+  .dp .pc-card img { width: 100%; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.14); }
+  .dp .pc-text h3 { margin: 0 0 6px; font-size: 20px; }
+  .dp .acc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .dp .acc { padding: 16px; } .dp .acc b { font-size: 16px; } .dp .acc p { margin: 6px 0 0; color: var(--muted); font-size: 14.5px; }
+  .dp .feature .ex-line { margin: 8px 0 0; color: #166534; font-weight: 600; }
+  .dp .coupon summary { cursor: pointer; color: #15803d; font-weight: 600; }
+  .dp .coupon input { margin-top: 6px; min-height: 42px; }
+  .dp .trybox { padding: 16px; }
+  .dp .try-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 10px; }
+  @media (max-width: 760px) { .dp .try-row { grid-template-columns: 1fr; } }
+  .dp .try-res { padding: 18px; display: grid; gap: 14px; margin-top: 14px; }
+  .dp .try-imgs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .dp .try-imgs img { width: 100%; border-radius: 10px; background: #e5e7eb; min-height: 120px; object-fit: cover; }
+  .dp .try-imgs img[src=""] { display: none; }
+  .dp .try-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+  .dp .try-grid .tc { background: #f8faf9; border-radius: 12px; padding: 10px 12px; font-size: 13.5px; }
+  .dp .try-grid .tc h4 { margin: 0 0 4px; font-size: 15px; }
+  .dp .try-grid .tc div { display: flex; justify-content: space-between; gap: 8px; }
+  .dp .try-acts { display: flex; gap: 8px; flex-wrap: wrap; }
   .dp .pv-list { display: grid; gap: 8px; }
   .dp .pv-row { display: grid; grid-template-columns: 26px minmax(0, 1fr) 26px; gap: 8px; align-items: center; }
   .dp .pv-row .n { width: 26px; height: 26px; border-radius: 50%; background: var(--acc-soft, #e7f4eb); color: #15803d; font-weight: 800; font-size: 13px; display: grid; place-items: center; }
@@ -468,9 +532,17 @@
         <div>
           <div id="me"></div>
           <p class="eyebrow">For lawn, irrigation, snow, concrete, roofing, siding &amp; every home-service trade</p>
-          <h1>Stop driving out to quote. <span class="soft-t">Every home in your ZIP is already measured.</span></h1>
-          <p class="lead">Lawn, driveway, sidewalk, roof and walls for every house, with the owner's name and your price on each one. Mail them, call them, quote them before you ever leave the shop. Check your ZIP, then preview 15 homes free, including 5 you already service:</p>
+          <h1>Pick the area. Pick the job size. <span class="soft-t">Buy only the homes that fit.</span></h1>
+          <p class="lead">Every home is already measured: lawn, driveway, sidewalk, patios, beds and walls, with the owner's name. Search a ZIP or draw the streets you work, set the job size (say, driveways 1,000 sq ft and up), and pay only for the homes that match.</p>
           <div class="soft" id="zipbox">
+            <div class="areatabs" role="tablist" aria-label="Where to buy">
+              <button type="button" class="on" data-area="zip" role="tab" aria-selected="true">Search a ZIP</button>
+              <button type="button" data-area="draw" role="tab" aria-selected="false">Draw an area</button>
+            </div>
+            <div class="drawintro hidden" id="drawIntro">
+              <p class="small" style="margin:0 0 10px">Draw around a neighborhood, a subdivision or a few streets. It can cross ZIP lines; every home is counted once.</p>
+              <button type="button" id="drawStart" class="arrow">Draw an area</button>
+            </div>
             <div class="zipform">
               <input type="text" id="zip" inputmode="numeric" maxlength="5" placeholder="ZIP code" aria-label="ZIP code" autocomplete="postal-code">
               <select id="cls" aria-label="Property type">
@@ -481,13 +553,13 @@
               </select>
               <button id="check" class="arrow">See my ZIP</button>
             </div>
-            <div id="quoteMsg" class="small muted">Shows the number of homes and the exact price. Then preview 15 homes free, no card needed.</div>
+            <div id="quoteMsg" class="small muted">Shows how many homes match and the exact price. Then preview up to 15 homes free, no card needed.</div>
           </div>
           <ul class="trust">
-            <li>Grass only: no driveways, beds, decks or sheds</li>
-            <li>Measured from aerial photos + LiDAR</li>
-            <li>15 homes free, 5 you choose</li>
-            <li>No subscription</li>
+            <li>A whole ZIP or just a few streets</li>
+            <li>Only the job sizes you want</li>
+            <li>Preview up to 15 homes free</li>
+            <li>Pay per home, no subscription needed</li>
           </ul>
         </div>
 
@@ -511,6 +583,11 @@
       <!-- ============================================================ results -->
       <div class="layout hidden" id="result">
         <div class="stack">
+          <div class="drawbar hidden" id="drawBar">
+            <span class="small" id="drawHint">Click the map to add corners. Click the first corner (or Finish) to close the shape.</span>
+            <span class="db-btns"><button type="button" class="secondary" id="drawUndo">Undo point</button><button type="button" id="drawFinish">Finish</button>
+              <button type="button" class="secondary" id="drawRedo">Redraw</button><button type="button" class="secondary" id="drawClear">Clear</button></span>
+          </div>
           <div id="zmap"></div>
           <div class="cols" id="cols"></div>
         </div>
@@ -521,18 +598,40 @@
             <div class="muted small" id="qBy"></div>
             <div id="qReady"></div>
           </div>
-          <div class="card stack" id="freeCard">
-            <h2>Preview 15 homes free</h2>
-            <p class="small muted" style="margin:6px 0 0">Choose 5 addresses you already service to check our measurements against properties you know. We'll add 10 more homes from your ZIP. No card needed.</p>
-            <div id="pvShort" class="small hidden"></div>
+          <div class="card stack" id="freeCard" style="order:3">
+            <h2>Preview up to 15 homes free</h2>
+            <p class="small muted" style="margin:6px 0 0">Choose up to 5 addresses you already service in this area, any size, to check our measurements against properties you know. We'll add up to 10 homes from the homes that match your selection. No card needed.</p>
             <div class="pv-list" id="pvList"></div>
             <datalist id="pvSuggest"></datalist>
-            <div class="formrow"><input type="email" id="sEmail" placeholder="you@company.com" autocomplete="email" aria-label="Email for the free preview"><button id="sBtn">Preview 15 homes free</button></div>
+            <details class="qbox" id="qBox">
+              <summary>Add your price to each home (optional)</summary>
+              <div class="q-row">
+                <label class="small">$ per 1,000 sq ft<input id="qRateIn" type="number" min="0" step="0.25" inputmode="decimal" placeholder="e.g. 5.50"></label>
+                <label class="small">Minimum charge $<input id="qMinIn" type="number" min="0" step="1" inputmode="decimal" placeholder="e.g. 40"></label>
+              </div>
+              <div id="qTiers"></div>
+              <button type="button" class="secondary small-btn" id="qAddTier">+ Size tier</button>
+              <p class="small muted" id="qRule" style="margin:6px 0 0">Your price = size ÷ 1,000 × your rate, never less than your minimum. Size is the job-size measurement (or the first measurement you picked). With tiers, a home at or above a tier's size uses that tier's rate for its whole size.</p>
+            </details>
+            <div class="formrow"><input type="email" id="sEmail" placeholder="you@company.com" autocomplete="email" aria-label="Email for the free preview"><button id="sBtn">Preview up to 15 homes free</button></div>
             <div id="sMsg" class="small"></div>
             <p class="small muted" style="margin:0">One free preview per email.</p>
           </div>
-          <div class="card stack buy-card">
+          <div class="card stack buy-card" style="order:2">
             <h2>Buy the list</h2>
+            <div class="jobsize">
+              <div class="vp-head"><b>Job size</b> <span class="small muted">(optional: only homes this size)</span></div>
+              <div class="js-row">
+                <label class="small">Measurement<select id="fMeasure" aria-label="Measurement that sets job size"><option value="">Any size: every home</option></select></label>
+                <label class="small">Min sq ft<input id="fMin" type="number" min="0" step="50" inputmode="numeric" placeholder="No minimum"></label>
+                <label class="small">Max sq ft<input id="fMax" type="number" min="0" step="50" inputmode="numeric" placeholder="No maximum"></label>
+              </div>
+              <div class="chips js-presets">
+                <button type="button" data-m="driveway" data-min="1000" data-max="">Driveway sealing: 1,000 sq ft and up</button>
+                <button type="button" data-m="lawn" data-min="4000" data-max="10000">Fertilization: lawn 4,000–10,000 sq ft</button>
+              </div>
+              <p class="small" id="fExplain" style="margin:6px 0 0"></p>
+            </div>
             <div class="valuepick">
               <div class="vp-head"><b>Which homes?</b> <span class="small muted" id="vSel"></span></div>
               <div class="vp-row">
@@ -549,13 +648,26 @@
             <div class="prodswitch" role="radiogroup" aria-label="List type">
               <button type="button" class="on" data-prod="standard" role="radio" aria-checked="true"><b>Standard sheet</b><span>Spreadsheet, pick your measurements</span></button>
               <button type="button" data-prod="premier" role="radio" aria-checked="false"><b>Premier list</b><span>Full report PDF for every home</span></button>
-              <button type="button" data-prod="exclusive" role="radio" aria-checked="false" class="excl"><b>Exclusive ZIP</b><span>Own the whole ZIP: no other company can buy your measurements here</span></button>
             </div>
-            <div class="exclbox hidden" id="exclIntro">
-              <b>Lock this ZIP for your company.</b>
-              <p class="small" style="margin:6px 0 0">Every home in the ZIP, <span id="exclRate">$1.00 a home for your first measurement and 50¢ for each extra one</span>. For <span id="exclMonths">12</span> months we won't sell the measurements you lock in this ZIP to anyone else, as a sheet or a Premier list. Measurements you don't lock stay on sale to others. Whole ZIP only (no value filter). Add more measurements later at 50¢ a home each.</p>
-              <p class="small" id="exclLogin" style="margin:6px 0 0"></p>
-            </div>
+            <details class="prodex" id="exStd" open>
+              <summary>What's in a Standard sheet? See an example</summary>
+              <p class="small">One spreadsheet row per home: address, owner name and mailing address, lot size, year built, house size, the measurements you pick, a quality flag and map coordinates. Opens in Excel or Google Sheets. If your account has your rates set, each row also gets your price for that home.</p>
+              <div class="tablewrap"><table class="ex-t"><thead><tr><th>Address</th><th>Owner</th><th class="num">Lawn</th><th class="num">Driveway</th><th class="num">Sidewalk</th><th>Quality</th></tr></thead>
+                <tbody><tr><td>1204 Example Ave</td><td>Jordan Sample</td><td class="num">7,480</td><td class="num">1,020</td><td class="num">240</td><td>ok</td></tr>
+                <tr><td>1210 Example Ave</td><td>Casey Demo</td><td class="num">5,960</td><td class="num">860</td><td class="num">240</td><td>ok</td></tr>
+                <tr><td>87 Sample Cir</td><td>Riley Placeholder</td><td class="num">11,240</td><td class="num">1,540</td><td class="num">0</td><td>review</td></tr></tbody></table></div>
+              <p class="small muted" style="margin:6px 0 0">Made-up names and addresses; real-looking numbers. "review" marks a home worth a second look (heavy tree cover, for example).</p>
+            </details>
+            <details class="prodex hidden" id="exPrem">
+              <summary>What's in a Premier list? See an example</summary>
+              <p class="small"><b>A complete property report for every home</b>, as a PDF, plus the same spreadsheet. It's the report members pull one address at a time, done for the whole list:</p>
+              <ul class="small ex-list">
+                <li><b>Roof</b>: area, squares, pitch, every line length (ridges, hips, valleys, rakes, eaves) and a facet diagram.</li>
+                <li><b>Walls</b>: wall area by side, elevations, gutters, fascia, soffit and an estimated window count.</li>
+                <li><b>Lot &amp; yard</b>: lawn, parkway, driveway, sidewalk, patios and beds on the aerial photo.</li>
+              </ul>
+              <p class="small" style="margin:6px 0 0">Delivered as one folder: <code>1204 Example Ave.pdf</code>, <code>1210 Example Ave.pdf</code>… with an index spreadsheet. Members can turn the folder into print-ready postcards. Best for roofing, gutters, siding and window companies; lawn and snow companies usually need only the Standard sheet.</p>
+            </details>
             <p class="small muted" id="stdIntro" style="margin:0">Pick what you want measured. Address, lot size and a quality flag come with every row.</p>
             <div class="typepick" id="typePick" role="group" aria-label="Measurements to include"></div>
             <p class="small muted hidden" id="premIntro" style="margin:10px 0">Every home gets the full property report as a PDF, the same one members pull one at a time: roof lengths, pitch and facets, walls and elevations, gutters, lot and yard. Delivered as one folder, named by address, with an index spreadsheet.</p>
@@ -566,8 +678,12 @@
               <div class="zadd"><input id="addZip" placeholder="Add another ZIP" inputmode="numeric" maxlength="5" aria-label="Add another ZIP"><button type="button" class="secondary" id="addZipBtn">+ Add ZIP</button></div>
               <div id="cartMsg" class="small"></div>
             </div>
+            <div class="selsum" id="selSum"></div>
             <div><span class="stat" id="qPrice"></span> <span class="muted small" id="qRate"></span></div>
             <div class="small" id="qPayback"></div>
+            <details class="coupon"><summary class="small">Have a coupon code?</summary>
+              <input type="text" id="bCoupon" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Coupon code" aria-label="Coupon code">
+            </details>
             <div class="formrow"><input type="email" id="bEmail" placeholder="you@company.com" autocomplete="email" aria-label="Email for purchase"><button id="bBtn" class="arrow">Buy sheet</button></div>
             <div id="bMsg" class="small"></div>
             <p class="small muted" style="margin:6px 0 0">Data is for your own marketing; see the <a href="/terms">Terms</a> and <a href="/refunds">Refund Policy</a>.</p>
@@ -577,10 +693,13 @@
 
       <div class="soft hidden" id="sampleCard">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-          <h2 style="margin:0;font-size:22px" id="pvTitle">Your free preview: 15 homes</h2>
-          <a class="btn secondary" id="sDl" download="preview.csv" href="#">Download CSV</a>
+          <h2 style="margin:0;font-size:22px" id="pvTitle">Your free preview</h2>
+          <span class="pv-acts"><a class="btn secondary" id="sDl" download="preview.csv" href="#">Download spreadsheet</a>
+          <button type="button" class="secondary" id="pcBtn">Make a sample postcard</button></span>
         </div>
+        <p class="small muted" id="pvNotes" style="margin:8px 0 0"></p>
         <div class="tablewrap"><table id="sampleTable"></table></div>
+        <div id="pcOut" class="pc-out hidden"></div>
       </div>
     </div>
   </section>
@@ -637,10 +756,76 @@
       </div>
       <div class="tiles4">
         <a class="soft tile4" href="/reports"><span class="ic">📐</span><h3>Property reports</h3><p>Type an address, get the measurements your trade prices from, as a PDF and a share link. Unlimited for members.</p><b>Order a report →</b></a>
-        <a class="soft tile4" href="#zipbox"><span class="ic">🗂️</span><h3>Whole ZIP codes</h3><p>Every home with its measurements, owner and your price. Lock a ZIP so no other company can buy it.</p><b>Pick a ZIP →</b></a>
+        <a class="soft tile4" href="#zipbox"><span class="ic">🗂️</span><h3>A ZIP or a few streets</h3><p>Search a ZIP or draw the area you work, set the job size, and buy only the homes that fit.</p><b>Pick a ZIP →</b></a>
         <a class="soft tile4" href="/join"><span class="ic">✉️</span><h3>Mail-ready postcards</h3><p>Their home from above, their measurements and your price, as a print-ready file for every house on your list.</p><b>With membership →</b></a>
         <a class="soft tile4" href="/crm"><span class="ic">📋</span><h3>CRM</h3><p>Estimates in one tap, weekly schedules, job photos and invoices from your phone. Free with membership.</p><b>Open the CRM →</b></a>
       </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ try it -->
+  <section class="sec" id="try">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Try it free</p>
+        <h2>Measure any address. <span class="soft-t">One free test per email.</span></h2>
+        <p>Type a home you know. In about a minute you get the full property report: roof, walls, lawn, driveway and beds, with the numbers each trade quotes from.</p>
+      </div>
+      <div class="soft trybox">
+        <div class="try-row">
+          <input type="email" id="tEmail" placeholder="you@company.com" autocomplete="email" aria-label="Your email">
+          <input type="text" id="tAddr" list="tSuggest" autocomplete="off" placeholder="Address to measure" aria-label="Address to measure">
+          <button id="tGo" class="arrow">Measure it free</button>
+        </div>
+        <datalist id="tSuggest"></datalist>
+        <div id="tMsg" class="small"></div>
+      </div>
+      <div class="tryout hidden" id="tOut">
+        <div class="soft try-res">
+          <div><h3 id="tTitle" style="margin:0"></h3><div class="small muted" id="tSub"></div></div>
+          <div class="try-imgs"><img id="tAerial" alt="The roof from above"><img id="tYard" alt="The yard, shaded by surface"></div>
+          <div class="try-grid" id="tGrid"></div>
+          <div class="try-acts"><a class="btn" id="tReport" target="_blank" rel="noopener">Open the full report</a><a class="btn secondary" id="tPdf" target="_blank" rel="noopener">PDF</a>
+            <a class="btn secondary" href="/join">Unlimited reports with membership</a></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ see what you get -->
+  <section class="sec" id="see">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">See what you get</p>
+        <h2>Real rows from the spreadsheet. <span class="soft-t">A finished postcard.</span></h2>
+        <p>These are real measured homes in the same columns you buy, with the address, owner, ZIP, map location and property id taken out. Assessed value is shown as a range and year built as a decade.</p>
+      </div>
+      <div class="soft showcase" id="showcase"><p class="small muted">Loading the sample…</p></div>
+      <div class="pc-sample">
+        <div class="soft pc-card" id="pcSample"><p class="small muted">Loading the sample postcard…</p></div>
+        <div class="pc-text">
+          <h3>A postcard that quotes the price</h3>
+          <p>The home from above, its lawn measurement and the price at your rate, ready for the printer (9 × 6 in, 1/8 in bleed). This one is a real home's measurements with a made-up owner, address and company.</p>
+          <p class="small muted">Run a free preview to make one for a home in your area at your own rate. Print-ready postcards for every home on a list come with a Premier list.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ accuracy -->
+  <section class="sec" id="accuracy">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">How we measure</p>
+        <h2>What the numbers come from, <span class="soft-t">and when to double-check.</span></h2>
+      </div>
+      <div class="acc-grid">
+        <div class="soft acc"><b>Aerial photos</b><p>Lawn, driveway, sidewalk and patios are traced on the county's recent aerial photos (or USDA aerial photos where the county has none). Each area shows its photo source and year when you pick it.</p></div>
+        <div class="soft acc"><b>LiDAR height data</b><p>Laser height scans take out anything raised (decks, sheds, play sets, shrubs) so the lawn is grass only, and measure house walls.</p></div>
+        <div class="soft acc"><b>County records</b><p>Lot lines, address, owner, year built and assessed value come from the county's public parcel data.</p></div>
+        <div class="soft acc" id="accFlag"><b>Flagged for review</b><p>Homes where the photo is hard to read, like heavy tree cover or most of the yard looking paved, are marked "review" in the spreadsheet so you know which to check.</p></div>
+      </div>
+      <p class="small muted" style="margin:12px 0 0">We haven't published accuracy figures yet: we'll only show error rates once they're checked against on-site measurements. Until then, the free preview is the best check. Include up to 5 homes you've already measured yourself.</p>
     </div>
   </section>
 
@@ -655,10 +840,11 @@
         <p>Pick the ZIPs you want to work. Every home comes with the measurements your trade prices from.</p>
       </div>
       <div class="tiles">
-        <a class="soft feature pick" href="#zipbox" data-trade="lawn">
+        <a class="soft feature pick" href="#zipbox" data-trade="lawn" data-jm="lawn" data-jmin="4000" data-jmax="10000">
           <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20v-8"/><path d="M12 12c0-4 3-6 7-6 0 4-3 6-7 6z"/><path d="M12 14c0-3-2.5-5-6-5 0 3 2.5 5 6 5z"/><path d="M5 20h14"/></svg></span><span class="idx">01 / 06</span></div>
           <h3>Lawn care &amp; fertilizer</h3>
           <p>Grass-only square footage plus the parkway strip owners mow. Your rate &times; lawn size = a price for every home on the list.</p>
+          <p class="small ex-line">Example: fertilization, lawn 4,000–10,000 sq ft</p>
           <b class="go">Get this list for my ZIP →</b>
         </a>
         <a class="soft feature pick" href="#zipbox" data-trade="irrigation">
@@ -673,10 +859,11 @@
           <p>Driveway and public sidewalk square footage, so you can price routes and seasonal contracts before the first snowfall.</p>
           <b class="go">Get this list for my ZIP →</b>
         </a>
-        <a class="soft feature pick" href="#zipbox" data-trade="concrete">
+        <a class="soft feature pick" href="#zipbox" data-trade="concrete" data-jm="driveway" data-jmin="1000" data-jmax="">
           <div class="top"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18M9 4v8M15 12v8"/></svg></span><span class="idx">04 / 06</span></div>
           <h3>Concrete &amp; sealing</h3>
           <p>Driveway, patio and walk areas show which streets have the big driveways worth a replacement or sealing offer.</p>
+          <p class="small ex-line">Example: driveway sealing, driveway 1,000 sq ft and up</p>
           <b class="go">Get this list for my ZIP →</b>
         </a>
         <a class="soft feature pick" href="#zipbox" data-trade="siding">
@@ -708,8 +895,8 @@
         <p>No card and no sales call to see what you get.</p>
       </div>
       <ol class="steps">
-        <li><span class="n">1</span><div><h3>Pick your ZIP</h3><p>Choose the area you serve and the property type. You see the exact number of homes and the exact price right away.</p></div></li>
-        <li><span class="n">2</span><div><h3>Preview 15 homes free</h3><p>Choose 5 addresses you already service to check our measurements against properties you know. We'll add 10 more homes from your ZIP. No card needed.</p></div></li>
+        <li><span class="n">1</span><div><h3>Pick the area and job size</h3><p>Search a ZIP or draw an area (it can cross ZIP lines). Set the job size, like driveways 1,000 sq ft and up. You see exactly how many homes match and the exact price.</p></div></li>
+        <li><span class="n">2</span><div><h3>Preview up to 15 homes free</h3><p>Choose up to 5 addresses you already service to check our measurements against properties you know. We'll add up to 10 homes from your matching results. No card needed.</p></div></li>
         <li><span class="n">3</span><div><h3>Put the sheet to work</h3><p><span id="rateLine">Pay by card and download a spreadsheet. Quote before you visit, mail postcards with real prices, and plan routes.</span></p></div></li>
       </ol>
     </div>
@@ -802,7 +989,7 @@
         <h2>Pay per home, <span class="soft-t">or half that as a member.</span></h2>
       </div>
       <div class="tiers">
-        <div class="soft tier free"><span class="t-lbl">15-home preview</span><div class="stat">Free</div><span class="t-sub">5 you choose + 10 more, on this page</span></div>
+        <div class="soft tier free"><span class="t-lbl">Preview</span><div class="stat">Free</div><span class="t-sub">Up to 15 homes: up to 5 you choose + up to 10 matching</span></div>
         <div class="soft tier"><span class="t-lbl" id="pTier1Lbl">Your first measurement</span><div class="stat" id="pTier1">10¢</div><span class="t-sub">per home</span></div>
         <div class="soft tier"><span class="t-lbl" id="pTier2Lbl">Each extra measurement</span><div class="stat" id="pTier2">+5¢</div><span class="t-sub" id="pMin">per home · $25 minimum order</span></div>
       </div>
@@ -812,7 +999,7 @@
             <thead><tr><th></th><th>Measuring yourself</th><th>Driving out</th><th class="us-h">This sheet</th></tr></thead>
             <tbody>
               <tr><td>Time for 5,000 homes</td><td data-l="Measuring yourself">~330 hours</td><td data-l="Driving out">~2,100 hours</td><td class="us" data-l="This sheet">Minutes</td></tr>
-              <tr><td>Cost per home</td><td data-l="Measuring yourself">~$1.50</td><td data-l="Driving out">~$12</td><td class="us" id="vsPer" data-l="This sheet">7¢</td></tr>
+              <tr><td>Cost per home</td><td data-l="Measuring yourself">~$1.50</td><td data-l="Driving out">~$12</td><td class="us" id="vsPer" data-l="This sheet">10¢ a home</td></tr>
               <tr><td>Grass only (beds, decks, driveways removed)</td><td data-l="Measuring yourself">Only if you trace it</td><td data-l="Driving out">Yes</td><td class="us" data-l="This sheet">Yes</td></tr>
               <tr><td>Same numbers for every home</td><td data-l="Measuring yourself">Varies by who measures</td><td data-l="Driving out">Varies</td><td class="us" data-l="This sheet">Yes</td></tr>
             </tbody>
@@ -831,8 +1018,12 @@
       </div>
       <div class="faq">
         <details><summary>Does it replace a site visit?</summary><p>It replaces the measuring, not your judgement. Measurements are estimates from aerial photos and LiDAR; confirm on the first visit before final billing. Every row has a quality flag so you know which to double-check.</p></details>
-        <details><summary>How accurate is it?</summary><p>Lawn is traced on recent aerial photos, with LiDAR removing anything raised (decks, sheds, play sets, shrubs) and infrared confirming what's actually growing. Check the free preview against yards you've already measured.</p></details>
-        <details><summary>What's in the free preview?</summary><p>15 homes from your ZIP with every column the full sheet has: the 5 addresses you already service, so you can check our measurements against properties you know, plus 10 more measured homes from small lots to large. All 5 have to be different homes inside that ZIP. One free preview per email.</p></details>
+        <details><summary>How accurate is it?</summary><p>Lawn is traced on recent aerial photos, with LiDAR removing anything raised (decks, sheds, play sets, shrubs) and infrared confirming what's actually growing. We haven't published accuracy figures yet (see "How we measure" above). The free preview lets you check homes you've already measured.</p></details>
+        <details><summary>Can I buy just a few streets?</summary><p>Yes. Choose <b>Draw an area</b>, click around the neighborhood, subdivision or streets you want, and you'll see the exact homes and price. Areas can cross ZIP lines; every home is counted once. Whole ZIPs are still available.</p></details>
+        <details><summary>How does job size work?</summary><p>Pick one measurement and a minimum, a maximum or both, like "Driveway: 1,000 sq ft and up" or "Lawn: 4,000–10,000 sq ft". Homes exactly at a limit are included; homes without that measurement are left out. That measurement decides which homes you get; any other measurements you tick come along as extra columns.</p></details>
+        <details><summary>How is the price worked out?</summary><p>Per home: 10¢ for the first measurement and 5¢ for each extra one (Premier: 25¢ a home). Homes in higher assessed-value bands cost a little more. Every order has a $25 minimum; members then pay half. You see the exact total, and the line items, before checkout, and that's what you pay.</p></details>
+        <details><summary>What's a Premier list?</summary><p>The full property report for every home on your list, as one PDF per home in a folder: roof lengths, pitch and facets, walls and elevations, gutters, and the lot and yard on the aerial photo. It's for roofing, gutter, siding and window companies; lawn and snow companies usually just need the spreadsheet.</p></details>
+        <details><summary>What's in the free preview?</summary><p>Up to 15 homes with every column the paid spreadsheet has. Up to 5 are addresses you already service in the area you picked (any size), so you can check our measurements against properties you know. Up to 10 more come from the homes that match your area and job size, from small to large. Add your rate to see your price on each home and on a sample postcard. One free preview per email.</p></details>
         <details><summary>Is owner information included?</summary><p>Yes: the owner's name and mailing address from public county records, where the state allows it for marketing (not in Kansas). Follow do-not-mail and do-not-call requests.</p></details>
         <details><summary>Which ZIPs can I pick?</summary><p>Omaha and Lincoln today, with Des Moines, Kansas City, Denver and more metros being added every week. Type your ZIP above to see if it's ready.</p></details>
         <details><summary>What does membership add?</summary><p>Half off every ZIP sheet and Premier folder, unlimited property reports for your trades, postcard files for any home, and the CRM. Cancel any time.</p></details>
@@ -844,10 +1035,10 @@
   <!-- ============================================================ closing cta -->
   <section class="sec cta-sec" id="closing">
     <div class="wrap">
-      <p class="eyebrow">15 homes free</p>
-      <h2>See your ZIP in 10 seconds.</h2>
-      <p>Home count, exact price, and a free 15-home preview with 5 addresses you already service. No card needed.</p>
-      <a class="btn arrow" href="#zipbox" id="ctaBtn">Check my ZIP</a>
+      <p class="eyebrow">Up to 15 homes free</p>
+      <h2>Pick the area. Pick the job size.</h2>
+      <p>See exactly which homes match and what they cost, then preview up to 15 homes free. No card needed.</p>
+      <a class="btn arrow" href="#zipbox" id="ctaBtn">Search a ZIP</a>
     </div>
   </section>
 
@@ -855,13 +1046,13 @@
     <p style="margin:0">Measurements come from public aerial photos, LiDAR and county parcel data, which can be a few years old. Coverage grows every week: type your ZIP above to check.</p>
   </div>
 
-  <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Preview 15 homes free</a>
+  <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Preview up to 15 homes free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/common.js?v=26"></script>
 <script src="/static/data.js?v=20"></script>
 <script>
-// Phone-only sticky "Preview 15 homes free" button: shown once the ZIP box has scrolled
+// Phone-only sticky "Preview up to 15 homes free" button: shown once the ZIP box has scrolled
 // away, hidden while the ZIP box or the closing CTA is on screen and once a
 // result is showing. Purely presentational; data.js owns all behavior.
 (function () {
@@ -948,14 +1139,89 @@
   document.querySelectorAll(".feature.pick").forEach((a) => a.addEventListener("click", (e) => {
     e.preventDefault();
     pickTrade(a.dataset.trade);
+    if (a.dataset.jm) {  // the card's example job size
+      $("fMeasure").value = a.dataset.jm; $("fMin").value = a.dataset.jmin || ""; $("fMax").value = a.dataset.jmax || "";
+      $("fMeasure").dispatchEvent(new Event("change"));
+    }
     try { localStorage.setItem("pickedTrade", a.dataset.trade); } catch (e2) {}
     $("zipbox").scrollIntoView({ behavior: "smooth", block: "center" });
     setTimeout(() => { const z = $("zip"); if (z) z.focus({ preventScroll: true }); }, 450);
     const msg = $("quoteMsg");
-    if (msg) msg.innerHTML = `<b>${esc(a.querySelector("h3").textContent)}</b> measurements picked. Type your ZIP to see the homes and the exact price.`;
+    if (msg) msg.innerHTML = `<b>${esc(a.querySelector("h3").textContent)}</b> measurements picked${a.dataset.jm ? " with an example job size" : ""}. Search a ZIP or draw an area to see the homes that fit and the exact price.`;
   }));
   $("mvN").addEventListener("input", draw);
   draw();
+})();
+</script>
+<script>
+// "See what you get": real anonymized rows, a flagged example, and a sample postcard (made-up identity, real measurements)
+(async function () {
+  const $ = (id) => document.getElementById(id);
+  const n = (v) => v == null || v === "" ? "–" : (+v).toLocaleString();
+  try {
+    const s = await api("/api/data/showcase");
+    if (!s.available) { $("showcase").innerHTML = '<p class="small muted">The sample appears once a ZIP has been measured.</p>'; }
+    else {
+      const want = ["county", "lot_sqft", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft", "other_hardscape_sqft", "beds_sqft", "wall_sqft", "year_built", "home_value", "quality"];
+      const cols = s.columns.filter((c) => want.includes(c.key));
+      const num = (k) => /_sqft$/.test(k);
+      $("showcase").innerHTML = `<div class="tablewrap"><table><thead><tr>${cols.map((c) => `<th class="${num(c.key) ? "num" : ""}">${esc(c.label)}</th>`).join("")}</tr></thead>
+        <tbody>${s.rows.map((r) => `<tr class="${r.quality === "review" ? "flag" : ""}">${cols.map((c) => `<td class="${num(c.key) ? "num" : ""}">${num(c.key) ? n(r[c.key]) : esc(r[c.key] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+          <a class="btn secondary" download="sample_rows.csv" href="${URL.createObjectURL(new Blob([s.csv], { type: "text/csv" }))}">Download these rows (all columns)</a>
+          <span class="small muted">From ${n(s.from_homes)} measured homes; ${Math.round((s.flagged_share || 0) * 100)}% of them are flagged "review".</span></div>`;
+      if (s.flagged) $("accFlag").insertAdjacentHTML("beforeend", `<p class="small" style="margin-top:8px"><b>Example:</b> a ${esc(s.flagged.county || "")} home with ${n(s.flagged.lawn_sqft)} sq ft of lawn, flagged: "${esc(s.flagged.reason)}".</p>`);
+    }
+  } catch (e) { $("showcase").innerHTML = '<p class="small muted">The sample isn\'t available right now.</p>'; }
+  try {
+    const pc = await api("/api/data/showcase/postcard");
+    $("pcSample").innerHTML = pc.available ? pc.pages.map((src, i) => `<img src="${src}" alt="Sample postcard ${i ? "back" : "front"} (made-up name and address)" loading="lazy">`).join("")
+      : '<p class="small muted">The sample postcard appears once a ZIP has been measured.</p>';
+  } catch (e) { $("pcSample").innerHTML = '<p class="small muted">The sample postcard isn\'t available right now.</p>'; }
+})();
+</script>
+<script>
+// Home-page demo: one full report on any address per email
+(function () {
+  const $ = (id) => document.getElementById(id);
+  let t = null;
+  try { $("tEmail").value = localStorage.getItem("dataEmail") || ""; } catch (e) {}
+  $("tAddr").addEventListener("input", () => {
+    clearTimeout(t);
+    const v = $("tAddr").value.trim();
+    if (v.length < 3) return;
+    t = setTimeout(async () => {
+      try { const l = await api(`/api/suggest?q=${encodeURIComponent(v)}`); $("tSuggest").innerHTML = l.map((s) => `<option value="${esc(s.text)}"></option>`).join(""); } catch (e) {}
+    }, 250);
+  });
+  const val = (m) => m.unit === "$" ? "$" + Number(m.value).toLocaleString() : typeof m.value === "number" ? m.value.toLocaleString() + (m.unit ? " " + m.unit : "") : esc(String(m.value)) + (m.unit ? " " + m.unit : "");
+  async function go() {
+    const email = $("tEmail").value.trim(), address = $("tAddr").value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { $("tMsg").innerHTML = '<span class="err">Enter your email first.</span>'; return; }
+    if (address.length < 3) { $("tMsg").innerHTML = '<span class="err">Enter an address to measure.</span>'; return; }
+    try { localStorage.setItem("dataEmail", email); } catch (e) {}
+    $("tGo").disabled = true;
+    $("tMsg").innerHTML = '<span class="spinner"></span>Measuring the roof, walls and yard. About 20 to 60 seconds…';
+    try {
+      const r = await api("/api/demo/try", { method: "POST", json: { email, address } });
+      $("tMsg").innerHTML = '<span class="ok">Done. That was your free test.</span>';
+      $("tOut").classList.remove("hidden");
+      $("tTitle").textContent = r.address || "Property";
+      $("tSub").textContent = [r.city, r.zip, r.county].filter(Boolean).join(" · ");
+      $("tAerial").src = r.aerial ? `data:image/jpeg;base64,${r.aerial}` : "";
+      $("tYard").src = r.yard_photo ? `data:image/jpeg;base64,${r.yard_photo}` : "";
+      $("tGrid").innerHTML = r.summaries.filter((s) => (s.metrics || []).some((m) => m.value)).slice(0, 8).map((s) =>
+        `<div class="tc"><h4>${esc(s.label)}</h4>${s.metrics.filter((m) => m.value && !m.beta).slice(0, 4).map((m) => `<div><span class="muted">${esc(m.label)}</span><b>${val(m)}</b></div>`).join("")}</div>`).join("");
+      $("tReport").href = `/r/${r.id}?t=${encodeURIComponent(r.token)}`;
+      $("tPdf").href = `/r/${r.id}/pdf?t=${encodeURIComponent(r.token)}`;
+      $("tOut").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) {
+      $("tMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+      $("tGo").disabled = false;
+    }
+  }
+  $("tGo").onclick = go;
+  $("tAddr").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
 })();
 </script>
 </body>

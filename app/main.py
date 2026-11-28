@@ -1065,7 +1065,41 @@ class DemoReq(BaseModel):
 @app.post("/api/demo/report", dependencies=[Depends(admin)])
 def demo_report(body: DemoReq):
     """A full property report for one address, free, plus every trade's numbers."""
+    return _demo_report(body.pin)
+
+
+class PublicDemoReq(BaseModel):
+    email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    address: str = Field(min_length=3, max_length=200)
+    magicKey: str | None = Field(default=None, max_length=400)
+
+
+@app.post("/api/demo/try")
+def demo_try(body: PublicDemoReq, request: Request):
+    """The home-page demo: one full report on any address, for an email (one
+    test per email). Nothing is charged; the owner hears about it."""
+    ip = _client_ip(request)
+    why = datastore.demo_allowed(body.email, ip)
+    if why:
+        raise HTTPException(429, why)
+    loc = locate(body.address, body.magicKey)
+    pin = loc.get("suggested_pin")
+    if not pin:
+        raise HTTPException(404, "We couldn't find a property lot at that address. Pick it from the suggestions.")
+    out = _demo_report(pin)
+    datastore.record_demo(body.email, ip, pin)  # only a report that worked uses the test
+    try:
+        from . import mailer
+        mailer.notify_owner(f"Home-page demo: {body.email}", f"{body.email} ran a free report on {out.get('address')}.\n"
+                                                             f"A good time to follow up.", reply_to=body.email)
+    except Exception:
+        pass
+    return out
+
+
+def _demo_report(pin: str):
     from . import trades
+    body = DemoReq(pin=pin)
     try:
         info = roofreport.list_structures(body.pin)
         ids = [s_["id"] for s_ in info["structures"] if s_["id"] == 0 or s_["plan_sqft"] >= 250]
@@ -1437,6 +1471,26 @@ class SelectionReq(BaseModel):
 class SelectionOrderReq(BaseModel):
     email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     spec: dict
+    coupon: str | None = Field(default=None, max_length=200)
+
+
+def _coupon_ok(code: str | None, request: Request) -> bool:
+    """The one coupon: the admin key takes 100% off (the owner's own orders).
+    Wrong codes count toward the admin-key lockout, so the box can't be used
+    to guess the key."""
+    code = (code or "").strip()
+    if not code:
+        return False
+    ip = _client_ip(request)
+    wait = safety.locked("admin:" + ip)
+    if wait:
+        raise HTTPException(429, f"Too many wrong codes. Try again in {wait // 60 + 1} minutes.")
+    if ADMIN_TOKEN and hmac.compare_digest(code.encode(), ADMIN_TOKEN.encode()):
+        safety.succeeded("admin:" + ip)
+        safety.log(ip, "POST", "/api/data/select/order", 200, "100% coupon used")
+        return True
+    safety.failed("admin:" + ip)
+    raise HTTPException(400, "That coupon code isn't valid.")
 
 
 @app.post("/api/data/select/quote")
@@ -1465,15 +1519,22 @@ def data_select_order(body: SelectionOrderReq, request: Request):
     exact rows and columns with the order, then checkout charges that amount."""
     from . import selection as sel
     c = _session_company(request)
+    free = _coupon_ok(body.coupon, request)  # checked before anything is created
     try:
         o = datastore.create_selection_order(body.email, body.spec, site=_base_url(request), member=bool(c and c["member"]),
-                                             account_email=(c or {}).get("email"))
+                                             account_email=(c or {}).get("email"), notify=not free)
     except sel.SelectionError as e:
         raise HTTPException(400, str(e))
     except LookupError as e:
         raise HTTPException(404, str(e))
     except PermissionError as e:
         raise HTTPException(409, str(e))
+    if free:  # 100% off: no payment step; the order is paid at $0 and ready at once
+        full = o["amount_cents"]
+        datastore._set(o["id"], amount_cents=0)
+        datastore.mark_paid(o["id"], f"coupon: 100% off (list price ${full / 100:,.2f})")
+        return {"id": o["id"], "token": o["token"], "amount_cents": 0, "count": o["count"], "coupon": "100% off",
+                "order_url": f"/data/order/{o['id']}?t={o['token']}"}
     out = {"id": o["id"], "token": o["token"], "amount_cents": o["amount_cents"], "count": o["count"],
            "order_url": f"/data/order/{o['id']}?t={o['token']}"}
     if datastore.stripe_enabled():

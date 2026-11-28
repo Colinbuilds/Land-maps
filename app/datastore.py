@@ -162,6 +162,8 @@ def init():
         CREATE TABLE IF NOT EXISTS samples (
             id INTEGER PRIMARY KEY, email TEXT NOT NULL, ip TEXT, zip TEXT, ts REAL NOT NULL);
         """)
+        con.execute("""CREATE TABLE IF NOT EXISTS demo_uses (
+            id INTEGER PRIMARY KEY, email TEXT NOT NULL, ip TEXT, pin TEXT, ts REAL NOT NULL)""")
         shave = {r[1] for r in con.execute("PRAGMA table_info(samples)")}
         for col in ("token", "pins"):  # which homes a preview showed (its postcard may use one of them)
             if col not in shave:
@@ -674,6 +676,24 @@ def take_preview(email: str, ip: str | None, spec: dict, addresses: list[str], r
             "match_count": b.get("count")}
 
 
+DEMOS_PER_IP_PER_DAY = 3
+
+
+def demo_allowed(email: str, ip: str | None) -> str | None:
+    """The home-page demo: one report per email (and a few per connection a day)."""
+    with _db() as con:
+        if con.execute("SELECT 1 FROM demo_uses WHERE lower(email)=lower(?)", (email,)).fetchone():
+            return "This email has already used its free test. Join to run reports on any address, or preview a ZIP free below."
+        if ip and con.execute("SELECT COUNT(*) FROM demo_uses WHERE ip=? AND ts>?", (ip, time.time() - 86400)).fetchone()[0] >= DEMOS_PER_IP_PER_DAY:
+            return "Too many free tests from this connection today. Try again tomorrow."
+    return None
+
+
+def record_demo(email: str, ip: str | None, pin: str):
+    with _lock, _db() as con:
+        con.execute("INSERT INTO demo_uses(email,ip,pin,ts) VALUES(?,?,?,?)", (email.lower(), ip, pin, time.time()))
+
+
 def preview_pins(token: str) -> list[str]:
     with _db() as con:
         r = con.execute("SELECT pins FROM samples WHERE token=?", (token,)).fetchone()
@@ -762,6 +782,8 @@ def create_order(email: str, zip_code: str, classes: list[str], types=None, site
     """``account_email`` is the signed-in company's email: lock-holder rights
     (buying in their own exclusive ZIP) come from it, never from a typed email."""
     types = normalize_types(types)
+    if product == "exclusive":  # no longer sold; locks already bought stay in force until they end
+        raise PermissionError("Exclusive ZIPs are no longer offered. Buy the ZIP or an area as a standard sheet or Premier list.")
     product = product if product in ("premier", "exclusive") else "standard"
     holder = (account_email or "").lower() or None
     if product == "exclusive":

@@ -1,4 +1,5 @@
-// Data storefront: quote a ZIP, free 15-home preview (5 of theirs + 10 more), buy the full sheet.
+// Data storefront: pick the area (a ZIP or a drawn shape) and the job size, see the exact homes and price,
+// preview up to 15 free (up to 5 of theirs + up to 10 matching), buy exactly those homes.
 (async function () {
   const $ = (id) => document.getElementById(id);
   const cfg = await api("/api/config");
@@ -28,6 +29,7 @@
       return;
     }
     $("quoteMsg").textContent = "";
+    setArea("zip");
     $("result").classList.remove("hidden");
     if (window.__pvReset) window.__pvReset();
     $("qZip").textContent = `ZIP ${q.zip} · ${$("cls").selectedOptions[0].textContent}`;
@@ -58,7 +60,7 @@
     }
   }
   // ------------------------------------------------ savings calculator
-  let pricing = { rate_cents: 10, bulk_rate_cents: 5, bulk_threshold: 2000, min_order_usd: 25 };
+  let pricing = { rate_cents: 10, extra_type_cents: 5, min_order_usd: 25 };
   try { const cp = await api("/api/data/pricing"); if (cp && cp.rate_cents) pricing = cp; } catch (e) {}
   const money = (d) => "$" + Math.round(d).toLocaleString();
   function sheetPrice(n) {
@@ -74,7 +76,7 @@
     $("pTier2Lbl") && ($("pTier2Lbl").textContent = "Each extra measurement");
     $("pTier2").textContent = "+" + cents(p.extra_type_cents);
     $("pMin").textContent = `per home · $${p.min_order_usd} minimum order`;
-    $("vsPer").textContent = cents(100 * sheetPrice(5000) / 5000);
+    $("vsPer").textContent = `${cents(p.rate_cents)} a home (one measurement; +${cents(p.extra_type_cents)} per extra)`;
   }
   function payback(price) {
     const v = Math.max(0, +$("cVal").value || 0);
@@ -156,10 +158,6 @@
     pb.disabled = t.length > 0;
     pb.querySelector("span").textContent = t.length ? "Not available: part of this ZIP is exclusive to another company" : "Full report PDF for every home";
     if (t.length && product === "premier") document.querySelector('.prodswitch button[data-prod="standard"]').click();
-    const months = (q.pricing && q.pricing.exclusive_months) || 12;
-    $("exclMonths").textContent = months;
-    $("exclRate").textContent = `${usd(q.pricing.exclusive_cents || 100)} a home for your first measurement and ${cents(q.pricing.exclusive_extra_cents || 50)} for each extra one`;
-    $("exclLogin").innerHTML = q.logged_in ? "" : 'You need a free account so the lock is tied to your company: <a href="/join">sign up or sign in</a>.';
   }
   // ------------------------------------------------ home-value range
   let vLo = 0, vHi = 8;
@@ -214,13 +212,13 @@
   document.querySelectorAll(".prodswitch button").forEach((btn) => btn.addEventListener("click", () => {
     product = btn.dataset.prod;
     document.querySelectorAll(".prodswitch button").forEach((x) => { x.classList.toggle("on", x === btn); x.setAttribute("aria-checked", x === btn); });
-    const prem = product === "premier", excl = product === "exclusive";
+    const prem = product === "premier";
     $("typePick").classList.toggle("hidden", prem);
-    $("stdIntro").classList.toggle("hidden", prem || excl);
+    $("stdIntro").classList.toggle("hidden", prem);
     $("premIntro").classList.toggle("hidden", !prem);
-    $("exclIntro").classList.toggle("hidden", !excl);
-    document.querySelector(".dp .valuepick").classList.toggle("hidden", excl);  // whole ZIP only
-    $("bBtn").textContent = excl ? "Lock this ZIP" : "Buy sheet";
+    $("exStd").classList.toggle("hidden", prem); $("exPrem").classList.toggle("hidden", !prem);
+    (prem ? $("exPrem") : $("exStd")).open = true;  // the example drops down for the chosen list
+    $("bBtn").textContent = prem ? "Buy Premier list" : "Buy sheet";
     updatePrice();
   }));
   // the assessed-value column is an add-on (+5¢), never the "first measurement"
@@ -305,8 +303,9 @@
   $("addZip").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addZip(); } });
 
   function updatePrice() {
-    if (!q || !q.zip_total) return;
-    if (product === "exclusive") { exclusivePrice(); return drawCart(); }
+    if (!q) return;
+    if (!extra.length) return selQuote();  // one ZIP or a drawn area: the server prices the exact homes
+    if (!q.zip_total) return;
     const vb = q.value_bands || { bands: [] };
     const mult = pricing.value_multipliers || [1];
     const n = selCount();
@@ -341,21 +340,23 @@
   $("check").addEventListener("click", check);
   $("zip").addEventListener("keydown", (e) => { if (e.key === "Enter") check(); });
 
-  // ---- free preview: the contractor's 5 addresses + 10 more homes from the ZIP
-  const PV_CHOSEN = 5, PV_TOTAL = 15;
+  // ---- free preview: up to 5 of the contractor's addresses + up to 10 matching homes
+  const PV_CHOSEN = 5;
   const pv = Array.from({ length: PV_CHOSEN }, () => ({ text: "", state: "", msg: "", seq: 0 }));
   const normAddr = (t) => String(t || "").toUpperCase().replace(/[.,]/g, " ").replace(/\s+/g, " ").trim();
+  let pvLast = null;
   async function postJSON(path, body) {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     let data = {}; try { data = await r.json(); } catch (e) {}
     return { ok: r.ok, status: r.status, data };
   }
+  const areaReady = () => !!q && (areaMode === "zip" ? !!q.zip : !!drawPoly);
   function pvRender() {
     const box = $("pvList");
     if (!box.dataset.built) {
       box.dataset.built = "1";
       box.innerHTML = pv.map((_, i) => `<div class="pv-row" data-i="${i}"><span class="n">${i + 1}</span>
-        <input type="text" list="pvSuggest" autocomplete="off" placeholder="Address you service" aria-label="Address ${i + 1} you already service">
+        <input type="text" list="pvSuggest" autocomplete="off" placeholder="${i ? "Another address (optional)" : "An address you service (optional)"}" aria-label="Address ${i + 1} you already service">
         <span class="st" aria-hidden="true"></span><div class="pv-msg" role="status"></div></div>`).join("");
       box.querySelectorAll(".pv-row").forEach((row) => {
         const i = +row.dataset.i, inp = row.querySelector("input");
@@ -382,28 +383,28 @@
       m.className = "pv-msg " + (s.state === "bad" ? "err" : "ok");
       m.textContent = s.msg || "";
     });
-    const ready = pv.every((s) => s.state === "good");
-    $("sBtn").disabled = !q || !ready || (q && q.count < PV_TOTAL);
+    const filled = pv.filter((s) => s.text.trim());
+    const ok = filled.every((s) => s.state === "good");
+    $("sBtn").disabled = !areaReady() || !ok;
   }
   async function pvSuggest(text) {
     if (!q || text.trim().length < 3) return;
     try {
-      const list = await api(`/api/suggest?q=${encodeURIComponent(text + " " + q.zip)}`);
+      const list = await api(`/api/suggest?q=${encodeURIComponent(text + (q.zip ? " " + q.zip : ""))}`);
       $("pvSuggest").innerHTML = list.map((s) => `<option value="${esc(s.text)}"></option>`).join("");
     } catch (e) {}
   }
   async function pvCheck(i) {
-    if (!q) return;
+    if (!areaReady()) return;
     const text = pv[i].text.trim();
     if (!text) { pv[i] = { ...pv[i], state: "", msg: "" }; pvPaint(); return; }
-    // the same address twice: say so right away (the server checks again)
     const dup = pv.findIndex((s, j) => j !== i && s.text.trim() && normAddr(s.text) === normAddr(text));
-    if (dup >= 0) { pv[i] = { ...pv[i], state: "bad", msg: `Same as address ${dup + 1}. Pick ${PV_CHOSEN} different homes.` }; pvPaint(); return; }
+    if (dup >= 0) { pv[i] = { ...pv[i], state: "bad", msg: `Same as address ${dup + 1}. Pick different homes.` }; pvPaint(); return; }
     if (pv[i].checked === text && (pv[i].state === "good" || pv[i].state === "bad")) return;  // already checked
     const seq = ++pv[i].seq;
     pv[i] = { ...pv[i], state: "busy", msg: "Checking…", checked: text }; pvPaint();
-    const r = await postJSON("/api/data/sample/address", { zip: q.zip, classes: $("cls").value.split(","), address: text });
-    if (seq !== pv[i].seq) return;  // they typed something newer
+    const r = await postJSON("/api/data/sample/address", { spec: spec(), address: text });
+    if (seq !== pv[i].seq) return;
     if (r.ok) {
       const samePin = pv.findIndex((s, j) => j !== i && s.pin && s.pin === r.data.pin);
       pv[i] = samePin >= 0
@@ -412,54 +413,95 @@
     } else {
       const p = (r.data.problems || [])[0];
       pv[i] = { ...pv[i], state: "bad", pin: null,
-                msg: (p ? p.message : (r.data.detail || "We couldn't check that address.")) + " Replace it with another address." };
+                msg: (p ? p.message : (r.data.detail || "We couldn't check that address.")) + " Replace it or leave it blank." };
     }
     pvPaint();
   }
-  function pvReset() {  // a new ZIP: start the 5 over, and say up front if the ZIP is too thin
+  function pvReset() {  // a new area: start the addresses over
     pv.forEach((s, i) => { pv[i] = { text: "", state: "", msg: "", seq: s.seq + 1 }; });
     $("sMsg").textContent = "";
-    const short = q && q.count < PV_TOTAL;
-    $("pvShort").classList.toggle("hidden", !short);
-    if (short) $("pvShort").innerHTML = `<span class="err">ZIP ${esc(q.zip)} has ${q.count} propert${q.count === 1 ? "y" : "ies"} we cover, and a free preview needs ${PV_TOTAL}. Try a neighbouring ZIP, or buy the sheet.</span>`;
     pvRender();
   }
   window.__pvReset = pvReset;
   pvRender();
 
+  // ---- the contractor's illustrative price: rate per 1,000 sq ft, minimum, optional size tiers
+  function addTier(from = "", rate = "") {
+    const d = document.createElement("div");
+    d.className = "tier";
+    d.innerHTML = `<label class="small">From sq ft<input type="number" min="0" step="100" class="tFrom" value="${esc(from)}" placeholder="e.g. 8000"></label>
+      <label class="small">$ per 1,000<input type="number" min="0" step="0.25" class="tRate" value="${esc(rate)}" placeholder="e.g. 4.75"></label>
+      <button type="button" aria-label="Remove tier">×</button>`;
+    d.querySelector("button").onclick = () => d.remove();
+    $("qTiers").appendChild(d);
+  }
+  $("qAddTier").onclick = () => addTier();
+  function quoteParams() {
+    const rate = +$("qRateIn").value || 0, minimum = +$("qMinIn").value || 0;
+    const tiers = [...document.querySelectorAll("#qTiers .tier")].map((t) => ({ from: +t.querySelector(".tFrom").value, rate: +t.querySelector(".tRate").value }))
+      .filter((t) => t.from > 0 && t.rate > 0);
+    return rate || minimum || tiers.length ? { rate, minimum, tiers } : null;
+  }
+
   $("sBtn").addEventListener("click", async () => {
-    if (!q) return;
+    if (!areaReady()) return;
     const email = $("sEmail").value.trim();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { $("sMsg").innerHTML = '<span class="err">Enter your email for the preview.</span>'; return; }
     remember(email);
     $("sBtn").disabled = true;
-    $("sMsg").innerHTML = q.ready ? '<span class="spinner"></span>Pulling your 15 homes…'
-      : '<span class="spinner"></span>Measuring your 5 homes and 10 more across the ZIP. This takes about 30 to 60 seconds.';
+    $("sMsg").innerHTML = '<span class="spinner"></span>Pulling your homes…';
+    const quote = quoteParams();
     try {
-      const res = await postJSON("/api/data/sample", { email, zip: q.zip, classes: $("cls").value.split(","), addresses: pv.map((s) => s.text.trim()) });
-      if (res.status === 422 && res.data.problems) {  // one or more addresses need replacing
-        res.data.problems.forEach((p) => { if (p.index != null) pv[p.index] = { ...pv[p.index], state: "bad", pin: null, checked: pv[p.index].text.trim(), msg: p.message + " Replace it with another address." }; });
+      const res = await postJSON("/api/data/sample", { email, spec: spec(), addresses: pv.map((s) => s.text.trim()).filter(Boolean), quote });
+      if (res.status === 422 && res.data.problems) {
+        res.data.problems.forEach((p) => { if (p.index != null) {
+          const k = pv.findIndex((s) => s.text.trim() && normAddr(s.text) === normAddr(p.address));
+          const i = k >= 0 ? k : p.index;
+          pv[i] = { ...pv[i], state: "bad", pin: null, checked: pv[i].text.trim(), msg: p.message + " Replace it or leave it blank." }; } });
         pvPaint();
-        $("sMsg").innerHTML = '<span class="err">Fix the marked address' + (res.data.problems.length > 1 ? "es" : "") + ' and try again. Your free preview hasn\'t been used.</span>';
+        $("sMsg").innerHTML = `<span class="err">${esc(res.data.problems.length === 1 && res.data.problems[0].index == null ? res.data.problems[0].message : "Fix the marked address" + (res.data.problems.length > 1 ? "es" : "") + " and try again.")} Your free preview hasn't been used.</span>`;
         return;
       }
       if (!res.ok) throw new Error(res.data.detail || "Something went wrong. Try again.");
       const r = res.data;
-      $("sMsg").innerHTML = `<span class="ok">Here are your ${r.rows.length} homes: your ${r.yours} plus ${r.more} more from ZIP ${esc(r.zip)}.</span>`;
+      pvLast = { r, quote };
+      $("sMsg").innerHTML = `<span class="ok">Here are ${r.rows.length} homes: ${r.yours} of yours and ${r.more} matching.</span>`;
+      $("pvTitle").textContent = `Your free preview: ${r.rows.length} homes`;
+      $("pvNotes").innerHTML = [`${esc(r.area_label)} · ${esc(r.filter_label)}`].concat((r.notes || []).map(esc)).join("<br>");
       const num = (k) => /_sqft$|_ft$|_count$|^est_/.test(k);
-      const show = ["address", "city", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft", "building_sqft", "lot_sqft", "beds_sqft", "wall_sqft", "est_windows"].filter((k) => r.keys.includes(k));
+      const sizeKey = SIZE_COL[r.measure] || "lot_sqft";
+      const show = ["address", "owner", sizeKey].concat(["lawn_sqft", "driveway_sqft", "sidewalk_sqft", "other_hardscape_sqft", "beds_sqft", "wall_sqft"].filter((k) => k !== sizeKey && r.keys.includes(k))).concat(["quality"])
+        .filter((k, i, a) => a.indexOf(k) === i && (r.keys.includes(k) || k === "owner"));
       const lab = Object.fromEntries(r.columns.map((c) => [c.key, c.label]));
-      const body = (rows) => rows.map((row) => `<tr>${show.map((k) => `<td class="${num(k) ? "num" : ""}">${num(k) ? fmt(row[k]) : esc(row[k])}</td>`).join("")}</tr>`).join("");
-      const group = (title, rows) => `<tr class="grp"><td colspan="${show.length}">${title}</td></tr>` + body(rows);
-      $("sampleTable").innerHTML = `<thead><tr>${show.map((k) => `<th class="${num(k) ? "num" : ""}">${esc(lab[k])}</th>`).join("")}</tr></thead>
-        <tbody>${group("Your 5 properties", r.rows.filter((x) => x.group === "yours"))}${group("10 more homes in this ZIP", r.rows.filter((x) => x.group === "more"))}</tbody>`;
+      lab.owner = lab.owner || "Owner";
+      const money = (v) => v == null ? "–" : "$" + (+v).toLocaleString(undefined, { maximumFractionDigits: v >= 100 ? 0 : 2 });
+      const body = (rows) => rows.map((row) => `<tr>${show.map((k) => `<td class="${num(k) ? "num" : ""}">${num(k) ? fmt(row[k]) : esc(row[k] ?? "")}</td>`).join("")}${quote ? `<td class="num"><b>${money(row.quote)}</b></td>` : ""}</tr>`).join("");
+      const cols = show.length + (quote ? 1 : 0);
+      const group = (title, rows) => rows.length ? `<tr class="grp"><td colspan="${cols}">${title} (${rows.length})</td></tr>` + body(rows) : "";
+      $("sampleTable").innerHTML = `<thead><tr>${show.map((k) => `<th class="${num(k) ? "num" : ""}">${esc(lab[k] || k)}${k === sizeKey && r.measure ? " ★" : ""}</th>`).join("")}${quote ? '<th class="num">Your price</th>' : ""}</tr></thead>
+        <tbody>${group("Your properties", r.rows.filter((x) => x.group === "yours"))}${group("Matching homes", r.rows.filter((x) => x.group === "more"))}</tbody>`;
       $("sDl").href = URL.createObjectURL(new Blob([r.csv], { type: "text/csv" }));
-      $("sDl").download = `preview_${r.zip}.csv`;
+      $("sDl").download = `preview_${(r.zip || "area")}.csv`;
+      $("pcOut").classList.add("hidden"); $("pcOut").innerHTML = "";
       $("sampleCard").classList.remove("hidden");
       $("sampleCard").scrollIntoView({ behavior: "smooth" });
     } catch (e) {
       $("sMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
     } finally { pvPaint(); }
+  });
+  $("pcBtn").addEventListener("click", async () => {
+    if (!pvLast) return;
+    const rows = pvLast.r.rows, row = rows.find((x) => x.group === "more") || rows[0];
+    $("pcBtn").disabled = true;
+    $("pcOut").classList.remove("hidden");
+    $("pcOut").innerHTML = '<span class="small"><span class="spinner"></span>Making the postcard (about 10 seconds)…</span>';
+    try {
+      const r = await api("/api/data/preview/postcard", { method: "POST", json: { token: pvLast.r.token, row, quote: pvLast.quote } });
+      $("pcOut").innerHTML = r.pages.map((src, i) => `<img src="${src}" alt="Postcard ${i ? "back" : "front"} for ${esc(row.address || "a preview home")}">`).join("")
+        + `<p class="small muted" style="grid-column:1/-1;margin:0">${esc(row.address || "")}${r.price ? ` · your price ${"$" + r.price.toLocaleString()}` : " · add your rate above to print a price"}. Print-ready postcards for every home on a list come with a Premier list.</p>`;
+    } catch (e) {
+      $("pcOut").innerHTML = `<span class="err small">${esc(e.message)}</span>`;
+    } finally { $("pcBtn").disabled = false; }
   });
 
   $("bBtn").addEventListener("click", async () => {
@@ -472,13 +514,197 @@
       const body = { email, classes: $("cls").value.split(","), types: picked, product, value_lo: vLo, value_hi: vHi };
       const r = extra.length
         ? await api("/api/data/orders", { method: "POST", json: { ...body, zips: [q.zip, ...extra.map((x) => x.zip)] } })
-        : await api("/api/data/order", { method: "POST", json: { ...body, zip: q.zip } });
+        : await api("/api/data/select/order", { method: "POST", json: { email, spec: spec(), coupon: ($("bCoupon").value || "").trim() || null } });
       location.href = r.checkout_url || r.order_url;
     } catch (e) {
       $("bMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
       $("bBtn").disabled = false;
     }
   });
+
+  // ================================================ area + job size (one server-side selection)
+  let areaMode = "zip", drawPoly = null, drawPts = [], drawLine = null, drawShape = null, drawing = false, S = null, selT = null, selSeq = 0;
+  const SIZE_COL = { lawn: "lawn_sqft", driveway: "driveway_sqft", sidewalk: "sidewalk_sqft", patios: "other_hardscape_sqft",
+                     structures: "structures_sqft", beds: "beds_sqft", building: "building_sqft", walls: "wall_sqft" };
+  const typeLabel = (k) => ((q && q.type_catalog) || []).concat(drawCatalog).find((t) => t.key === k)?.label || k;
+  let drawCatalog = [];
+  try { drawCatalog = (await api("/api/data/types")).types.map((t) => ({ key: t.key, label: t.label })); } catch (e) {}
+  // the job-size measurement list: every measurement that's sold (not the value add-on)
+  $("fMeasure").innerHTML += drawCatalog.filter((t) => SIZE_COL[t.key]).map((t) => `<option value="${t.key}">${esc(t.label.split(" (")[0].split(" +")[0])}</option>`).join("");
+  const fNum = (id) => { const v = $(id).value.trim(); return v === "" ? null : Math.max(0, +v); };
+  function spec() {
+    const m = $("fMeasure").value;
+    const f = m && (fNum("fMin") != null || fNum("fMax") != null) ? { measure: m, min: fNum("fMin"), max: fNum("fMax") } : null;
+    const vb = q && q.value_bands && q.value_bands.bands.length;
+    const value = areaMode === "zip" && vb && (vLo > 0 || vHi < q.value_bands.bands.length - 1) ? [vLo, vHi] : null;
+    return { area: areaMode === "draw" ? { polygon: drawPoly } : { zip: q && q.zip }, classes: $("cls").value.split(","),
+             filter: f, types: picked, product: product === "premier" ? "premier" : "standard", value };
+  }
+  function explainFilter() {
+    const m = $("fMeasure").value, lo = fNum("fMin"), hi = fNum("fMax");
+    const name = m ? $("fMeasure").selectedOptions[0].textContent : "";
+    const fmt = (v) => v.toLocaleString();
+    const rng = lo != null && hi != null ? `${fmt(lo)}–${fmt(hi)} sq ft` : lo != null ? `${fmt(lo)} sq ft and up` : hi != null ? `up to ${fmt(hi)} sq ft` : "";
+    const extras = measuresPicked().filter((k) => k !== m).map((k) => typeLabel(k).split(" (")[0].split(" +")[0]);
+    $("fExplain").innerHTML = m && rng
+      ? `<b>${esc(name)}: ${esc(rng)}</b> selects the homes (sizes exactly at a limit count). ${extras.length ? `${esc(extras.join(", "))} ${extras.length === 1 ? "is" : "are"} added as extra column${extras.length === 1 ? "" : "s"} in the spreadsheet.` : ""} Homes with no ${esc(name.toLowerCase())} measurement are left out.`
+      : m ? "Enter a minimum, a maximum or both." : "Every home in the area. Pick a measurement to buy only one job size.";
+  }
+  function onFilter() {
+    const m = $("fMeasure").value;
+    if (m && !picked.includes(m)) {  // the job-size measurement is always a paid column
+      picked = [m, ...picked];
+      document.querySelectorAll("#typePick input").forEach((x) => { x.checked = picked.includes(x.value); x.closest("label").classList.toggle("on", x.checked); });
+    }
+    explainFilter();
+    updatePrice();
+  }
+  ["fMeasure"].forEach((id) => $(id).addEventListener("change", onFilter));
+  ["fMin", "fMax"].forEach((id) => $(id).addEventListener("input", onFilter));
+  document.querySelectorAll(".js-presets button").forEach((b) => b.onclick = () => {
+    $("fMeasure").value = b.dataset.m; $("fMin").value = b.dataset.min; $("fMax").value = b.dataset.max; onFilter();
+  });
+  document.getElementById("typePick").addEventListener("change", () => setTimeout(() => { explainFilter(); }, 0));
+  explainFilter();
+
+  function selQuote() {
+    clearTimeout(selT);
+    selT = setTimeout(selQuoteNow, 250);
+  }
+  async function selQuoteNow() {
+    if (!q) return;
+    if (areaMode === "draw" && !drawPoly) { renderSel(null, "Draw your area on the map to see the homes and the price."); return; }
+    const seq = ++selSeq;
+    $("qPrice").innerHTML = '<span class="spinner"></span>';
+    let r;
+    try { r = await api("/api/data/select/quote", { method: "POST", json: { spec: spec() } }); }
+    catch (e) { if (seq === selSeq) renderSel(null, e.message); return; }
+    if (seq !== selSeq) return;
+    S = r; renderSel(r);
+  }
+  function renderSel(r, err) {
+    const filtered = !!(r && (r.controls || areaMode === "draw"));
+    document.querySelector(".zcart").classList.toggle("hidden", filtered || areaMode === "draw");
+    if (!r) {
+      $("selSum").innerHTML = err ? `<div class="note">${esc(err)}</div>` : "";
+      $("qPrice").textContent = ""; $("qRate").textContent = "";
+      $("bBtn").disabled = true; return;
+    }
+    const n = r.count || 0, p = r.price || {};
+    q.count = n; q.price_cents = p.price_cents;
+    $("qZip").textContent = r.area_label + (r.controls ? "" : ` · ${$("cls").selectedOptions[0].textContent}`);
+    $("qCount").textContent = `${n.toLocaleString()} home${n === 1 ? "" : "s"} match`;
+    $("qBy").textContent = r.filter_label;
+    const cov = (r.coverage || []).map((c) => `ZIP ${c.zip}: ${c.excluded ? "left out (" + c.excluded + ")" : c.ready ? `${(c.homes || 0).toLocaleString()} measured homes${c.measured ? `, measured ${new Date(c.measured * 1000).toLocaleDateString()}` : ""}` : (r.measured_after ? "measured after you buy" : "not measured yet" + (c.measuring ? " (measuring now)" : ""))}`);
+    const img = (r.imagery || []).map((i) => `${i.county}: ${i.imagery || "aerial photo"}${i.lidar_year ? `, LiDAR ${i.lidar_year}` : ""}`);
+    const cols = (r.columns || []).map((c) => c.label);
+    const per = p.base_cents_per_home != null ? `${+(+p.base_cents_per_home).toFixed(2)}¢` : "";
+    const lines = [];
+    if (n) {
+      lines.push(`<div class="ln"><span>${n.toLocaleString()} homes × ${per} a home <span class="muted">(${(r.types || []).length - (r.types || []).includes("value")} measurement${(r.types || []).length === 1 ? "" : "s"}${r.types.includes("value") ? " + assessed value" : ""}${r.price && r.price.subtotal_cents > Math.ceil(n * (p.base_cents_per_home || 0)) + 1 ? ", higher-value homes priced up" : ""})</span></span><span>${usd(p.subtotal_cents || 0)}</span></div>`);
+      if (p.minimum_applied) lines.push(`<div class="ln"><span>Minimum order</span><span>${usd(p.minimum_cents)}</span></div>`);
+      if (p.member_discount) lines.push(`<div class="ln"><span>Member discount (${Math.round((p.discount || 0.5) * 100)}% off)</span><span>−${usd((p.full_price_cents || 0) - (p.price_cents || 0))}</span></div>`);
+      lines.push(`<div class="ln tot"><span>Total</span><span>${usd(p.price_cents || 0)}</span></div>`);
+    }
+    $("selSum").innerHTML = `
+      ${n ? `<div><b>Columns:</b> ${cols.map(esc).join(", ")}</div>` : ""}
+      ${r.flagged ? `<div>${r.flagged.toLocaleString()} of these ${r.flagged === 1 ? "is" : "are"} flagged "review" (worth a second look, e.g. heavy tree cover). ${r.flagged === 1 ? "It's" : "They're"} included and marked in the spreadsheet.</div>` : ""}
+      <div><b>Coverage:</b> ${cov.map(esc).join(" · ") || "–"}</div>
+      ${img.length ? `<div class="muted"><b>Imagery:</b> ${img.map(esc).join(" · ")}</div>` : ""}
+      ${(r.notes || []).map((x) => `<div class="note">${esc(x)}</div>`).join("")}
+      ${n ? lines.join("") : `<div class="note">No homes match. Widen the size range or the area to buy.</div>`}`;
+    $("qPrice").innerHTML = n ? (p.member_discount ? `${usd(p.price_cents)} <s class="muted" style="font-size:.5em;font-weight:500">${usd(p.full_price_cents)}</s>` : usd(p.price_cents)) : "";
+    $("qRate").textContent = n ? `(${n.toLocaleString()} homes${p.minimum_applied ? `, $${(p.minimum_cents / 100).toFixed(0)} minimum order` : ""}${r.measured_after ? ", measured after you buy" : ""})` : "";
+    $("memberLine").innerHTML = r.member ? '<span class="ok">Member price: half off.</span>'
+      : `<span class="muted">Members pay half: ${n ? usd(Math.round((p.full_price_cents || 0) / 2)) : "–"} for this list. <a href="/join">Membership</a></span>`;
+    $("bBtn").disabled = !r.can_buy;
+    $("bBtn").textContent = !n ? "Nothing to buy" : product === "premier" ? `Buy Premier list · ${usd(p.price_cents)}` : `Buy ${n.toLocaleString()} homes · ${usd(p.price_cents)}`;
+    $("cN").value = n || selCount(); calc();
+  }
+
+  // ---- area tabs and the drawing tool
+  function setArea(mode) {
+    areaMode = mode;
+    document.querySelectorAll(".areatabs button").forEach((b) => { b.classList.toggle("on", b.dataset.area === mode); b.setAttribute("aria-selected", b.dataset.area === mode); });
+    document.querySelector(".zipform").classList.toggle("hidden", mode !== "zip");
+    $("drawIntro").classList.toggle("hidden", mode !== "draw");
+    $("drawBar").classList.toggle("hidden", mode !== "draw");
+    document.querySelector(".dp .valuepick").classList.toggle("hidden", mode === "draw");
+    if (mode === "zip" && map) { clearDraw(false); }
+  }
+  document.querySelectorAll(".areatabs button").forEach((b) => b.onclick = () => {
+    setArea(b.dataset.area);
+    if (b.dataset.area === "draw") startDraw();
+  });
+  $("drawStart").onclick = () => startDraw();
+  function ensureDrawQ() {  // a drawn area has no single ZIP: give the page the same shape of data
+    if (!q || q.zip) {
+      q = { zip: null, drawn: true, count: 0, zip_total: 0, pricing: pricing, type_catalog: drawCatalog,
+            value_bands: { bands: [], labels: [] }, taken_types: [], locks: {}, columns: [] };
+      buildTypePicker(drawCatalog); markLocks();
+      if (window.__pvReset) window.__pvReset();
+    }
+  }
+  function startDraw() {
+    setArea("draw");
+    ensureDrawQ();
+    $("result").classList.remove("hidden");
+    if (!map) map = makeMap("zmap", cfg);
+    bindDraw();
+    if (zl) { map.removeLayer(zl); zl = null; }
+    if (!drawPoly && !drawPts.length) {
+      const c = cfg.home_center || [41.2565, -95.9345];
+      map.setView(c, 14);
+    }
+    setTimeout(() => map.invalidateSize(), 50);
+    clearDraw(true);
+    $("zmap").scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function clearDraw(begin) {
+    drawPts = []; drawPoly = null; drawing = !!begin;
+    if (drawLine) { map.removeLayer(drawLine); drawLine = null; }
+    if (drawShape) { map.removeLayer(drawShape); drawShape = null; }
+    $("drawHint").textContent = begin ? "Click the map to add corners. Click the first corner (or Finish) to close the shape." : "";
+    $("zmap").classList.toggle("drawing", !!begin);
+    if (begin) renderSel(null, "Draw your area on the map to see the homes and the price.");
+  }
+  function redrawLine() {
+    if (drawLine) map.removeLayer(drawLine);
+    drawLine = L.polyline(drawPts, { color: "#f59e0b", weight: 3, dashArray: "6 6" }).addTo(map);
+    drawPts.forEach((p, i) => i === 0 && L.circleMarker(p, { radius: 7, color: "#f59e0b", fillColor: "#fff", fillOpacity: 1 }).addTo(drawLine));
+  }
+  function finishDraw() {
+    if (drawPts.length < 3) { $("drawHint").textContent = "Add at least 3 corners first."; return; }
+    drawing = false;
+    $("zmap").classList.remove("drawing");
+    if (drawLine) { map.removeLayer(drawLine); drawLine = null; }
+    const ring = drawPts.map((p) => [+p[1].toFixed(6), +p[0].toFixed(6)]);
+    ring.push(ring[0]);
+    drawPoly = { type: "Polygon", coordinates: [ring] };
+    if (drawShape) map.removeLayer(drawShape);
+    drawShape = L.polygon(drawPts, { color: "#f59e0b", weight: 3, fillOpacity: 0.12 }).addTo(map);
+    $("drawHint").textContent = "Area drawn. Redraw or Clear to change it.";
+    if (window.__pvReset) window.__pvReset();
+    updatePrice();
+  }
+  function bindDraw() {
+    if (!map || map.__drawBound) return;
+    map.__drawBound = true;
+    map.on("click", (e) => {
+      if (areaMode !== "draw" || !drawing) return;
+      const p = [e.latlng.lat, e.latlng.lng];
+      if (drawPts.length >= 3) {  // clicked near the first corner: close it
+        const a = map.latLngToContainerPoint(drawPts[0]), b = map.latLngToContainerPoint(p);
+        if (a.distanceTo(b) < 14) return finishDraw();
+      }
+      drawPts.push(p); redrawLine();
+      $("drawHint").textContent = `${drawPts.length} corner${drawPts.length === 1 ? "" : "s"}. ${drawPts.length >= 3 ? "Click the first corner or Finish to close." : "Keep clicking."}`;
+    });
+  }
+  $("drawFinish").onclick = finishDraw;
+  $("drawUndo").onclick = () => { if (drawing && drawPts.length) { drawPts.pop(); redrawLine(); } };
+  $("drawRedo").onclick = () => { clearDraw(true); };
+  $("drawClear").onclick = () => { clearDraw(false); renderSel(null, "Area cleared. Draw a new one, or switch to Search a ZIP."); drawing = true; $("zmap").classList.add("drawing"); };
 
   const pre = new URLSearchParams(location.search).get("zip");
   if (pre) { $("zip").value = pre; check(); }

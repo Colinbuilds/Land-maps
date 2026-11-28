@@ -32,8 +32,13 @@
     if (o.contact && o.contact.name) $("bizName").textContent = o.contact.name;
     $("bizContact").textContent = [o.contact?.phone, o.contact?.email].filter(Boolean).join(" · ");
     const head = `<div class="muted small">Order ${esc(o.id)} · ${esc(o.email)}</div>
-      <h1 style="margin:0">ZIP ${esc(o.zip)}: ${o.count.toLocaleString()} properties</h1>
-      <div class="muted">${usd(o.amount_cents)}${(o.type_labels || []).length ? ` · ${(o.type_labels || []).map(esc).join(", ")}` : ""}</div>`;
+      <h1 style="margin:0">${o.area_label ? esc(o.area_label) : "ZIP " + esc(o.zip)}: ${o.count.toLocaleString()} homes</h1>
+      ${o.filter_label ? `<div><b>Job size:</b> ${esc(o.filter_label)}</div>` : ""}
+      <div class="muted">${usd(o.amount_cents)}${(o.type_labels || []).length ? ` · ${(o.type_labels || []).map(esc).join(", ")}` : ""}</div>
+      ${o.columns && o.columns.length ? `<div class="small muted">Spreadsheet columns: ${o.columns.map((c) => esc(c.label)).join(", ")}</div>` : ""}
+      ${o.flagged ? `<div class="small muted">${o.flagged.toLocaleString()} of these homes are flagged "review" (worth a second look).</div>` : ""}
+      ${o.price && o.price.minimum_applied ? `<div class="small muted">Includes the minimum order.</div>` : ""}
+      ${o.price && o.price.member_discount ? `<div class="small muted">Member price: half off ${usd(o.price.full_price_cents)}.</div>` : ""}`;
     let body = "";
     if (o.status === "awaiting_payment") {
       body = o.stripe
