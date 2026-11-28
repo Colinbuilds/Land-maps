@@ -155,14 +155,14 @@ STARTER = [
 - Build 5 'proof' reports for well-known Omaha neighborhoods (Elkhorn, Papillion, Gretna, Bennington, Lincoln SW).
 
 WEEK 2: FOUNDING MEMBERS (target 20 companies)
-- Founding offer: $115/mo locked for life, 25 free ZIP-list properties, 1 free exclusive ZIP review call.
+- Founding offer: $115/mo locked for life, a free 15-home ZIP preview (5 of their own customers + 10 more), 1 free exclusive ZIP review call.
 - Direct outreach: 10 lawn, 5 snow, 5 roofing/gutter companies per day (Google Maps + Facebook groups).
 - Offer a free report on their own house or a customer's house, live on the call.
 
 WEEK 3: CONTENT ENGINE
 - 1 short video a day (TikTok / Reels / Shorts) from the scripts here.
 - 2 posts a week in Omaha/Lincoln contractor Facebook groups (value first, link second).
-- Email every company that took a free sample.
+- Email every company that took a free preview.
 
 WEEK 4: SCALE WHAT WORKS
 - Turn the best video into a $10-20/day Facebook + Instagram ad aimed at business owners within 50 miles of Omaha.
@@ -209,13 +209,13 @@ Quick one: we measured every home in {ZIP}: lawn square feet, driveway, sidewalk
 
 Put in your price per 1,000 sq ft once, and every home gets a price. We'll even make the postcards (their house from above + your price), you just print and mail.
 
-Want 25 homes from {ZIP} free so you can see it? Reply "yes" and I'll send the sheet.
+Want to check it on homes you already know? Pick 5 of your customers' addresses in {ZIP} and we'll show those plus 10 more homes, free. Reply "yes" or try it at homeserviceinfo.com.
 
 {your name}
 Home Service Info · homeserviceinfo.com"""),
-    ("email", "Follow-up after a free sample", "ready", ["Email"], """Subject: how did the {ZIP} sample look?
+    ("email", "Follow-up after a free preview", "ready", ["Email"], """Subject: how did the {ZIP} preview look?
 
-Hi {first name}, did the 25 homes line up with what you see on site?
+Hi {first name}, did the 5 homes you picked line up with what you see on site? The other 10 are a fair look at the rest of {ZIP}.
 
 Two things members use most:
 1. Start new report: any address, 30 seconds, priced, and the homeowner lands in your CRM.

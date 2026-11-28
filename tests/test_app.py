@@ -109,6 +109,10 @@ def test_exclusive_zip_locks_and_pricing(monkeypatch):
     assert taken == ["lawn"] and rows[0]["lawn_sqft"] == "" and rows[0]["driveway_sqft"] == 600
     ds.release_lock(z, "lawn")
     assert ds.sale_blocked(z, ["lawn"], "standard", b) is None
+    # exclusives are no longer sold (locks already bought stay in force until they end)
+    import pytest
+    with pytest.raises(PermissionError):
+        ds.create_order(a, z, ["R"], ["lawn"], product="exclusive", account_email=a)
 
 
 def test_crm_flow_and_command_center():
@@ -522,3 +526,436 @@ def test_learning_from_fixes(monkeypatch, tmp_path):
     # once outlines start pre-shifted, a roofer who leaves them alone keeps the shift
     L.record_roof_edit("roof_cty", "p6", e, e)
     assert 2.5 < L.roof_shift_ft("roof_cty")[0] < 3.5
+
+
+# ---------------------------------------------------------------- free preview (5 yours + 10 more)
+def _fake_zip(monkeypatch, n_homes=40, sheet=True):
+    """A ZIP (the unit square) with n measured homes; addresses 'N Oak St'."""
+    from shapely.geometry import Point, box
+    from app import datastore as ds
+    homes = [{"pin": f"test_xx:{i}", "address": f"{i} OAK ST", "lot_sqft": 3000 + 400 * i, "building_sqft": 1500,
+              "lawn_sqft": 2000 + 100 * i, "living_sqft": 1400, "x": 0.02 * (i % 40) + 0.1, "y": 0.5} for i in range(1, n_homes + 1)]
+    by_pin = {h["pin"]: h for h in homes}
+    monkeypatch.setattr(ds.bulk, "zip_polygon", lambda z: box(0, 0, 1, 1))
+    monkeypatch.setattr(ds, "dataset_ready", lambda z, c: sheet)
+    monkeypatch.setattr(ds, "read_dataset", lambda z, c: [{k: v for k, v in h.items() if k not in ("x", "y")} for h in homes])
+    monkeypatch.setattr(ds, "mailer", None, raising=False)
+
+    class M:
+        c = {"name": "Test County"}
+        def parcel_attrs(self, a):
+            return {"pin": a["PIN"], "address": a["ADDR"]}
+    monkeypatch.setattr(ds, "measurer_for", lambda cid: M())
+    import app.mailer
+    monkeypatch.setattr(app.mailer, "notify_owner", lambda *a, **k: None)
+
+    def resolve(text):
+        t = " ".join(text.upper().replace(",", " ").split())
+        if t.startswith("FAR "):  # an address in another ZIP
+            return "test_xx", {"attributes": {"PIN": "999", "ADDR": "1 FAR RD"}, "geometry": Point(5, 5)}, "1 Far Rd"
+        if t.startswith("NOWHERE"):
+            raise LookupError("Check the spelling.")
+        num = int(t.split()[0])
+        if num not in range(1, 200):
+            raise LookupError("no such house")
+        h = by_pin.get(f"test_xx:{num}") or {"x": 0.5, "y": 0.5}
+        # "12 Oak Street" and "12 oak st" are the same lot
+        return "test_xx", {"attributes": {"PIN": str(num), "ADDR": f"{num} OAK ST"}, "geometry": Point(h["x"], h["y"])}, f"{num} Oak St"
+    return ds, homes, resolve
+
+
+def _zspec(z="99999"):
+    from app import selection as sel
+    return sel.normalize({"area": {"zip": z}, "types": ["lawn"]})
+
+
+def test_preview_five_yours_plus_ten_more(monkeypatch):
+    ds, homes, resolve = _fake_zip(monkeypatch)
+    mine = ["3 Oak St", "10 oak st", "17 Oak St", "25 Oak St", "31 Oak St"]
+    out = ds.take_preview("a@b.co", None, _zspec(), mine, resolve)
+    pins = [r["pin"] for r in out["rows"]]
+    assert len(out["yours"]) == 5 and len(out["more"]) == 10 and len(out["rows"]) == 15
+    assert len(set(pins)) == 15  # no duplicates
+    assert {r["pin"] for r in out["yours"]} == {f"test_xx:{n}" for n in (3, 10, 17, 25, 31)}
+    assert not {r["pin"] for r in out["more"]} & {r["pin"] for r in out["yours"]}
+    lawns = sorted(r["lawn_sqft"] for r in out["more"])  # a mix of sizes, small to large
+    assert lawns[0] <= 2300 and lawns[-1] >= 5800
+    # fewer than 5 is fine ("up to 5"), and so is none
+    assert len(ds.take_preview("a@b.co", None, _zspec(), ["3 Oak St"], resolve)["rows"]) == 11
+    assert len(ds.take_preview("a@b.co", None, _zspec(), [], resolve)["rows"]) == 10
+
+
+def test_preview_rejects_duplicates_outside_and_unmeasured(monkeypatch):
+    import pytest
+    ds, homes, resolve = _fake_zip(monkeypatch)
+    with pytest.raises(ds.PreviewProblem) as e:
+        ds.take_preview("a@b.co", None, _zspec(), ["3 Oak St", "3 OAK ST.", "4 Oak St", "4 oak street", "5 Oak St"], resolve)
+    assert {p["index"]: p["problem"] for p in e.value.problems} == {1: "duplicate", 3: "duplicate"}
+    monkeypatch.setattr(ds, "_measured_row", lambda cid, f: None)
+    with pytest.raises(ds.PreviewProblem) as e:
+        ds.take_preview("a@b.co", None, _zspec(), ["Far Rd 1", "Nowhere 9", "150 Oak St", "4 Oak St", "5 Oak St"], resolve)
+    assert {p["index"]: p["problem"] for p in e.value.problems} == {0: "outside_zip", 1: "not_found", 2: "no_measurements"}
+    assert "isn't in ZIP 99999" in e.value.problems[0]["message"]
+    with pytest.raises(ds.PreviewProblem):  # at most 5
+        ds.take_preview("a@b.co", None, _zspec(), [f"{i} Oak St" for i in range(1, 7)], resolve)
+
+
+def test_preview_limited_coverage(monkeypatch):
+    ds, homes, resolve = _fake_zip(monkeypatch, n_homes=12)
+    out = ds.take_preview("a@b.co", None, _zspec(), ["1 Oak St", "2 Oak St", "3 Oak St", "4 Oak St", "5 Oak St"], resolve)
+    assert len(out["yours"]) == 5 and len(out["more"]) == 7  # the actual count, not an error
+    assert "7 other homes match" in out["notes"][0]
+
+
+def test_preview_endpoint(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+    ds, homes, resolve = _fake_zip(monkeypatch)
+    monkeypatch.setattr(main, "_resolver_for", lambda spec: resolve)
+    monkeypatch.setattr(ds, "add_owners", lambda rows, z, c: rows)
+    monkeypatch.setattr(ds, "taken_by_others", lambda z, e=None: [])
+    monkeypatch.setattr(ds, "SAMPLES_PER_IP_PER_DAY", 10 ** 6)  # repeated test runs share one connection
+    c = TestClient(main.app)
+    email = f"preview{__import__('time').time_ns()}@test.co"
+    spec = {"area": {"zip": "99999"}, "filter": {"measure": "lawn", "min": 4000, "max": 6000}, "types": ["lawn"]}
+    body = {"email": email, "spec": spec, "addresses": ["3 Oak St", "3 Oak St", "4 Oak St", "Far Rd 1", "6 Oak St"]}
+    r = c.post("/api/data/sample", json=body)
+    assert r.status_code == 422 and {p["problem"] for p in r.json()["problems"]} == {"duplicate", "outside_zip"}
+    r = c.post("/api/data/sample/address", json={"spec": spec, "address": "Far Rd 1"})
+    assert r.status_code == 422 and r.json()["problems"][0]["problem"] == "outside_zip"
+    assert c.post("/api/data/sample/address", json={"spec": spec, "address": "7 Oak St"}).json()["ok"]
+    # chosen homes can be any size; the matching homes come from the filtered results
+    body["addresses"] = ["3 Oak St", "8 Oak St", "4 Oak St", "20 Oak St", "6 Oak St"]
+    body["quote"] = {"rate": 6, "minimum": 30, "tiers": [{"from": 5000, "rate": 5}]}
+    r = c.post("/api/data/sample", json=body)  # the failed try didn't use up the free preview
+    j = r.json()
+    assert r.status_code == 200 and j["yours"] == 5 and j["more"] == 10 and len({x["pin"] for x in j["rows"]}) == 15
+    assert all(4000 <= x["lawn_sqft"] <= 6000 for x in j["rows"] if x["group"] == "more")
+    assert any(x["lawn_sqft"] < 4000 for x in j["rows"] if x["group"] == "yours")
+    head = j["csv"].splitlines()[0]
+    assert head.startswith("Group,") and head.endswith("Your price (illustrative)")
+    assert "Your properties" in j["csv"] and "Matching homes" in j["csv"]
+    # quote rule: size/1000 x tier rate, never under the minimum
+    q = {x["lawn_sqft"]: x["quote"] for x in j["rows"]}
+    for size, price in q.items():
+        assert price == round(max(30, size / 1000 * (5 if size >= 5000 else 6)), 2)
+    assert c.post("/api/data/sample", json=body).status_code == 429  # one preview per email
+
+
+def test_preview_measured_on_the_spot(monkeypatch):
+    """No sheet yet: parcels are measured now; a lot that can't be measured is
+    swapped for one of similar size, and the 5 chosen never come back as 'more'."""
+    from shapely.geometry import box
+    ds, homes, resolve = _fake_zip(monkeypatch, sheet=False)
+    items = [("test_xx", {"attributes": {"PIN": h["pin"].split(":")[1], "ADDR": h["address"]},
+                          "geometry": box(h["x"], 0.5, h["x"] + 0.001 * (1 + i), 0.501)}) for i, h in enumerate(homes)]
+    monkeypatch.setattr(ds.bulk, "_zip_parcels", lambda z, c: list(items))
+    monkeypatch.setattr(ds.bulk, "preview", lambda z, c: {"count": len(items), "by_county": {"Test County": len(items)}})
+    monkeypatch.setattr(ds.bulk, "value_bands", lambda z, c: {"bands": [], "labels": [], "total": len(items)})
+    by_pin = {h["pin"]: h for h in homes}
+
+    def measured(cid, f):
+        pin = f"test_xx:{f['attributes']['PIN']}"
+        if pin == "test_xx:22":
+            return None  # can't be measured
+        h = by_pin[pin]
+        return {"pin": pin, "address": h["address"], "lot_sqft": h["lot_sqft"], "building_sqft": 1500, "lawn_sqft": 2000, "living_sqft": 1400}
+    monkeypatch.setattr(ds, "_measured_row", measured)
+    out = ds.take_preview("a@b.co", None, _zspec(), ["3 Oak St", "10 Oak St", "17 Oak St", "25 Oak St", "31 Oak St"], resolve)
+    pins = [r["pin"] for r in out["rows"]]
+    assert len(out["yours"]) == 5 and len(out["more"]) == 10 and len(set(pins)) == 15
+    assert "test_xx:22" not in pins
+
+
+# ---------------------------------------------------------------- selection: area + job size + columns
+def _two_zips(monkeypatch, n_a=400, n_b=200, extra_rows=None, value=50000):
+    """Two side-by-side ZIPs in Nebraska, 0.01 degrees wide: 11111 west, 22222
+    east; homes on a line across each. Driveways count up from 500 sq ft;
+    every 10th home has no driveway figure."""
+    from shapely.geometry import box
+    from app import datastore as ds, selection as sel
+    def rows_for(z, n, x0, start):
+        out = []
+        for i in range(n):
+            pin = f"test_xx:{z}-{i}"
+            out.append({"pin": pin, "address": f"{i} {z} Way", "zip": z, "county": "Test County", "lot_sqft": 5000 + 10 * i,
+                        "lawn_sqft": 3000 + 20 * i, "driveway_sqft": "" if i % 10 == 9 else 500 + 5 * i,
+                        "sidewalk_sqft": 100, "building_sqft": 1600, "living_sqft": 1500, "home_value": value,
+                        "quality": "review" if i % 25 == 0 else "ok", "lat": 41.005, "lon": x0 + (i + 0.5) / n * 0.00999})
+        return out
+    data = {"11111": rows_for("11111", n_a, -96.0, 0), "22222": rows_for("22222", n_b, -95.99, 0)}
+    for z, rows in (extra_rows or {}).items():
+        data[z] = data.get(z, []) + rows
+    monkeypatch.setattr(ds, "dataset_ready", lambda z, c: z in data)
+    monkeypatch.setattr(ds, "dataset_meta", lambda z, c: {"status": "ready", "finished": 1.7e9} if z in data else None)
+    monkeypatch.setattr(ds, "read_dataset", lambda z, c: [dict(r) for r in data.get(z, [])])
+    monkeypatch.setattr(ds, "taken_by_others", lambda z, e=None: [])
+    zp = {"11111": box(-96.0, 41.0, -95.99, 41.01), "22222": box(-95.99, 41.0, -95.98, 41.01)}
+    monkeypatch.setattr(ds.bulk, "zip_polygon", lambda z: zp[z])
+    monkeypatch.setattr(sel, "zips_in", lambda poly: sorted(z for z, g in zp.items() if g.intersects(poly)))
+    monkeypatch.setattr(ds, "pricing", lambda: dict(ds.DEFAULT_PRICING))
+    return ds, sel, data
+
+
+def _spec(**kw):
+    from app import selection as sel
+    s = {"area": {"zip": "11111"}, "types": ["driveway"]}
+    s.update(kw)
+    return sel.normalize(s)
+
+
+def test_selection_full_zip_and_price(monkeypatch):
+    ds, sel, data = _two_zips(monkeypatch)
+    b = sel.build(_spec())
+    assert b["count"] == 400 and b["price"]["price_cents"] == 4000  # 400 homes x 10c = $40
+    assert b["price"]["minimum_applied"] is False and b["flagged"] == 16
+    b = sel.build(_spec(area={"zip": "22222"}))
+    assert b["count"] == 200 and b["price"]["price_cents"] == 2500 and b["price"]["subtotal_cents"] == 2000  # $25 minimum
+    assert b["price"]["minimum_applied"] is True
+    # member: half, after the minimum (the current rule)
+    b = sel.build(_spec(area={"zip": "22222"}), member=True)
+    assert b["price"]["price_cents"] == 1250 and b["price"]["full_price_cents"] == 2500
+    # an extra column: +5c a home
+    b = sel.build(_spec(types=["driveway", "sidewalk"]))
+    assert b["types"] == ["driveway", "sidewalk"] and b["price"]["price_cents"] == 6000
+    assert [c for c in ("driveway_sqft", "sidewalk_sqft") if c in [k for k, _ in ds.columns_for(b["types"])]] == ["driveway_sqft", "sidewalk_sqft"]
+
+
+def test_selection_size_filter_inclusive_missing_and_zero(monkeypatch):
+    ds, sel, data = _two_zips(monkeypatch)
+    # driveway = 500 + 5i; 1000 sq ft is i=100 exactly
+    b = sel.build(_spec(filter={"measure": "driveway", "min": 1000}))
+    sizes = sorted(float(r["driveway_sqft"]) for r in b["rows"])
+    assert sizes[0] == 1000.0  # exactly at the threshold is in
+    assert b["missing"] == 40 and all(r["driveway_sqft"] != "" for r in b["rows"])  # no figure: left out
+    assert b["count"] == len([i for i in range(400) if i % 10 != 9 and 500 + 5 * i >= 1000])
+    b = sel.build(_spec(filter={"measure": "driveway", "min": 1000, "max": 1000}))
+    assert b["count"] == 1 and float(b["rows"][0]["driveway_sqft"]) == 1000.0  # both ends inclusive
+    b = sel.build(_spec(filter={"measure": "driveway", "min": 99999}))
+    assert b["count"] == 0 and b["price"]["price_cents"] == 0 and not sel.public_view(b)["can_buy"]
+    assert sel.describe_filter(_spec(filter={"measure": "driveway", "min": 1000})) == "Driveway: 1,000 sq ft and up"
+    assert sel.describe_filter(_spec(filter={"measure": "lawn", "min": 4000, "max": 10000})) == "Lawn: 4,000–10,000 sq ft"
+    import pytest
+    with pytest.raises(sel.SelectionError):
+        _spec(filter={"measure": "driveway", "min": 2000, "max": 1000})
+
+
+def test_selection_drawn_area_across_zips_counts_each_home_once(monkeypatch):
+    from shapely.geometry import box, mapping
+    # the same home listed in both ZIP sheets (a lot on the line) must count once
+    lon300 = -96.0 + 300.5 / 400 * 0.00999  # home 300 of ZIP A, inside the drawn area
+    dup = {"pin": "test_xx:11111-300", "address": "300 11111 Way", "zip": "22222", "lot_sqft": 1, "lawn_sqft": 1,
+           "driveway_sqft": 2000, "building_sqft": 1600, "home_value": 50000, "quality": "ok", "lat": 41.005, "lon": lon300}
+    ds, sel, data = _two_zips(monkeypatch, extra_rows={"22222": [dup]})
+    poly = mapping(box(-95.995, 41.002, -95.985, 41.008))  # east half of A, west half of B
+    b = sel.build(_spec(area={"polygon": poly}))
+    pins = [r["pin"] for r in b["rows"]]
+    assert len(pins) == len(set(pins))
+    assert {c["zip"] for c in b["coverage"]} == {"11111", "22222"}
+    assert all(-95.995 <= float(r["lon"]) <= -95.985 for r in b["rows"])
+    assert b["count"] == 200 + 100  # half of A's 400, half of B's 200
+    assert b["area_label"].startswith("Drawn area (2 ZIPs")
+    # bad shapes are refused server-side
+    import pytest
+    with pytest.raises(sel.SelectionError):
+        sel.normalize({"area": {"polygon": {"type": "Polygon", "coordinates": [[[-96, 41], [-95.99, 41.01], [-95.99, 41], [-96, 41.01], [-96, 41]]]}}})
+    with pytest.raises(sel.SelectionError):
+        sel.normalize({"area": {"polygon": {"type": "Polygon", "coordinates": [[[-96, 41], [-95.99, 41], [-96, 41]]]}}})
+    with pytest.raises(sel.SelectionError):  # far too big
+        sel.normalize({"area": {"polygon": mapping(box(-97, 40, -95, 42))}})
+
+
+def test_selection_lock_in_drawn_area_and_value_pricing(monkeypatch):
+    from shapely.geometry import box, mapping
+    ds, sel, data = _two_zips(monkeypatch)
+    monkeypatch.setattr(ds, "taken_by_others", lambda z, e=None: ["driveway"] if z == "22222" else [])
+    b = sel.build(_spec(area={"polygon": mapping(box(-95.995, 41.002, -95.985, 41.008))}))
+    assert b["count"] == 200 and any("ZIP 22222 is left out" in n for n in b["notes"])
+    # higher-value homes cost more under the existing home-value multipliers
+    ds2, sel2, _ = _two_zips(monkeypatch, value=900000)
+    b = sel2.build(_spec())
+    assert b["price"]["price_cents"] > 4000
+
+
+def test_selection_order_download_matches_checkout(monkeypatch):
+    import csv as _csv, io as _io
+    from fastapi.testclient import TestClient
+    from shapely.geometry import box, mapping
+    from app import main
+    ds, sel, data = _two_zips(monkeypatch)
+    monkeypatch.setattr(ds, "add_owners", lambda rows, z, c: rows)
+    monkeypatch.setattr(ds, "_email_new_order", lambda o: None)
+    monkeypatch.setattr(ds, "_email_ready", lambda oid: None)
+    import app.mailer
+    monkeypatch.setattr(app.mailer, "notify_owner", lambda *a, **k: None)
+    c = TestClient(main.app)
+    spec = {"area": {"polygon": mapping(box(-95.995, 41.002, -95.985, 41.008))},
+            "filter": {"measure": "driveway", "min": 1000}, "types": ["driveway", "sidewalk"]}
+    q = c.post("/api/data/select/quote", json={"spec": spec}).json()
+    assert q["count"] > 0 and q["controls"] == "driveway" and q["can_buy"]
+    assert "sidewalk_sqft" in [x["key"] for x in q["columns"]]
+    o = c.post("/api/data/select/order", json={"email": "buyer@test.co", "spec": spec}).json()
+    assert o["amount_cents"] == q["price"]["price_cents"] and o["count"] == q["count"]  # checkout = quote
+    expected_pins = {r["pin"] for r in sel.build(sel.normalize(spec))["rows"]}
+    ds.mark_paid(o["id"], "test")
+    # measurements change after purchase: the paid download must not
+    for z in data:
+        for r in data[z]:
+            if r["driveway_sqft"] != "":
+                r["driveway_sqft"] = 1
+    r = c.get(f"/api/data/order/{o['id']}/csv?t={o['token']}")
+    assert r.status_code == 200
+    rows = list(_csv.DictReader(_io.StringIO(r.text)))
+    head = r.text.splitlines()[0].split(",")
+    labels = dict(ds.COLUMNS)
+    assert head == [labels[k] for k, _ in ds.columns_for(["driveway", "sidewalk"])]  # exactly the columns shown
+    assert len(rows) == q["count"] == len(expected_pins)
+    assert {x["Property id"] for x in rows} == expected_pins  # exactly the homes paid for
+    assert min(float(x["Driveway sq ft"]) for x in rows) >= 1000  # frozen at purchase, not the later edit
+    view = c.get(f"/api/data/order/{o['id']}?t={o['token']}").json()
+    assert view["status"] == "ready" and view["area_label"].startswith("Drawn area") and view["filter_label"] == "Driveway: 1,000 sq ft and up"
+    # nothing matches: no order
+    spec["filter"]["min"] = 10 ** 6
+    assert c.post("/api/data/select/order", json={"email": "buyer@test.co", "spec": spec}).status_code == 404
+
+
+def test_showcase_sample_is_anonymous(monkeypatch, tmp_path):
+    from app import showcase
+    rows = [{"pin": f"x:{i}", "address": f"{i} Real St", "city": "Omaha", "zip": "68116", "owner": "REAL PERSON",
+             "owner_mailing": "1 Real St", "lat": 41.3, "lon": -96.1, "notes": "heavy tree cover" if i == 3 else "",
+             "lawn_sqft": 2000 + 100 * i, "driveway_sqft": 600, "home_value": 312000, "year_built": "1994",
+             "county": "Douglas County, NE", "quality": "review" if i == 3 else "ok"} for i in range(30)]
+    monkeypatch.setattr(showcase, "_source_rows", lambda limit_zips=6: rows)
+    monkeypatch.setattr(showcase, "_CACHE", tmp_path / "s.json")
+    s = showcase.sample()
+    assert s["available"] and len(s["rows"]) == 12
+    for r in s["rows"]:
+        assert not set(r) & showcase.HIDDEN
+        assert r["home_value"] == "$250k-$500k" and r["year_built"] == "1990s"
+    assert "Real St" not in s["csv"] and "REAL PERSON" not in s["csv"] and "68116" not in s["csv"]
+    assert s["flagged"]["quality"] == "review" and "tree" in s["flagged"]["reason"]
+    assert s["csv"].splitlines()[0].split(",")[:2] == ["County", "Lot sq ft"]
+
+
+def test_single_signin_admin_key_and_company(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main, accounts
+    monkeypatch.setattr(main, "ADMIN_TOKEN", "the-admin-key-123")
+    c = TestClient(main.app)
+    r = c.post("/api/signin", json={"email": "anything@x.co", "password": "the-admin-key-123"})
+    assert r.status_code == 200 and r.json() == {"admin": True, "next": "/command"}
+    r = c.post("/api/signin", json={"email": "", "password": "the-admin-key-123"})
+    assert r.json()["admin"]
+    em = f"co{__import__('time').time_ns()}@x.co"
+    accounts.create_company("Test Co", em, "goodpass1")
+    r = c.post("/api/signin", json={"email": em, "password": "goodpass1"})
+    assert r.status_code == 200 and r.json()["next"] in ("/reports", "/crm") and not r.json().get("admin")
+    assert c.post("/api/signin", json={"email": em, "password": "nope"}).status_code == 401
+
+
+def test_coupon_admin_key_is_100_percent_off(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+    ds, sel, data = _two_zips(monkeypatch)
+    monkeypatch.setattr(ds, "add_owners", lambda rows, z, c: rows)
+    monkeypatch.setattr(ds, "_email_new_order", lambda o: None)
+    monkeypatch.setattr(ds, "_email_ready", lambda oid: None)
+    import app.mailer
+    monkeypatch.setattr(app.mailer, "notify_owner", lambda *a, **k: None)
+    monkeypatch.setattr(main, "ADMIN_TOKEN", "owner-key-xyz")
+    c = TestClient(main.app)
+    spec = {"area": {"zip": "11111"}, "types": ["driveway"]}
+    r = c.post("/api/data/select/order", json={"email": "o@x.co", "spec": spec, "coupon": "WRONG"})
+    assert r.status_code == 400 and "isn't valid" in r.json()["detail"]
+    r = c.post("/api/data/select/order", json={"email": "o@x.co", "spec": spec, "coupon": "owner-key-xyz"})
+    j = r.json()
+    assert r.status_code == 200 and j["amount_cents"] == 0 and "checkout_url" not in j
+    o = ds.get_order(j["id"])
+    assert o["status"] == "ready" and o["amount_cents"] == 0 and "100% off" in (o["note"] or "")
+    assert c.get(f"/api/data/order/{j['id']}/csv?t={j['token']}").status_code == 200
+
+
+def test_home_demo_one_test_per_email(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main, datastore as ds
+    monkeypatch.setattr(main, "locate", lambda q, magicKey=None: {"suggested_pin": "test_xx:1"})
+    monkeypatch.setattr(main, "_demo_report", lambda pin: {"id": "r1", "token": "t", "address": "1 Test St", "summaries": []})
+    monkeypatch.setattr(ds, "DEMOS_PER_IP_PER_DAY", 10 ** 6)
+    import app.mailer
+    monkeypatch.setattr(app.mailer, "notify_owner", lambda *a, **k: None)
+    c = TestClient(main.app)
+    em = f"demo{__import__('time').time_ns()}@x.co"
+    assert c.post("/api/demo/try", json={"email": em, "address": "1 Test St"}).status_code == 200
+    r = c.post("/api/demo/try", json={"email": em.upper(), "address": "2 Test St"})
+    assert r.status_code == 429 and "already used" in r.json()["detail"]
+    assert c.post("/api/demo/try", json={"email": "not-an-email", "address": "1 Test St"}).status_code == 422
+    # a report that fails doesn't use up the test
+    monkeypatch.setattr(main, "locate", lambda q, magicKey=None: {"suggested_pin": None})
+    em2 = f"demo2{__import__('time').time_ns()}@x.co"
+    assert c.post("/api/demo/try", json={"email": em2, "address": "nowhere"}).status_code == 404
+    monkeypatch.setattr(main, "locate", lambda q, magicKey=None: {"suggested_pin": "test_xx:1"})
+    assert c.post("/api/demo/try", json={"email": em2, "address": "1 Test St"}).status_code == 200
+
+
+def test_member_list_feeds_crm_with_estimates(monkeypatch):
+    import time as _t
+    from app import accounts, crm, trades
+    ds, sel, data = _two_zips(monkeypatch, n_a=30)
+    monkeypatch.setattr(ds, "add_owners", lambda rows, z, c: [{**r, "owner": "DOE JANE"} for r in rows])
+    monkeypatch.setattr(ds, "_email_new_order", lambda o: None)
+    monkeypatch.setattr(ds, "_email_ready", lambda oid: None)
+    monkeypatch.setattr(ds, "feed_crm_async", lambda oid: ds.feed_crm(oid))  # run it now, not in a thread
+    em = f"crmfeed{_t.time_ns()}@x.co"
+    c = accounts.create_company("Feed Co", em, "password123")
+    accounts.set_membership(c["id"], _t.time() + 86400, active=True)
+    accounts.update_company(c["id"], crm=True, trades=["lawn", "concrete"], rates=trades.suggested_rates())
+    spec = {"area": {"zip": "11111"}, "filter": {"measure": "driveway", "min": 600}, "types": ["driveway", "lawn"]}
+    o = ds.create_selection_order(em, spec, member=True, account_email=em)
+    ds.mark_paid(o["id"], "test")
+    custs = crm.list_customers(c["id"])
+    n = ds.get_order(o["id"])["count"]
+    assert len(custs) == n and all(x["name"] == "Jane Doe" for x in custs)
+    ests = crm.list_estimates(c["id"])
+    assert len(ests) == n and all(e["total_cents"] > 0 for e in ests)  # priced from their rates
+    assert '"customers_added": %d' % n in ds.get_order(o["id"])["crm_fed"]
+    # the same homes again: no duplicate customers or estimates
+    o2 = ds.create_selection_order(em, spec, member=True, account_email=em)
+    ds.mark_paid(o2["id"], "test")
+    assert len(crm.list_customers(c["id"])) == n and len(crm.list_estimates(c["id"])) == n
+    # not a member: nothing goes into a CRM
+    em2 = f"nofeed{_t.time_ns()}@x.co"
+    accounts.create_company("No Feed Co", em2, "password123")
+    o3 = ds.create_selection_order(em2, spec, account_email=em2)
+    ds.mark_paid(o3["id"], "test")
+    assert not ds.get_order(o3["id"]).get("crm_fed")
+
+
+def test_company_logo_on_estimates_invoices_and_postcards(monkeypatch):
+    import base64, io as _io, time as _t
+    from PIL import Image
+    from fastapi.testclient import TestClient
+    from app import main, accounts, crm, postcard
+    c = TestClient(main.app)
+    em = f"logo{_t.time_ns()}@x.co"
+    co = accounts.create_company("Logo Co", em, "password123")
+    accounts.set_membership(co["id"], _t.time() + 86400, active=True)
+    assert c.post("/api/roof/login", json={"email": em, "password": "password123"}).status_code == 200
+    assert c.post("/api/roof/logo", json={"data": "data:image/png;base64," + base64.b64encode(b"not an image").decode()}).status_code == 400
+    buf = _io.BytesIO(); Image.new("RGBA", (1200, 300), (20, 120, 60, 255)).save(buf, "PNG")
+    r = c.post("/api/roof/logo", json={"data": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()})
+    assert r.status_code == 200 and r.json()["logo"]
+    img = c.get(f"/logo/{co['id']}.png")
+    assert img.status_code == 200 and Image.open(_io.BytesIO(img.content)).size[0] <= 800  # resized
+    # public estimate and invoice pages carry it
+    cu = crm.add_customer(co["id"], name="Pat Example", address="1 Example St")
+    est = crm.create_estimate(co["id"], cu["id"], [{"desc": "Mow", "qty": 1, "price_cents": 4000}])
+    d = c.get(f"/api/public/estimate/{est['token']}").json()
+    assert d["company"]["logo_url"].startswith(f"/logo/{co['id']}.png")
+    # postcards draw it (the PDF grows by the image)
+    comp = accounts.get_company(co["id"])
+    monkeypatch.setattr(postcard, "property_photo", lambda *a, **k: (_ for _ in ()).throw(LookupError("no photo in tests")))
+    dd = {"pin": "x:1", "address": "1 Example St", "owner": "DOE JANE", "yard": {"lawn_sqft": 5000, "lot_sqft": 9000}}
+    with_logo = postcard.render_postcard(dd, comp, "lawn")
+    without = postcard.render_postcard(dd, {**comp, "logo": None}, "lawn")
+    assert len(with_logo) > len(without) + 200
+    assert not c.delete("/api/roof/logo").json()["logo"] and c.get(f"/logo/{co['id']}.png").status_code == 404

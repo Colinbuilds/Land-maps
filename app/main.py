@@ -515,6 +515,34 @@ def roof_login(body: RoofLogin, request: Request):
     return r
 
 
+@app.post("/api/signin")
+def signin(body: RoofLogin, request: Request):
+    """The one sign-in form. The admin key as the password opens the owner's
+    command center (whatever the email box says); anything else is a normal
+    company sign-in. One lockout counter, so company sign-ins never count as
+    wrong admin keys."""
+    ip, em = _client_ip(request), (body.email or "").strip().lower()
+    wait = safety.locked("login:" + ip, "email:" + em, "admin:" + ip)
+    if wait:
+        raise HTTPException(429, f"Too many wrong passwords. Try again in {wait // 60 + 1} minutes, or reset your password.")
+    pw = (body.password or "").strip()
+    if ADMIN_TOKEN and pw and hmac.compare_digest(pw.encode(), ADMIN_TOKEN.encode()):
+        safety.succeeded("login:" + ip, "email:" + em, "admin:" + ip)
+        safety.log(ip, "POST", "/api/signin", 200, "owner signed in")
+        return {"admin": True, "next": "/command"}
+    c = accounts.login(body.email, body.password) if em else None
+    if not c:
+        safety.failed("login:" + ip, "email:" + em)
+        if not em:
+            raise HTTPException(401, "Enter your email and password.")
+        raise HTTPException(401, "Wrong email or password.")
+    safety.succeeded("login:" + ip, "email:" + em)
+    r = JSONResponse({**c, "next": "/crm" if c.get("crm") else "/reports"})
+    r.set_cookie(ROOF_COOKIE, accounts.make_session(c["id"]), max_age=30 * 86400, httponly=True,
+                 samesite="lax", secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
+    return r
+
+
 @app.post("/api/roof/logout")
 def roof_logout():
     r = JSONResponse({"ok": True})
@@ -1037,7 +1065,41 @@ class DemoReq(BaseModel):
 @app.post("/api/demo/report", dependencies=[Depends(admin)])
 def demo_report(body: DemoReq):
     """A full property report for one address, free, plus every trade's numbers."""
+    return _demo_report(body.pin)
+
+
+class PublicDemoReq(BaseModel):
+    email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    address: str = Field(min_length=3, max_length=200)
+    magicKey: str | None = Field(default=None, max_length=400)
+
+
+@app.post("/api/demo/try")
+def demo_try(body: PublicDemoReq, request: Request):
+    """The home-page demo: one full report on any address, for an email (one
+    test per email). Nothing is charged; the owner hears about it."""
+    ip = _client_ip(request)
+    why = datastore.demo_allowed(body.email, ip)
+    if why:
+        raise HTTPException(429, why)
+    loc = locate(body.address, body.magicKey)
+    pin = loc.get("suggested_pin")
+    if not pin:
+        raise HTTPException(404, "We couldn't find a property lot at that address. Pick it from the suggestions.")
+    out = _demo_report(pin)
+    datastore.record_demo(body.email, ip, pin)  # only a report that worked uses the test
+    try:
+        from . import mailer
+        mailer.notify_owner(f"Home-page demo: {body.email}", f"{body.email} ran a free report on {out.get('address')}.\n"
+                                                             f"A good time to follow up.", reply_to=body.email)
+    except Exception:
+        pass
+    return out
+
+
+def _demo_report(pin: str):
     from . import trades
+    body = DemoReq(pin=pin)
     try:
         info = roofreport.list_structures(body.pin)
         ids = [s_["id"] for s_ in info["structures"] if s_["id"] == 0 or s_["plan_sqft"] >= 250]
@@ -1170,27 +1232,201 @@ def data_quote(request: Request, zip: str, classes: str = "R", types: str = "law
 
 class SampleReq(BaseModel):
     email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-    zip: str
+    zip: str | None = None             # older pages: a whole ZIP
     classes: list[str] = ["R"]
+    spec: dict | None = None           # area + job size + columns (same as the purchase)
+    # up to 5 addresses the contractor already services (checked server-side)
+    addresses: list[str] = Field(default_factory=list, max_length=10)
+    quote: dict | None = None          # {rate per 1,000 sq ft, minimum, tiers: [{from, rate}]} (illustrative)
+
+
+class PreviewAddressReq(BaseModel):
+    zip: str | None = None
+    classes: list[str] = ["R"]
+    spec: dict | None = None
+    address: str = Field(min_length=1, max_length=200)
+
+
+def _sample_spec(zip_: str | None, classes: list[str], spec: dict | None) -> dict:
+    from . import selection as sel
+    if spec:
+        return sel.normalize(spec)
+    return sel.normalize({"area": {"zip": _zip5(zip_ or "")}, "classes": classes})
+
+
+def _preview_resolver(zip_code: str | None, extent=None):
+    """Address text -> (county, full parcel feature, matched address), using the
+    same geocoder and lot finder as reports. For a ZIP, that ZIP is added when
+    the address doesn't name one; for a drawn area, the search is limited to
+    around the drawing."""
+    import re
+
+    def resolve(text: str):
+        q = text.strip()
+        if zip_code and not re.search(r"\b\d{5}\b", q):
+            q = f"{q}, {zip_code}"
+        W, S, E, N = extent or _region_bbox()
+        d = get_json(_GEOCODER + "/findAddressCandidates", {"SingleLine": q, "outSR": 4326, "maxLocations": 3, "f": "json",
+                                                           "countryCode": "USA", "forStorage": "false",
+                                                           "searchExtent": f"{W},{S},{E},{N}"}, ttl=86400)
+        cands = [c for c in d.get("candidates", []) if c.get("score", 0) >= 80]
+        if not cands:
+            raise LookupError("Check the spelling, or pick it from the suggestions.")
+        best = cands[0]
+        lat, lon = best["location"]["y"], best["location"]["x"]
+        cid = counties.county_at(lon, lat)
+        if not cid:
+            raise LookupError("That address is outside the areas we cover.")
+        hit = _parcel_at(lat, lon, cid, best["address"])
+        if not hit:
+            raise LookupError("No property lot found at that address.")
+        m = measurer_for(cid)
+        full = m.get_parcel(hit["attributes"][m.pf["pin"]]) or hit
+        return cid, full, best["address"]
+    return resolve
+
+
+def _resolver_for(spec: dict):
+    if spec["area"].get("zip"):
+        return _preview_resolver(spec["area"]["zip"])
+    from . import selection as sel
+    w, s_, e, n = sel.area_polygon(spec).bounds
+    pad = 0.02
+    return _preview_resolver(None, (w - pad, s_ - pad, e + pad, n + pad))
+
+
+def _preview_error(e):
+    return JSONResponse({"detail": str(e), "problems": e.problems}, status_code=422)
+
+
+@app.post("/api/data/sample/address")
+def data_sample_address(body: PreviewAddressReq):
+    """Check one address for the free preview as it's picked (inside the
+    selected area, a real lot, measurable). The preview checks them all again."""
+    from . import selection as sel
+    try:
+        spec = _sample_spec(body.zip, _classes(body.classes), body.spec)
+        b = sel.build(spec)
+        area_name = f"ZIP {spec['area']['zip']}" if spec["area"].get("zip") else "the area you drew"
+        c = datastore.check_preview_address(area_name, spec["classes"], body.address, _resolver_for(spec),
+                                            sel.area_polygon(spec), [x["zip"] for x in b.get("coverage") or []])
+    except datastore.PreviewProblem as e:
+        return _preview_error(e)
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "pin": c["pid"], "address": c["address"]}
 
 
 @app.post("/api/data/sample")
 def data_sample(body: SampleReq, request: Request):
-    z = _zip5(body.zip)
+    """Free preview: up to 5 of the contractor's addresses + up to 10 homes
+    from the actual filtered purchase results, with an illustrative quote."""
+    from . import selection as sel
+    try:
+        spec = _sample_spec(body.zip, _classes(body.classes), body.spec)
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
     why = datastore.sample_allowed(body.email, _client_ip(request))
     if why:
         raise HTTPException(429, why)
     try:
-        rows = datastore.add_owners(datastore.take_sample(body.email, _client_ip(request), z, _classes(body.classes)),
-                                    z, _classes(body.classes))
+        out = datastore.take_preview(body.email, _client_ip(request), spec, body.addresses, _resolver_for(spec), body.quote)
+    except datastore.PreviewProblem as e:
+        return _preview_error(e)
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
     except LookupError as e:
         raise HTTPException(404, str(e))
+    rows = out["rows"]
+    for z in sorted({r.get("zip") for r in rows if r.get("zip")}):
+        rows = datastore.add_owners(rows, z, spec["classes"])
     c = _session_company(request)
-    rows, taken = datastore.strip_locked(rows, z, (c or {}).get("email"))
-    taken_cols = {c for k, _, cs in datastore.MEASURE_TYPES if k in taken for c in cs}
-    cols = [(k, l) for k, l in datastore.COLUMNS if k not in taken_cols]
-    return {"zip": z, "columns": [{"key": k, "label": l} for k, l in cols], "rows": rows,
-            "csv": datastore.to_csv(rows, cols), "keys": [k for k, _ in cols], "taken_types": taken}
+    if spec["area"].get("zip"):
+        rows, taken = datastore.strip_locked(rows, spec["area"]["zip"], (c or {}).get("email"))
+    else:
+        taken = []
+    # the same columns as the paid export, plus the illustrative quote
+    cols = [(k, l) for k, l in datastore.columns_for(spec["types"])
+            if k not in {cc for kk, _, cs in datastore.MEASURE_TYPES if kk in taken for cc in cs}]
+    for r in rows:
+        r["group_label"] = "Your properties" if r.get("group") == "yours" else "Matching homes"
+    csv_cols = [("group", "Group")] + cols + ([("quote", "Your price (illustrative)")] if body.quote else [])
+    csv_rows = [{**r, "group": r["group_label"]} for r in rows]
+    return {"zip": spec["area"].get("zip"), "area_label": out["area_label"], "filter_label": out["filter_label"],
+            "measure": out["measure"], "match_count": out["match_count"], "notes": out["notes"], "token": out["token"],
+            "columns": [{"key": k, "label": l} for k, l in cols], "rows": rows,
+            "csv": datastore.to_csv(csv_rows, csv_cols), "keys": [k for k, _ in cols], "taken_types": taken,
+            "yours": sum(1 for r in rows if r.get("group") == "yours"),
+            "more": sum(1 for r in rows if r.get("group") == "more")}
+
+
+@app.get("/api/data/showcase")
+def data_showcase():
+    """Real measured rows with everything that identifies a home removed, and
+    a flagged example. Same columns as the paid export (minus the identifying ones)."""
+    from . import showcase
+    return showcase.sample()
+
+
+@app.get("/api/data/showcase/postcard")
+def data_showcase_postcard():
+    """A finished sample postcard: made-up owner and address, real measurements."""
+    from . import showcase
+    try:
+        return showcase.postcard()
+    except Exception as e:
+        return {"available": False, "error": str(e)[:200]}
+
+
+_MEASURE_TRADE = {"lawn": "lawn", "driveway": "concrete", "sidewalk": "snow", "patios": "concrete",
+                  "beds": "landscaping", "walls": "siding", "building": "hvac"}
+_postcards_made: dict = {}
+
+
+class PreviewPostcardReq(BaseModel):
+    token: str = Field(min_length=8, max_length=64)
+    row: dict
+    quote: dict | None = None
+    company: str | None = Field(default=None, max_length=80)
+    phone: str | None = Field(default=None, max_length=40)
+
+
+@app.post("/api/data/preview/postcard")
+def data_preview_postcard(body: PreviewPostcardReq):
+    """One finished postcard for a home in the buyer's free preview, priced at
+    the rate they entered. (Postcards for a whole list stay a paid Premier
+    feature.)"""
+    from . import postcard, selection as sel
+    pin = str(body.row.get("pin") or "")
+    if pin not in datastore.preview_pins(body.token):
+        raise HTTPException(404, "That home isn't in your preview.")
+    n = _postcards_made.get(body.token, 0)
+    if n >= 5:
+        raise HTTPException(429, "That's enough sample postcards for one preview.")
+    _postcards_made[body.token] = n + 1
+    measure = body.row.get("size_measure")
+    num = lambda k: datastore._num_or_none(body.row.get(k))
+    yard = {k: num(k) for k, _ in datastore.COLUMNS if k.endswith("_sqft") or k.endswith("_ft")}
+    d = {"pin": pin, "address": body.row.get("address"), "city": body.row.get("city"), "zip": body.row.get("zip"),
+         "owner": body.row.get("owner"), "yard": yard,
+         "walls": {"gross_wall_sqft": num("wall_sqft"), "est_openings": num("est_windows")}}
+    trade = _MEASURE_TRADE.get(measure)
+    price = datastore.quote_price(sel.size_of(body.row, measure), body.quote)
+    comp = {"name": body.company or "Your Company Name", "phone": body.phone or "(402) 555-0100", "brand_color": "#15803d"}
+    pr = {"price": price, "label": "estimate", "text": f"${price:,.0f} estimate"} if price else None
+    pdf = postcard.render_postcard(d, comp, trade, price_override=pr)
+    import base64 as _b64
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(pdf)
+    pages = []
+    for i in range(len(doc)):
+        im = doc[i].render(scale=1.4).to_pil()
+        b_ = io.BytesIO()
+        im.save(b_, "JPEG", quality=82)
+        pages.append("data:image/jpeg;base64," + _b64.b64encode(b_.getvalue()).decode())
+    return {"pages": pages, "price": price}
 
 
 class OrderReq(BaseModel):
@@ -1217,6 +1453,88 @@ def data_order(body: OrderReq, request: Request):
         raise HTTPException(404, str(e))
     except PermissionError as e:
         raise HTTPException(409, str(e))
+    out = {"id": o["id"], "token": o["token"], "amount_cents": o["amount_cents"], "count": o["count"],
+           "order_url": f"/data/order/{o['id']}?t={o['token']}"}
+    if datastore.stripe_enabled():
+        try:
+            out["checkout_url"] = datastore.stripe_checkout(o, _base_url(request))
+        except Exception as e:
+            raise HTTPException(502, f"Payment provider error: {str(e)[:200]}")
+    return out
+
+
+# ---- area + job size: one server-side selection for the live quote, the order and the receipt
+class SelectionReq(BaseModel):
+    spec: dict
+
+
+class SelectionOrderReq(BaseModel):
+    email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    spec: dict
+    coupon: str | None = Field(default=None, max_length=200)
+
+
+def _coupon_ok(code: str | None, request: Request) -> bool:
+    """The one coupon: the admin key takes 100% off (the owner's own orders).
+    Wrong codes count toward the admin-key lockout, so the box can't be used
+    to guess the key."""
+    code = (code or "").strip()
+    if not code:
+        return False
+    ip = _client_ip(request)
+    wait = safety.locked("admin:" + ip)
+    if wait:
+        raise HTTPException(429, f"Too many wrong codes. Try again in {wait // 60 + 1} minutes.")
+    if ADMIN_TOKEN and hmac.compare_digest(code.encode(), ADMIN_TOKEN.encode()):
+        safety.succeeded("admin:" + ip)
+        safety.log(ip, "POST", "/api/data/select/order", 200, "100% coupon used")
+        return True
+    safety.failed("admin:" + ip)
+    raise HTTPException(400, "That coupon code isn't valid.")
+
+
+@app.post("/api/data/select/quote")
+def data_select_quote(body: SelectionReq, request: Request):
+    """Exactly which homes match (count, flagged, coverage, imagery) and the
+    exact price, for a ZIP or a drawn area with an optional job-size filter."""
+    from . import selection as sel
+    c = _session_company(request)
+    try:
+        spec = sel.normalize(body.spec)
+        b = sel.build(spec, member=bool(c and c["member"]), email=(c or {}).get("email"), start_measuring=True)
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    out = sel.public_view(b)
+    out["member"] = bool(c and c["member"])
+    out["logged_in"] = bool(c)
+    out["pricing"] = datastore.pricing()
+    return out
+
+
+@app.post("/api/data/select/order")
+def data_select_order(body: SelectionOrderReq, request: Request):
+    """Buy a selection: the server recomputes the homes and price, saves the
+    exact rows and columns with the order, then checkout charges that amount."""
+    from . import selection as sel
+    c = _session_company(request)
+    free = _coupon_ok(body.coupon, request)  # checked before anything is created
+    try:
+        o = datastore.create_selection_order(body.email, body.spec, site=_base_url(request), member=bool(c and c["member"]),
+                                             account_email=(c or {}).get("email"), notify=not free)
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except PermissionError as e:
+        raise HTTPException(409, str(e))
+    if free:  # 100% off: no payment step; the order is paid at $0 and ready at once
+        full = o["amount_cents"]
+        datastore._set(o["id"], amount_cents=0)
+        datastore.mark_paid(o["id"], f"coupon: 100% off (list price ${full / 100:,.2f})")
+        return {"id": o["id"], "token": o["token"], "amount_cents": 0, "count": o["count"], "coupon": "100% off",
+                "order_url": f"/data/order/{o['id']}?t={o['token']}"}
     out = {"id": o["id"], "token": o["token"], "amount_cents": o["amount_cents"], "count": o["count"],
            "order_url": f"/data/order/{o['id']}?t={o['token']}"}
     if datastore.stripe_enabled():
@@ -1329,6 +1647,29 @@ def data_order_checkout(oid: str, request: Request, t: str | None = None):
 def data_order_csv(oid: str, t: str | None = None):
     o = _order_access(oid, t)
     classes = o["classes"].split(",") if o["classes"] else ["R"]
+    if o.get("spec"):  # area + job size: exactly the homes and columns paid for
+        if o["status"] not in ("ready", "processing"):
+            raise HTTPException(409, "This order isn't paid yet.")
+        if (o.get("product") or "standard") == "premier":
+            from . import premier
+            if not premier.order_ready(o["id"]):
+                raise HTTPException(409, "Your Premier list isn't ready yet.")
+            datastore.log_download(o, "premier")
+            return FileResponse(premier.order_path(o["id"]), media_type="application/zip",
+                                filename=f"premier_{o['id']}.zip")
+        snap = datastore.read_snapshot(o["id"])
+        if not snap:
+            raise HTTPException(404, "order data missing")
+        rows = [dict(r) for r in snap["rows"]]
+        for z in snap.get("zips") or []:
+            rows = datastore.add_owners(rows, z, classes)
+        cols = [(k, dict(datastore.COLUMNS).get(k, k)) for k in snap["columns"]]
+        buyer = accounts.company_by_email(o["email"])
+        if buyer:
+            rows, cols = datastore.add_prices(rows, cols, (accounts.get_company(buyer["id"]) or {}).get("rates"))
+        datastore.log_download(o, "sheet")
+        return Response(datastore.to_csv(rows, cols), media_type="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="properties_{o["id"]}.csv"'})
     if (o.get("product") or "standard") == "premier":
         from . import premier
         bands = datastore.order_bands(o)
@@ -1607,6 +1948,38 @@ class Profile(BaseModel):
     pay_note: str | None = Field(default=None, max_length=300)
 
 
+class LogoIn(BaseModel):
+    data: str = Field(max_length=5_000_000)  # a data: URL from the page
+
+
+@app.post("/api/roof/logo")
+def set_logo(body: LogoIn, c: dict = Depends(roof_company)):
+    """The company logo, shown on estimates, invoices and postcards."""
+    import base64 as _b64
+    raw = body.data.split(",", 1)[-1]
+    try:
+        data = _b64.b64decode(raw, validate=False)
+    except Exception:
+        raise HTTPException(400, "That file couldn't be read.")
+    try:
+        return accounts.save_logo(c["id"], data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/roof/logo")
+def delete_logo(c: dict = Depends(roof_company)):
+    return accounts.clear_logo(c["id"])
+
+
+@app.get("/logo/{cid}.png")
+def company_logo(cid: int):
+    p = accounts.logo_path(accounts.get_company(cid))
+    if not p:
+        raise HTTPException(404)
+    return FileResponse(p, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.put("/api/roof/profile")
 def set_profile(body: Profile, c: dict = Depends(roof_company)):
     return accounts.update_company(c["id"], **body.model_dump())
@@ -1782,7 +2155,8 @@ def _public_doc(kind: str, d: dict) -> dict:
     cu = _crm.get_customer(d["company_id"], d["customer_id"]) or {}
     out = {"kind": kind, "id": d["id"], "items": d["items"], "total_cents": d["total_cents"], "note": d.get("note"),
            "status": d["status"], "created": d["created"], "due": d.get("due"),
-           "company": {k: co.get(k) for k in ("name", "phone", "email", "brand_color", "pay_note")},
+           "company": {**{k: co.get(k) for k in ("name", "phone", "email", "brand_color", "pay_note")},
+                       "logo_url": f"/logo/{co['id']}.png?v={co['logo']}" if accounts.logo_path(co) else None},
            "customer": {k: cu.get(k) for k in ("name", "address", "city", "zip")}}
     if kind == "estimate" and d.get("report_id"):
         rep = accounts.get_report(d["report_id"])

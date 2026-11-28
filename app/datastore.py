@@ -1,7 +1,7 @@
-"""Sell measured ZIP-code sheets: quotes, free samples, orders, cached datasets.
+"""Sell measured ZIP-code sheets: quotes, free previews, orders, cached datasets.
 
 Measure once, sell many times: each (ZIP, property types) sheet is measured
-one time and kept under data/zips/. Every later order and every free sample
+one time and kept under data/zips/. Every later order and every free preview
 for that ZIP is served from the saved sheet at no processing cost.
 """
 from __future__ import annotations
@@ -30,8 +30,9 @@ DB = DATA_DIR / "datasales.db"
 _lock = threading.Lock()
 _building: dict = {}
 
-SAMPLE_SIZE = 25
-SAMPLES_PER_IP_PER_DAY = 3
+PREVIEW_TOTAL = 15     # free preview: up to 5 of the contractor's own homes + up to 10 matching
+PREVIEW_CHOSEN = 5
+SAMPLES_PER_IP_PER_DAY = int(os.environ.get("PREVIEWS_PER_IP_PER_DAY", "3"))  # free previews per connection a day
 DATASET_MAX_AGE_DAYS = 365
 
 # Columns sold. Owner names come from the county assessor and are filled in at
@@ -161,6 +162,12 @@ def init():
         CREATE TABLE IF NOT EXISTS samples (
             id INTEGER PRIMARY KEY, email TEXT NOT NULL, ip TEXT, zip TEXT, ts REAL NOT NULL);
         """)
+        con.execute("""CREATE TABLE IF NOT EXISTS demo_uses (
+            id INTEGER PRIMARY KEY, email TEXT NOT NULL, ip TEXT, pin TEXT, ts REAL NOT NULL)""")
+        shave = {r[1] for r in con.execute("PRAGMA table_info(samples)")}
+        for col in ("token", "pins"):  # which homes a preview showed (its postcard may use one of them)
+            if col not in shave:
+                con.execute(f"ALTER TABLE samples ADD COLUMN {col} TEXT")
         have = {r[1] for r in con.execute("PRAGMA table_info(orders)")}
         if "types" not in have:  # orders before per-type pricing: lawn sheet
             con.execute("ALTER TABLE orders ADD COLUMN types TEXT")
@@ -174,6 +181,11 @@ def init():
         if "new_types" not in have:  # exclusive orders: the types this order adds (charged)
             con.execute("ALTER TABLE orders ADD COLUMN new_types TEXT")
         for col in ("grp", "grp_token"):  # several ZIPs bought together, paid in one checkout
+            if col not in have:
+                con.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
+        if "crm_fed" not in have:  # members: how many homes went into their CRM (with estimates)
+            con.execute("ALTER TABLE orders ADD COLUMN crm_fed TEXT")
+        for col in ("spec", "area_label", "filter_label"):  # area + job-size orders (bound to a frozen home list)
             if col not in have:
                 con.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
         con.execute("""CREATE TABLE IF NOT EXISTS downloads (
@@ -236,19 +248,27 @@ def list_price(count: int, types=None, product: str = "standard", member: bool =
     base = per - addon
     if bands is not None:
         lo, hi = band_range(lo, hi)
+        hi = min(hi, len(bands) - 1)  # a ZIP with fewer bands than the full scale
         mult = list(p.get("value_multipliers") or DEFAULT_PRICING["value_multipliers"])
         mult += [mult[-1]] * (len(bands) - len(mult))
         count = sum(bands[lo:hi + 1])
         raw = sum(bands[i] * base * float(mult[i]) for i in range(lo, hi + 1)) + count * addon
     else:
         raw = count * per
-    cents = int(max(math.ceil(raw - 1e-9), round(float(p["min_order_usd"]) * 100))) if count else 0
+    min_c = int(round(float(p["min_order_usd"]) * 100))
+    raw_c = int(math.ceil(raw - 1e-9)) if count else 0
+    cents = max(raw_c, min_c) if count else 0
     full = cents
+    off = 0.0
     if member:
         from .billing import plans
-        cents = int(round(cents * (1 - float(plans()["list_discount"]))))
-    return {"per_property_cents": per * (0.5 if member else 1), "price_cents": cents, "full_price_cents": full,
-            "member_discount": member, "count": count}
+        off = float(plans()["list_discount"])
+        cents = int(round(cents * (1 - off)))
+    return {"per_property_cents": per * (1 - off), "price_cents": cents, "full_price_cents": full,
+            "member_discount": member, "count": count,
+            # the parts, for an exact breakdown (one source for page, checkout and receipt)
+            "base_cents_per_home": per, "subtotal_cents": raw_c, "minimum_cents": min_c,
+            "minimum_applied": bool(count) and raw_c < min_c, "discount": off}
 
 
 def quote(zip_code: str, classes: list[str], types=None, product: str = "standard", member: bool = False,
@@ -365,7 +385,7 @@ def release_lock(zip_code: str, type_key: str):
 
 
 def strip_locked(rows: list[dict], zip_code: str, email: str | None = None) -> tuple[list[dict], list[str]]:
-    """Blank out columns of types another company holds (free samples)."""
+    """Blank out columns of types another company holds (free previews)."""
     taken = taken_by_others(zip_code, email)
     cols = {c for k, _, cs in MEASURE_TYPES if k in taken for c in cs}
     if not cols:
@@ -439,51 +459,247 @@ def sample_allowed(email: str, ip: str | None) -> str | None:
     """None if allowed, else the reason."""
     with _db() as con:
         if con.execute("SELECT 1 FROM samples WHERE lower(email)=lower(?)", (email,)).fetchone():
-            return "This email has already used its free sample. Buy the full sheet, or contact us."
+            return "This email has already used its free preview. Buy the full sheet, or contact us."
         if ip:
             n = con.execute("SELECT COUNT(*) FROM samples WHERE ip=? AND ts>?", (ip, time.time() - 86400)).fetchone()[0]
             if n >= SAMPLES_PER_IP_PER_DAY:
-                return "Too many free samples from this connection today. Try again tomorrow."
+                return "Too many free previews from this connection today. Try again tomorrow."
     return None
 
 
-def take_sample(email: str, ip: str | None, zip_code: str, classes: list[str]) -> list[dict]:
-    """25 properties spread across the ZIP. From the saved sheet when there is
-    one, otherwise measured on the spot (about 20-60 s)."""
-    if dataset_ready(zip_code, classes):
-        rows = read_dataset(zip_code, classes)
-        step = max(1, len(rows) // SAMPLE_SIZE)
-        picked = rows[::step][:SAMPLE_SIZE]
-    else:
-        items = bulk._zip_parcels(zip_code, classes)
-        # only sellable rows: properties with a street address
-        def has_addr(it):
-            m_ = measurer_for(it[0])
-            return bool((m_.parcel_attrs(it[1]["attributes"]).get("address") or "").strip())
-        items = [it for it in items if has_addr(it)]
-        if not items:
-            raise LookupError("No matching properties in that ZIP code in our service area.")
-        # spread the sample over the ZIP: spatial sort, then even stride
-        items.sort(key=lambda it: (round(it[1]["geometry"].centroid.y / 0.004), it[1]["geometry"].centroid.x))
-        step = max(1, len(items) // SAMPLE_SIZE)
-        chosen = items[::step][:SAMPLE_SIZE]
+class PreviewProblem(Exception):
+    """An address the contractor picked can't be used. ``problems`` is a list of
+    {index, address, problem, message} so the page can ask for a replacement."""
 
-        def one(it):
-            cid, f = it
-            m = measurer_for(cid)
-            try:
-                return _row(m.measure(f), m.c["name"], f["geometry"])
-            except Exception:
-                return None
+    def __init__(self, problems: list[dict]):
+        super().__init__("; ".join(p["message"] for p in problems))
+        self.problems = problems
+
+
+def _norm_addr(a: str) -> str:
+    return " ".join(str(a or "").upper().replace(",", " ").replace(".", " ").split())
+
+
+def _measured_row(cid: str, f: dict) -> dict | None:
+    """A sale-format row for one parcel, measured now; None if it can't be measured
+    or there's no house on it."""
+    m = measurer_for(cid)
+    try:
+        row = _row(m.measure(f), m.c["name"], f["geometry"])
+    except Exception:
+        return None
+    return row if _has_house(row) and row.get("lawn_sqft") is not None else None
+
+
+def check_preview_address(area_name: str, classes: list[str], text: str, resolve, zp, zips: list[str]) -> dict:
+    """One address the contractor services: found, inside the selected area
+    (``zp``), and measurable. Any size: it's for checking the data against a
+    home they know. ``resolve(text) -> (county id, parcel feature, matched
+    address)`` or LookupError. Returns {pid, address, row} or PreviewProblem."""
+    def bad(problem, message):
+        raise PreviewProblem([{"index": None, "address": text, "problem": problem, "message": message}])
+    if not str(text or "").strip():
+        bad("empty", "Enter an address.")
+    try:
+        cid, f, label = resolve(text)
+    except LookupError as e:
+        bad("not_found", f"We couldn't find \"{text}\". {e}".strip())
+    if f is None or f.get("geometry") is None:
+        bad("not_found", f"We couldn't find a property lot at \"{text}\".")
+    if not zp.contains(f["geometry"].representative_point()):
+        bad("outside_zip", f"{label or text} isn't in {area_name}. Pick an address inside the area you selected.")
+    m = measurer_for(cid)
+    pid = counties.make_pid(cid, m.parcel_attrs(f["attributes"])["pin"])
+    row = None
+    for z in zips:  # measured already: use the sheet
+        if dataset_ready(z, classes):
+            row = next((r for r in read_dataset(z, classes) if r.get("pin") == pid), None)
+            if row:
+                break
+    if row is None:
+        row = _measured_row(cid, f)
+    if row is None:
+        bad("no_measurements", f"We don't have measurements for {label or text} (no house found on the lot, "
+                               f"or the aerial data doesn't cover it yet). Try another address.")
+    return {"pid": pid, "address": row.get("address") or label or text, "row": row}
+
+
+def _spread(pool: list, k: int, size) -> list:
+    """Up to k items spread from smallest to largest by ``size(item)``."""
+    pool = sorted(pool, key=lambda x: size(x) or 0)
+    n = len(pool)
+    if n <= k:
+        return pool
+    return [pool[min(n - 1, round(i * (n - 1) / (k - 1)))] for i in range(k)] if k > 1 else [pool[n // 2]]
+
+
+def _size_buckets(items: list, k: int, size) -> list[list]:
+    """Items sorted by size, cut into k buckets (small .. large), each ordered
+    middle-out, so one pick per bucket gives a mix of sizes and a lot that
+    can't be measured can be swapped for its neighbour in size."""
+    items = sorted(items, key=lambda x: size(x) or 0)
+    n = len(items)
+    out = []
+    for i in range(k):
+        b = items[i * n // k:(i + 1) * n // k]
+        mid = len(b) // 2
+        out.append([b[j] for j in sorted(range(len(b)), key=lambda j: abs(j - mid))])
+    return [b for b in out if b]
+
+
+def _num_or_none(v):
+    try:
+        return None if v in (None, "") else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def quote_price(size, q: dict | None):
+    """The contractor's illustrative price for one home. Rule: size (sq ft of
+    the measurement that sets job size) / 1,000 x the rate for that size's tier,
+    never below the minimum charge. Tiers: the highest "from" size at or below
+    the home's size sets the rate; below every tier, the base rate."""
+    if not q or size in (None, ""):
+        return None
+    try:
+        size = float(size)
+        rate = float(q.get("rate") or 0)
+        minimum = float(q.get("minimum") or 0)
+    except (TypeError, ValueError):
+        return None
+    for t in sorted(q.get("tiers") or [], key=lambda t: float(t.get("from") or 0)):
+        try:
+            if size >= float(t.get("from")):
+                rate = float(t.get("rate"))
+        except (TypeError, ValueError):
+            continue
+    if rate <= 0 and minimum <= 0:
+        return None
+    return round(max(minimum, size / 1000.0 * rate), 2)
+
+
+def take_preview(email: str, ip: str | None, spec: dict, addresses: list[str], resolve, quote: dict | None = None) -> dict:
+    """The free preview for a selection (a ZIP or a drawn area + job size):
+    up to 5 addresses the contractor already services (checked: found, inside
+    the area, measurable, all different; any size) plus up to 10 homes from
+    the actual filtered purchase results, spread across the size range and
+    never repeating the 5. Nothing is recorded unless something is shown."""
+    from . import selection as sel
+    addresses = [a for a in (addresses or []) if str(a or "").strip()]
+    if len(addresses) > PREVIEW_CHOSEN:
+        raise PreviewProblem([{"index": None, "address": "", "problem": "count",
+                               "message": f"Choose up to {PREVIEW_CHOSEN} addresses you already service."}])
+    b = sel.build(spec, email=None)
+    zp = sel.area_polygon(spec)
+    zips = [c["zip"] for c in b.get("coverage") or []]
+    area_name = f"ZIP {spec['area']['zip']}" if spec["area"].get("zip") else "the area you drew"
+    measure = (spec.get("filter") or {}).get("measure") or next((t for t in spec["types"] if t not in ADDONS), None)
+    problems, chosen, seen_text, seen_pid = [], [], {}, {}
+    for i, text in enumerate(addresses):
+        key = _norm_addr(text)
+        if key in seen_text:
+            problems.append({"index": i, "address": text, "problem": "duplicate",
+                             "message": f"Address {i + 1} is the same as address {seen_text[key] + 1}. Pick different homes."})
+            continue
+        seen_text[key] = i
+        try:
+            c = check_preview_address(area_name, spec["classes"], text, resolve, zp, zips)
+        except PreviewProblem as e:
+            problems += [{**p, "index": i} for p in e.problems]
+            continue
+        if c["pid"] in seen_pid:  # two spellings of one lot
+            problems.append({"index": i, "address": text, "problem": "duplicate",
+                             "message": f"Address {i + 1} is the same property as address {seen_pid[c['pid']] + 1}. Pick different homes."})
+            continue
+        seen_pid[c["pid"]] = i
+        chosen.append(c)
+    if problems:
+        raise PreviewProblem(problems)
+    mine = {c["pid"] for c in chosen}
+    mine_addr = {_norm_addr(c["address"]) for c in chosen}
+    yours = [{**c["row"], "group": "yours"} for c in chosen]
+    need = PREVIEW_TOTAL - PREVIEW_CHOSEN
+    more: list[dict] = []
+    notes = []
+    if b["mode"] == "selection":
+        pool = [r for r in b["rows"] if r.get("pin") not in mine and _norm_addr(r.get("address")) not in mine_addr]
+        more = _spread(pool, need, lambda r: sel.size_of(r, measure))
+        if len(pool) < need:
+            notes.append(f"{len(pool)} other home{'s' if len(pool) != 1 else ''} match{'es' if len(pool) == 1 else ''} "
+                         f"this area and job size, so the preview shows {len(pool)}.")
+    else:  # a whole ZIP not measured yet (no size filter): measure a spread of homes now
+        items = bulk._zip_parcels(spec["area"]["zip"], spec["classes"])
+
+        def ok(it):
+            a = measurer_for(it[0]).parcel_attrs(it[1]["attributes"])
+            return (counties.make_pid(it[0], a["pin"]) not in mine and (a.get("address") or "").strip()
+                    and _norm_addr(a.get("address")) not in mine_addr)
+        items = [it for it in items if ok(it)]
+        buckets = _size_buckets(items, need, lambda it: it[1]["geometry"].area)
+        got: dict[int, dict] = {}
+        tried = [0] * len(buckets)
         with ThreadPoolExecutor(max_workers=8) as ex:
-            picked = [r for r in ex.map(one, chosen) if r]
+            for _round in range(4):  # a lot that can't be measured is swapped for its neighbour in size
+                todo = [i for i in range(len(buckets)) if i not in got and tried[i] < len(buckets[i])]
+                if not todo:
+                    break
+                futs = {i: ex.submit(_measured_row, *buckets[i][tried[i]]) for i in todo}
+                for i, fu in futs.items():
+                    tried[i] += 1
+                    r = fu.result()
+                    if r and r.get("pin") not in mine:
+                        got[i] = r
+        more = [got[i] for i in sorted(got)]
+        if len(more) < need:
+            notes.append(f"We could measure {len(more)} other home{'s' if len(more) != 1 else ''} in this ZIP for the preview.")
+    more = [{**r, "group": "more"} for r in more[:need]]
+    rows = yours + more
+    if not rows:
+        raise PreviewProblem([{"index": None, "address": "", "problem": "empty_area",
+                               "message": "No homes in this area and job size to preview yet. Add an address you service, "
+                                          "widen the size range, or pick a measured ZIP."}])
+    pins = [r.get("pin") for r in rows]
+    assert len(set(pins)) == len(pins), "preview rows must be distinct"
+    for r in rows:
+        r["size_measure"] = measure
+        r["quote"] = quote_price(sel.size_of(r, measure), quote)
+    token = secrets.token_urlsafe(12)
     with _lock, _db() as con:
-        con.execute("INSERT INTO samples(email,ip,zip,ts) VALUES(?,?,?,?)", (email.lower(), ip, zip_code, time.time()))
+        con.execute("INSERT INTO samples(email,ip,zip,ts,token,pins) VALUES(?,?,?,?,?,?)",
+                    (email.lower(), ip, spec["area"].get("zip") or ",".join(zips), time.time(), token, json.dumps(pins)))
     from . import mailer
-    mailer.notify_owner(f"Free sample: {email} took ZIP {zip_code}",
-                        f"{email} downloaded the free 25-property sample for ZIP {zip_code}.\n"
+    mailer.notify_owner(f"Free preview: {email} ({b['area_label']}, {b['filter_label']})",
+                        f"{email} previewed {len(rows)} homes: {len(yours)} of their own + {len(more)} matching.\n"
+                        f"Area: {b['area_label']} · {b['filter_label']}\n"
+                        f"Their addresses: " + "; ".join(r.get("address") or "" for r in yours) + "\n"
                         f"A good time to follow up.", reply_to=email)
-    return picked
+    return {"yours": yours, "more": more, "rows": rows, "notes": notes, "token": token,
+            "area_label": b["area_label"], "filter_label": b["filter_label"], "measure": measure,
+            "match_count": b.get("count")}
+
+
+DEMOS_PER_IP_PER_DAY = 3
+
+
+def demo_allowed(email: str, ip: str | None) -> str | None:
+    """The home-page demo: one report per email (and a few per connection a day)."""
+    with _db() as con:
+        if con.execute("SELECT 1 FROM demo_uses WHERE lower(email)=lower(?)", (email,)).fetchone():
+            return "This email has already used its free test. Join to run reports on any address, or preview a ZIP free below."
+        if ip and con.execute("SELECT COUNT(*) FROM demo_uses WHERE ip=? AND ts>?", (ip, time.time() - 86400)).fetchone()[0] >= DEMOS_PER_IP_PER_DAY:
+            return "Too many free tests from this connection today. Try again tomorrow."
+    return None
+
+
+def record_demo(email: str, ip: str | None, pin: str):
+    with _lock, _db() as con:
+        con.execute("INSERT INTO demo_uses(email,ip,pin,ts) VALUES(?,?,?,?)", (email.lower(), ip, pin, time.time()))
+
+
+def preview_pins(token: str) -> list[str]:
+    with _db() as con:
+        r = con.execute("SELECT pins FROM samples WHERE token=?", (token,)).fetchone()
+    return json.loads(r[0]) if r and r[0] else []
 
 
 # ----------------------------------------------------------- full datasets
@@ -568,6 +784,8 @@ def create_order(email: str, zip_code: str, classes: list[str], types=None, site
     """``account_email`` is the signed-in company's email: lock-holder rights
     (buying in their own exclusive ZIP) come from it, never from a typed email."""
     types = normalize_types(types)
+    if product == "exclusive":  # no longer sold; locks already bought stay in force until they end
+        raise PermissionError("Exclusive ZIPs are no longer offered. Buy the ZIP or an area as a standard sheet or Premier list.")
     product = product if product in ("premier", "exclusive") else "standard"
     holder = (account_email or "").lower() or None
     if product == "exclusive":
@@ -599,6 +817,58 @@ def create_order(email: str, zip_code: str, classes: list[str], types=None, site
     return o
 
 
+ORDERS_DIR = DATA_DIR / "orders"
+ORDERS_DIR.mkdir(exist_ok=True)
+
+
+def snapshot_path(oid: str):
+    return ORDERS_DIR / f"{''.join(ch for ch in oid if ch.isalnum())}.json"
+
+
+def read_snapshot(oid: str) -> dict | None:
+    p = snapshot_path(oid)
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def create_selection_order(email: str, spec_raw: dict, site: str = "", member: bool = False,
+                           account_email: str | None = None, notify: bool = True) -> dict:
+    """An order for an area + job size. The homes and price are worked out
+    here (never trusted from the page) and the exact rows and columns are
+    saved with the order, so the download always matches what was paid for,
+    even if the measurements are updated later. A whole ZIP that isn't
+    measured yet goes through the classic ZIP order (measured after purchase)."""
+    from . import selection as sel
+    spec = sel.normalize(spec_raw)
+    holder = (account_email or "").lower() or None
+    b = sel.build(spec, member, email=holder)
+    if b["mode"] == "zip_unmeasured":
+        v = spec.get("value") or (None, None)
+        return create_order(email, spec["area"]["zip"], spec["classes"], spec["types"], site, spec["product"], member,
+                            v[0], v[1], account_email=account_email, notify=notify)
+    if not b["count"]:
+        raise LookupError("No homes match this area and job size. Widen the size range or the area.")
+    if b["blocked"]:
+        raise PermissionError(b["blocked"])
+    oid = secrets.token_hex(4).upper()
+    tok = secrets.token_urlsafe(16)
+    cols = [k for k, _ in columns_for(spec["types"])]
+    zips = [c["zip"] for c in b["coverage"] if c.get("ready") and not c.get("excluded")]
+    snapshot_path(oid).write_text(json.dumps({"rows": b["rows"], "columns": cols, "zips": zips,
+                                              "spec": spec, "price": b["price"], "count": b["count"],
+                                              "flagged": b["flagged"], "created": time.time()}))
+    zip0 = spec["area"].get("zip") or (zips[0] if zips else "")
+    with _lock, _db() as con:
+        con.execute("INSERT INTO orders(id,email,zip,classes,count,amount_cents,status,token,created,types,site,product,"
+                    "spec,area_label,filter_label) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (oid, email.lower(), zip0, ",".join(spec["classes"]), b["count"], b["price"]["price_cents"],
+                     "awaiting_payment", tok, time.time(), ",".join(spec["types"]), site, spec["product"],
+                     json.dumps(spec), b["area_label"], b["filter_label"]))
+    o = get_order(oid)
+    if notify:
+        _email_new_order(o)
+    return o
+
+
 def order_bands(o: dict) -> tuple[int, int]:
     return band_range(o.get("value_lo"), o.get("value_hi"))
 
@@ -618,8 +888,11 @@ def order_types(o: dict) -> list[str]:
 
 def order_what(o: dict) -> str:
     prod = o.get("product") or "standard"
+    where = (f"{o.get('area_label')} · {o.get('filter_label') or 'every home'} · ") if o.get("spec") else ""
     if prod == "premier":
-        return "Premier list: full property report PDF for every home"
+        return where + "Premier list: full property report PDF for every home"
+    if o.get("spec"):
+        return where + ", ".join(type_labels(order_types(o)))
     what = ", ".join(type_labels(order_types(o)))
     if prod == "exclusive":
         months = int(pricing().get("exclusive_months", 12))
@@ -705,7 +978,16 @@ def mark_paid(oid: str, note: str = "") -> dict:
         def ready():
             _set(oid, status="ready")
             _email_ready(oid)
-        if (o.get("product") or "standard") == "premier":
+            feed_crm_async(oid)
+        if o.get("spec"):  # area + job size: the homes are already measured and saved with the order
+            if (o.get("product") or "standard") == "premier":
+                from . import premier
+                snap = read_snapshot(oid) or {"rows": []}
+                state = premier.ensure_order(oid, [r["pin"] for r in snap["rows"]], on_ready=ready)
+            else:
+                ready()
+                state = "ready"
+        elif (o.get("product") or "standard") == "premier":
             from . import premier
             state = premier.ensure(o["zip"], classes, on_ready=ready, bands=order_bands(o))
         else:
@@ -716,19 +998,78 @@ def mark_paid(oid: str, note: str = "") -> dict:
     return get_order(oid)
 
 
+def order_rows(o: dict) -> list[dict]:
+    """The homes an order delivers, in sheet format (frozen list, or the ZIP's sheet)."""
+    if o.get("spec"):
+        return [dict(r) for r in (read_snapshot(o["id"]) or {}).get("rows", [])]
+    classes = o["classes"].split(",") if o["classes"] else ["R"]
+    if not dataset_ready(o["zip"], classes):
+        return []
+    return rows_in_bands(read_dataset(o["zip"], classes), *order_bands(o))
+
+
+def feed_crm(oid: str) -> dict | None:
+    """Members with the CRM: a paid list's homes go into their CRM as customers
+    with draft estimates priced from their rates. Once per order."""
+    from . import accounts, crm
+    o = get_order(oid)
+    if not o or o.get("crm_fed"):
+        return None
+    c = accounts.company_by_email(o["email"])
+    c = accounts.get_company(c["id"]) if c else None
+    if not c or not accounts.is_member(c) or not c.get("crm"):
+        return None
+    rows = order_rows(o)
+    for z in sorted({r.get("zip") for r in rows if r.get("zip")} or {o["zip"]}):
+        rows = add_owners(rows, z, (o["classes"] or "R").split(","))
+    label = f"{o.get('area_label') or 'ZIP ' + o['zip']} list (order {oid})"
+    out = crm.import_list(c, rows, label)
+    _set(oid, crm_fed=json.dumps({**out, "at": time.time()}))
+    return out
+
+
+def feed_crm_async(oid: str):
+    def go():
+        try:
+            feed_crm(oid)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+    threading.Thread(target=go, daemon=True, name=f"crm-feed-{oid}").start()
+
+
 def order_view(o: dict) -> dict:
     classes = o["classes"].split(",") if o["classes"] else []
     v = {k: o[k] for k in ("id", "zip", "classes", "count", "amount_cents", "status", "created", "paid")}
     v["email"] = o["email"]
     v["product"] = o.get("product") or "standard"
     v["value_label"] = range_label(*order_bands(o))
+    if o.get("crm_fed"):
+        try:
+            v["crm_fed"] = json.loads(o["crm_fed"])
+        except Exception:
+            pass
+    if o.get("spec"):
+        snap = read_snapshot(o["id"]) or {}
+        v["area_label"], v["filter_label"] = o.get("area_label"), o.get("filter_label")
+        v["flagged"] = snap.get("flagged")
+        v["columns"] = [{"key": k, "label": dict(COLUMNS).get(k, k)} for k in snap.get("columns", [])]
+        v["price"] = snap.get("price")
     v["types"] = order_types(o)
     v["type_labels"] = (["Full property report PDF for every home (roof, walls & elevations, lot & yard)"]
                         if v["product"] == "premier" else type_labels(v["types"]))
     if v["product"] == "exclusive":
         lk = locks(o["zip"])
         v["exclusive_until"] = max([l["until"] for t, l in lk.items() if l["email"] == o["email"].lower()] or [0]) or None
-    if o["status"] == "processing":
+    if o["status"] == "processing" and o.get("spec"):
+        if v["product"] == "premier":
+            from . import premier
+            if premier.order_ready(o["id"]):
+                _set(o["id"], status="ready")
+                v["status"] = "ready"
+            else:
+                v["progress"] = premier.order_progress(o["id"])
+    elif o["status"] == "processing":
         if v["product"] == "premier":
             from . import premier
             bands = order_bands(o)
@@ -759,7 +1100,8 @@ def stripe_checkout(o: dict, base_url: str) -> str:
         "line_items[0][quantity]": "1",
         "line_items[0][price_data][currency]": "usd",
         "line_items[0][price_data][unit_amount]": str(o["amount_cents"]),
-        "line_items[0][price_data][product_data][name]": f"Property measurements: ZIP {o['zip']} ({o['count']:,} properties)",
+        "line_items[0][price_data][product_data][name]": (f"Property measurements: {o.get('area_label') or 'ZIP ' + o['zip']} "
+                                                          f"({o['count']:,} properties)"),
         "line_items[0][price_data][product_data][description]": f"{biz}: " + (
             order_what(o)),
         "success_url": f"{base_url}/data/order/{o['id']}?t={o['token']}&session_id={{CHECKOUT_SESSION_ID}}",
@@ -852,6 +1194,18 @@ def queue_order(zips: list[str], fetch: bool = True) -> list[str]:
         grp = first.get(z, 0 if d <= 35 else 99)  # home's own metro always leads
         return (grp, d, idx[z])
     return sorted(zips, key=key)
+
+
+def queue_zip(z: str) -> bool:
+    """Put a ZIP buyers asked about in the running measuring queue (no new
+    job is started). True if it's queued or being measured."""
+    st = _pre.get("st")
+    if not (_pre["thread"] and _pre["thread"].is_alive()) or st is None:
+        return False
+    if z not in st["zips"]:
+        st["zips"].append(z)
+        _save_pre(st)
+    return True
 
 
 def prebuild_status() -> dict:

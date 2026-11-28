@@ -197,6 +197,102 @@ def build(zip_code: str, classes: list[str], bands=None) -> None:
     _write_meta(zip_code, classes, m, bands)
 
 
+# ------------------------------------------------ one order's exact homes
+def _okey(oid: str) -> str:
+    return "order_" + "".join(ch for ch in oid if ch.isalnum())
+
+
+def order_path(oid: str):
+    return PREMIER_DIR / f"{_okey(oid)}.zip"
+
+
+def _order_meta(oid: str) -> dict:
+    p = PREMIER_DIR / f"{_okey(oid)}.json"
+    try:
+        return json.loads(p.read_text()) if p.exists() else {}
+    except Exception:
+        return {}
+
+
+def _write_order_meta(oid: str, m: dict):
+    p = PREMIER_DIR / f"{_okey(oid)}.json"
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(m))
+    tmp.replace(p)
+
+
+def order_ready(oid: str) -> bool:
+    return _order_meta(oid).get("status") == "ready" and order_path(oid).exists()
+
+
+def order_progress(oid: str) -> dict:
+    m = _order_meta(oid)
+    return {"status": m.get("status", "none"), "done": m.get("done", 0), "total": m.get("total", 0)}
+
+
+def build_order(oid: str, pins: list[str]) -> None:
+    """The Premier folder for exactly these homes (an area + job-size order)."""
+    from .counties import split_pid
+    from .measure import measurer_for
+    items = []
+    for pid in pins:
+        cid, bare = split_pid(pid)
+        try:
+            f = measurer_for(cid).get_parcel(bare)
+        except Exception:
+            f = None
+        if f is not None:
+            items.append((cid, f))
+    total = len(items)
+    m = {"status": "building", "started": time.time(), "done": 0, "total": total}
+    _write_order_meta(oid, m)
+    final = order_path(oid)
+    tmp = final.with_suffix(".building")
+    rows, used = [], set()
+    zlock = threading.Lock()
+    with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as zf:
+        with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+            for i, (row, pdf, extras) in enumerate(ex.map(lambda it: _one(*it), items), 1):
+                with zlock:
+                    add_home(zf, row, pdf, extras, used)
+                rows.append(row)
+                if i % 10 == 0 or i == total:
+                    m.update(done=i)
+                    _write_order_meta(oid, m)
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow([label for _, label in INDEX_COLS])
+        for r in rows:
+            w.writerow(["" if r.get(k) is None else r.get(k) for k, _ in INDEX_COLS])
+        zf.writestr("index.csv", buf.getvalue())
+    tmp.replace(final)
+    m.update(status="ready", finished=time.time(), done=total, reports=sum(1 for r in rows if r.get("file")))
+    _write_order_meta(oid, m)
+
+
+def ensure_order(oid: str, pins: list[str], on_ready=None) -> str:
+    if order_ready(oid):
+        if on_ready:
+            on_ready()
+        return "ready"
+
+    def run():
+        try:
+            build_order(oid, pins)
+        except Exception as e:
+            _write_order_meta(oid, {"status": "failed", "error": str(e)[:300], "finished": time.time()})
+            from . import mailer
+            mailer.notify_owner(f"Premier folder for order {oid} failed", str(e))
+            return
+        if on_ready:
+            try:
+                on_ready()
+            except Exception:
+                pass
+    threading.Thread(target=run, daemon=True, name=f"premier-{oid}").start()
+    return "building"
+
+
 def ensure(zip_code: str, classes: list[str], on_ready=None, bands=None) -> str:
     """Start building unless ready or running. Returns 'ready' or 'building'."""
     key = _key(zip_code, classes, bands)

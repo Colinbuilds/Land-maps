@@ -12,9 +12,6 @@
   .box .card { border-radius: 20px; padding: 20px; }
   .box input { min-height: 50px; font-size: 16px; border-radius: 14px; }
   .box button { width: 100%; min-height: 52px; border-radius: 99px; font-size: 16px; }
-  .who { display: flex; gap: 6px; background: #e9efeb; border-radius: 99px; padding: 4px; margin-bottom: 12px; }
-  .who button { flex: 1; background: transparent; color: #10231a; border-radius: 99px; min-height: 40px; font-weight: 700; box-shadow: none; }
-  .who button.on { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 </style>
 </head>
 <body>
@@ -24,11 +21,7 @@
 </header>
 <div class="box">
   <h1>Sign in</h1>
-  <p class="muted" style="margin:0 0 12px" id="sub">Your company account. New here? <a href="/join">Join</a>.</p>
-  <div class="who" role="tablist" aria-label="Who's signing in">
-    <button type="button" class="on" data-who="co" role="tab" aria-selected="true">Company</button>
-    <button type="button" data-who="owner" role="tab" aria-selected="false">Owner (admin)</button>
-  </div>
+  <p class="muted" style="margin:0 0 12px">New here? <a href="/join">Join</a>.</p>
   <div class="card stack">
     <input id="email" type="text" inputmode="email" autocapitalize="none" autocomplete="username" placeholder="Email" aria-label="Email">
     <input id="pass" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password">
@@ -37,49 +30,28 @@
     <a class="small" href="/reset" style="text-align:center">Forgot your password?</a>
   </div>
 </div>
-<script src="/static/common.js?v=25"></script>
+<script src="/static/common.js?v=27"></script>
 <script>
 (function () {
   const $ = (id) => document.getElementById(id);
+  // one form: the server decides (the admin key opens the command center)
   async function signIn() {
     const email = $("email").value.trim(), password = $("pass").value.trim();
     if (!password) { $("msg").innerHTML = '<span class="err">Enter your password.</span>'; return; }
     $("go").disabled = true;
     $("msg").innerHTML = '<span class="spinner"></span>Signing in…';
     try {
-      if (["", "admin"].includes(email.toLowerCase())) {
-        // the owner: the password is the admin key; check it, keep it in this browser, open the command center
-        const r = await fetch("/api/admin/check", { headers: { "x-admin-token": password } });
-        if (!r.ok) throw new Error("That isn't the admin key. Use the exact value of ESTIMATOR_ADMIN_TOKEN from Railway.");
-        if ((await r.json()).open) throw new Error("Owner sign-in is off: ESTIMATOR_ADMIN_TOKEN isn't set on the server. Add it in Railway (Variables) and wait for the redeploy.");
-        try { localStorage.setItem("adminToken", password); } catch (e) {}
-        location.href = "/command";
-        return;
-      }
-      const me = await api("/api/roof/login", { method: "POST", json: { email, password } });
-      location.href = me.crm ? "/crm" : "/reports";
+      const r = await api("/api/signin", { method: "POST", json: { email, password } });
+      if (r.admin) { try { localStorage.setItem("adminToken", password); } catch (e) {} }
+      location.href = r.next || "/reports";
     } catch (e) {
       $("msg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
       $("go").disabled = false;
     }
   }
-  // Owner tab: just the admin key (the email box hides and becomes "admin")
-  function who(w) {
-    document.querySelectorAll(".who button").forEach((b) => { b.classList.toggle("on", b.dataset.who === w); b.setAttribute("aria-selected", b.dataset.who === w); });
-    const owner = w === "owner";
-    $("email").style.display = owner ? "none" : "";
-    if (owner) $("email").value = "admin"; else if ($("email").value === "admin") $("email").value = "";
-    $("pass").placeholder = owner ? "Admin key" : "Password";
-    $("pass").setAttribute("autocomplete", owner ? "off" : "current-password");
-    $("sub").innerHTML = owner ? "Opens the command center. Use the admin key from Railway (ESTIMATOR_ADMIN_TOKEN)." : 'Your company account. New here? <a href="/join">Join</a>.';
-    document.querySelector('a[href="/reset"]').style.display = owner ? "none" : "";
-    $("msg").textContent = "";
-    (owner ? $("pass") : $("email")).focus();
-  }
-  document.querySelectorAll(".who button").forEach((b) => b.onclick = () => who(b.dataset.who));
-  if (new URLSearchParams(location.search).get("as") === "owner") who("owner");
   $("go").onclick = signIn;
   $("pass").addEventListener("keydown", (e) => { if (e.key === "Enter") signIn(); });
+  $("email").addEventListener("keydown", (e) => { if (e.key === "Enter") $("pass").focus(); });
 })();
 </script>
 </body>

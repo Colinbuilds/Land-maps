@@ -285,9 +285,24 @@ def _wrap(c, text, x, y, width, font, size, lead, color):
     return y
 
 
+def _logo_reader(company: dict):
+    try:
+        from .accounts import logo_path
+        p = company.get("logo_file") or logo_path(company)
+        return ImageReader(str(p)) if p else None
+    except Exception:
+        return None
+
+
+def _fit(img, max_w: float, max_h: float) -> tuple[float, float]:
+    iw, ih = img.getSize()
+    s = min(max_w / iw, max_h / ih)
+    return iw * s, ih * s
+
+
 def render_postcard(d: dict, company: dict, trade: str | None = None, headline: str | None = None,
                     offer: str | None = None, photo_jpg: bytes | None = None, cv=None,
-                    layout: dict | None = None) -> bytes | None:
+                    layout: dict | None = None, price_override: dict | None = None) -> bytes | None:
     """Front + back for one property. Pass ``cv`` to add the pages to an
     existing canvas (a whole mailing in one print file)."""
     own = cv is None
@@ -298,7 +313,7 @@ def render_postcard(d: dict, company: dict, trade: str | None = None, headline: 
     accent = colors.HexColor(company.get("brand_color") or "#1d4ed8")
     dark = colors.HexColor("#0f172a")
     from .trades import report_price
-    pr = report_price(trade, company.get("rates"), d) if trade else None
+    pr = price_override or (report_price(trade, company.get("rates"), d) if trade else None)
     h_def, o_def = copy_for(trade, bool(pr))  # a priced card: no "call for your price"
     headline, offer = (headline or h_def), (offer or o_def)
     lay = layout or studio()["layout"]
@@ -374,6 +389,14 @@ def render_postcard(d: dict, company: dict, trade: str | None = None, headline: 
         c.drawString(x + 10, top - 42, num)
         c.setFont("Helvetica", 11)
         c.drawString(x + 16 + c.stringWidth(num, "Helvetica-Bold", 24), top - 41, pr["label"][:24])
+    # their logo: top corner of the photo, opposite the address tag, on a white tile
+    logo = _logo_reader(company)
+    if logo:
+        lw, lh = _fit(logo, 1.5 * IN, 0.45 * IN)
+        lx = (SAFE + 6) if right else (px0 + pw - SAFE - lw - 6)
+        ly = PH - SAFE - lh - 6
+        c.setFillColor(colors.Color(1, 1, 1, alpha=0.92)); c.roundRect(lx - 7, ly - 7, lw + 14, lh + 14, 7, stroke=0, fill=1)
+        c.drawImage(logo, lx, ly, lw, lh, mask="auto")
     # company at the bottom of the panel
     if phone:
         c.setFont("Helvetica-Bold", 20); c.setFillColor(colors.white)
@@ -404,6 +427,10 @@ def render_postcard(d: dict, company: dict, trade: str | None = None, headline: 
         c.drawRightString(x + width - 8, y, pr["text"])
         y -= 32
     y -= 6
+    if logo:
+        lw, lh = _fit(logo, width * 0.55, 0.5 * IN)
+        c.drawImage(logo, x, y - lh + 10, lw, lh, mask="auto")
+        y -= lh + 6
     if name:
         y = _wrap(c, name, x, y, width, "Helvetica-Bold", 14, 17, accent)
     if phone:

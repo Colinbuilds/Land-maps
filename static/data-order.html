@@ -15,7 +15,7 @@
   <div class="card stack" id="box"><p class="muted"><span class="spinner"></span>Loading your order…</p></div>
   <p class="small muted">Keep this page's link: it's how you get back to your download.</p>
 </main>
-<script src="/static/common.js?v=25"></script>
+<script src="/static/common.js?v=27"></script>
 <script>
 (async function () {
   const $ = (id) => document.getElementById(id);
@@ -32,8 +32,14 @@
     if (o.contact && o.contact.name) $("bizName").textContent = o.contact.name;
     $("bizContact").textContent = [o.contact?.phone, o.contact?.email].filter(Boolean).join(" · ");
     const head = `<div class="muted small">Order ${esc(o.id)} · ${esc(o.email)}</div>
-      <h1 style="margin:0">ZIP ${esc(o.zip)}: ${o.count.toLocaleString()} properties</h1>
-      <div class="muted">${usd(o.amount_cents)}${(o.type_labels || []).length ? ` · ${(o.type_labels || []).map(esc).join(", ")}` : ""}</div>`;
+      <h1 style="margin:0">${o.area_label ? esc(o.area_label) : "ZIP " + esc(o.zip)}: ${o.count.toLocaleString()} homes</h1>
+      ${o.filter_label ? `<div><b>Job size:</b> ${esc(o.filter_label)}</div>` : ""}
+      <div class="muted">${usd(o.amount_cents)}${(o.type_labels || []).length ? ` · ${(o.type_labels || []).map(esc).join(", ")}` : ""}</div>
+      ${o.columns && o.columns.length ? `<div class="small muted">Spreadsheet columns: ${o.columns.map((c) => esc(c.label)).join(", ")}</div>` : ""}
+      ${o.flagged ? `<div class="small muted">${o.flagged.toLocaleString()} of these homes are flagged "review" (worth a second look).</div>` : ""}
+      ${o.price && o.price.minimum_applied ? `<div class="small muted">Includes the minimum order.</div>` : ""}
+      ${o.price && o.price.member_discount ? `<div class="small muted">Member price: half off ${usd(o.price.full_price_cents)}.</div>` : ""}
+      ${o.crm_fed ? `<div class="small" style="margin-top:6px;color:#166534"><b>Added to your CRM:</b> ${o.crm_fed.customers_added.toLocaleString()} new customers, ${o.crm_fed.estimates.toLocaleString()} estimates priced from your rates. <a href="/crm">Open the CRM</a></div>` : ""}`;
     let body = "";
     if (o.status === "awaiting_payment") {
       body = o.stripe
