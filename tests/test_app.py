@@ -831,3 +831,19 @@ def test_showcase_sample_is_anonymous(monkeypatch, tmp_path):
     assert "Real St" not in s["csv"] and "REAL PERSON" not in s["csv"] and "68116" not in s["csv"]
     assert s["flagged"]["quality"] == "review" and "tree" in s["flagged"]["reason"]
     assert s["csv"].splitlines()[0].split(",")[:2] == ["County", "Lot sq ft"]
+
+
+def test_single_signin_admin_key_and_company(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main, accounts
+    monkeypatch.setattr(main, "ADMIN_TOKEN", "the-admin-key-123")
+    c = TestClient(main.app)
+    r = c.post("/api/signin", json={"email": "anything@x.co", "password": "the-admin-key-123"})
+    assert r.status_code == 200 and r.json() == {"admin": True, "next": "/command"}
+    r = c.post("/api/signin", json={"email": "", "password": "the-admin-key-123"})
+    assert r.json()["admin"]
+    em = f"co{__import__('time').time_ns()}@x.co"
+    accounts.create_company("Test Co", em, "goodpass1")
+    r = c.post("/api/signin", json={"email": em, "password": "goodpass1"})
+    assert r.status_code == 200 and r.json()["next"] in ("/reports", "/crm") and not r.json().get("admin")
+    assert c.post("/api/signin", json={"email": em, "password": "nope"}).status_code == 401

@@ -6,6 +6,8 @@
   async function boot() {
     try { me = await api("/api/roof/me"); } catch (e) { me = null; }
     $("login").classList.toggle("hidden", !!me);
+    $("planInfo").classList.toggle("hidden", !!me);
+    if (!me) planInfo($("planInfo"), "reports");
     $("app").classList.toggle("hidden", !me);
     $("logout").classList.toggle("hidden", !me);
     if (!me) { $("credits").textContent = ""; return; }

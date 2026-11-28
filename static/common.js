@@ -251,3 +251,45 @@ function measurementCards(r, keys, labels) {
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", build);
   else build();
 })();
+
+
+// "What you get": membership and the CRM, from the live prices. Shown where
+// signed-out visitors land (Reports, CRM). focus: "reports" | "crm".
+window.planInfo = async function (el, focus) {
+  if (!el) return;
+  let P = { member_price_cents: 11500, credit_price_cents: 500, included_trades: 2, list_discount: 0.5, annual_discount: 0.25, crm_price_cents: 0 };
+  try { P = Object.assign(P, await api("/api/billing/plans")); } catch (e) {}
+  const usd = (c) => "$" + (c / 100).toLocaleString(undefined, { maximumFractionDigits: c % 100 ? 2 : 0 });
+  const crm = [
+    ["Estimates in one tap", "Every home you measure becomes a customer with an estimate already priced from your rates. Text the link; they accept online."],
+    ["Scheduling", "Weekly, every-other-week or one-off jobs, in stop order, checked off from your phone."],
+    ["Job photos & invoices", "Before/after photos on each job; mark it done and the invoice is made."],
+    ["Your money at a glance", "Paid this month, what's owed, what's booked, and your win rate."],
+  ];
+  const member = [
+    [`Unlimited property reports`, `For your trades (${P.included_trades || 2} included; more trades add a little). Pay-as-you-go is ${usd(P.credit_price_cents)} a report.`],
+    [`The CRM, included`, P.crm_price_cents ? `${usd(P.crm_price_cents)}/month add-on.` : "No extra charge for members."],
+    [`${Math.round((P.list_discount || 0.5) * 100)}% off ZIP data`, "Every ZIP sheet, drawn-area list and Premier folder at half price."],
+    ["Postcards for any home", "Print-ready cards with the home from above, its measurements and your price."],
+  ];
+  const li = (rows) => rows.map(([b, t]) => `<li><b>${esc(b)}</b><span>${esc(t)}</span></li>`).join("");
+  el.innerHTML = `<div class="planinfo">
+    <h2>${focus === "crm" ? "What the CRM does" : "What you get with membership"}</h2>
+    ${focus === "crm" ? `<ul>${li(crm)}</ul><h3>Comes with membership</h3>` : ""}
+    <ul>${li(focus === "crm" ? member.filter((m) => !/CRM/.test(m[0])) : member)}</ul>
+    ${focus === "crm" ? "" : `<h3>The CRM, included</h3><ul>${li(crm.slice(0, 2))}</ul>`}
+    <div class="pi-price"><b>${usd(P.member_price_cents)}</b> a month · ${Math.round((P.annual_discount || 0.25) * 100)}% off paid yearly · cancel any time</div>
+    <a class="btn" href="/join">See membership</a>
+  </div>`;
+  if (!document.getElementById("planinfo-css")) {
+    const st = document.createElement("style"); st.id = "planinfo-css";
+    st.textContent = `.planinfo{background:#fff;border-radius:18px;padding:18px 20px;box-shadow:0 1px 2px rgba(0,0,0,.06);border:2px solid #bbe5c8}
+      .planinfo h2{font-size:20px;margin:0 0 10px}.planinfo h3{font-size:15px;margin:14px 0 6px;color:#166534}
+      .planinfo ul{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+      .planinfo li{display:grid;gap:1px;padding-left:22px;position:relative;font-size:14.5px}
+      .planinfo li::before{content:"✓";position:absolute;left:0;top:0;color:#16a34a;font-weight:800}
+      .planinfo li span{color:#55665c}.planinfo .pi-price{margin:14px 0 10px;font-size:15px}
+      .planinfo .pi-price b{font-size:22px}.planinfo .btn{display:inline-flex;border-radius:99px}`;
+    document.head.appendChild(st);
+  }
+};

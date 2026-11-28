@@ -515,6 +515,34 @@ def roof_login(body: RoofLogin, request: Request):
     return r
 
 
+@app.post("/api/signin")
+def signin(body: RoofLogin, request: Request):
+    """The one sign-in form. The admin key as the password opens the owner's
+    command center (whatever the email box says); anything else is a normal
+    company sign-in. One lockout counter, so company sign-ins never count as
+    wrong admin keys."""
+    ip, em = _client_ip(request), (body.email or "").strip().lower()
+    wait = safety.locked("login:" + ip, "email:" + em, "admin:" + ip)
+    if wait:
+        raise HTTPException(429, f"Too many wrong passwords. Try again in {wait // 60 + 1} minutes, or reset your password.")
+    pw = (body.password or "").strip()
+    if ADMIN_TOKEN and pw and hmac.compare_digest(pw.encode(), ADMIN_TOKEN.encode()):
+        safety.succeeded("login:" + ip, "email:" + em, "admin:" + ip)
+        safety.log(ip, "POST", "/api/signin", 200, "owner signed in")
+        return {"admin": True, "next": "/command"}
+    c = accounts.login(body.email, body.password) if em else None
+    if not c:
+        safety.failed("login:" + ip, "email:" + em)
+        if not em:
+            raise HTTPException(401, "Enter your email and password.")
+        raise HTTPException(401, "Wrong email or password.")
+    safety.succeeded("login:" + ip, "email:" + em)
+    r = JSONResponse({**c, "next": "/crm" if c.get("crm") else "/reports"})
+    r.set_cookie(ROOF_COOKIE, accounts.make_session(c["id"]), max_age=30 * 86400, httponly=True,
+                 samesite="lax", secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
+    return r
+
+
 @app.post("/api/roof/logout")
 def roof_logout():
     r = JSONResponse({"ok": True})

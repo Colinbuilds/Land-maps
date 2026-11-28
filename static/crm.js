@@ -13,7 +13,9 @@
   if (!me) return gate(`<h1>Sign in</h1><p class="sub">Use your company account.</p>
       <div class="card stack"><input id="gEmail" type="email" placeholder="Email" autocomplete="username">
       <input id="gPass" type="password" placeholder="Password" autocomplete="current-password">
-      <button id="gBtn">Sign in</button><div id="gMsg" class="small"></div><a class="small" href="/reset">Forgot your password?</a></div>`, () => {
+      <button id="gBtn">Sign in</button><div id="gMsg" class="small"></div><a class="small" href="/reset">Forgot your password?</a></div>
+      <div id="gInfo" style="margin-top:16px"></div>`, () => {
+    planInfo($("gInfo"), "crm");
     $("gBtn").onclick = async () => {
       try { await api("/api/roof/login", { method: "POST", json: { email: $("gEmail").value, password: $("gPass").value } }); location.reload(); }
       catch (e) { $("gMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
@@ -29,7 +31,9 @@
         <div><b>Photos and invoices.</b> Before/after photos per job; mark done and the invoice is made.</div>
         <div><b>See the money.</b> Paid this month, what's owed, what's booked and your win rate.</div>
         ${me.member ? `<button id="gOn">Open my CRM</button>` : `<a class="btn" href="/join">The CRM comes with membership: join</a>`}
-        <div id="gMsg" class="small"></div></div>`, () => {
+        <div id="gMsg" class="small"></div></div>
+        ${me.member ? "" : '<div id="gInfo" style="margin-top:16px"></div>'}`, () => {
+      if ($("gInfo")) planInfo($("gInfo"), "crm");
       const b = $("gOn");
       if (b) b.onclick = async () => {
         b.disabled = true;
