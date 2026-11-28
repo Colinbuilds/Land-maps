@@ -190,6 +190,57 @@ def estimate_items_from_report(company: dict, d: dict, trades: list[str] | None 
     return out
 
 
+def _row_as_report(row: dict) -> dict:
+    """A spreadsheet row in the shape the trade pricing reads (yard + walls)."""
+    def num(k):
+        try:
+            return None if row.get(k) in (None, "") else float(row.get(k))
+        except (TypeError, ValueError):
+            return None
+    yard = {k: num(k) for k in ("lot_sqft", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft",
+                                "other_hardscape_sqft", "structures_sqft", "beds_sqft", "building_sqft",
+                                "frontage_ft", "living_sqft", "home_value", "year_built")}
+    return {"pin": row.get("pin"), "address": row.get("address"), "city": row.get("city"), "zip": row.get("zip"),
+            "owner": row.get("owner"), "yard": yard,
+            "walls": {"gross_wall_sqft": num("wall_sqft"), "est_openings": num("est_windows")}}
+
+
+def import_list(company: dict, rows: list[dict], label: str) -> dict:
+    """A member's ZIP or area list into their CRM: each home becomes a customer
+    (matched by property id, so buying the same homes again never duplicates
+    anyone) with a draft estimate priced from their rates for their trades,
+    when the sheet has what that trade prices from."""
+    from .postcard import person_name
+    co = company["id"]
+    have = {r["pin"]: r for r in _all("SELECT id, pin FROM customers WHERE company_id=? AND pin IS NOT NULL", (co,))}
+    estimated = {r["customer_id"] for r in _all(
+        "SELECT customer_id FROM estimates WHERE company_id=? AND status IN ('draft','sent')", (co,))}
+    added = est = 0
+    for row in rows:
+        pin = row.get("pin")
+        if not pin or not (row.get("address") or "").strip():
+            continue
+        cust = have.get(pin)
+        if not cust:
+            try:
+                lat, lon = float(row.get("lat")), float(row.get("lon"))
+            except (TypeError, ValueError):
+                lat = lon = None
+            cust = add_customer(co, name=person_name(row.get("owner")) or "", address=row.get("address"),
+                                city=(row.get("city") or "").title(), zip=row.get("zip"), pin=pin, lat=lat, lon=lon,
+                                notes=f"From {label}")
+            have[pin] = cust
+            added += 1
+        if cust["id"] in estimated:
+            continue
+        items = [i for i in estimate_items_from_report(company, _row_as_report(row)) if i["price_cents"] > 0]
+        if items:
+            create_estimate(co, cust["id"], items, note=f"Auto-estimate from {label}. Measured from aerial photos; confirm on site.")
+            estimated.add(cust["id"])
+            est += 1
+    return {"customers_added": added, "estimates": est}
+
+
 def create_estimate(co: int, customer_id: int, items, note: str = "", report_id: str | None = None) -> dict:
     its, total = _items(items)
     eid = _insert("estimates", company_id=co, customer_id=customer_id, report_id=report_id,

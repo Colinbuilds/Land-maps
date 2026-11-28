@@ -895,3 +895,36 @@ def test_home_demo_one_test_per_email(monkeypatch):
     assert c.post("/api/demo/try", json={"email": em2, "address": "nowhere"}).status_code == 404
     monkeypatch.setattr(main, "locate", lambda q, magicKey=None: {"suggested_pin": "test_xx:1"})
     assert c.post("/api/demo/try", json={"email": em2, "address": "1 Test St"}).status_code == 200
+
+
+def test_member_list_feeds_crm_with_estimates(monkeypatch):
+    import time as _t
+    from app import accounts, crm, trades
+    ds, sel, data = _two_zips(monkeypatch, n_a=30)
+    monkeypatch.setattr(ds, "add_owners", lambda rows, z, c: [{**r, "owner": "DOE JANE"} for r in rows])
+    monkeypatch.setattr(ds, "_email_new_order", lambda o: None)
+    monkeypatch.setattr(ds, "_email_ready", lambda oid: None)
+    monkeypatch.setattr(ds, "feed_crm_async", lambda oid: ds.feed_crm(oid))  # run it now, not in a thread
+    em = f"crmfeed{_t.time_ns()}@x.co"
+    c = accounts.create_company("Feed Co", em, "password123")
+    accounts.set_membership(c["id"], _t.time() + 86400, active=True)
+    accounts.update_company(c["id"], crm=True, trades=["lawn", "concrete"], rates=trades.suggested_rates())
+    spec = {"area": {"zip": "11111"}, "filter": {"measure": "driveway", "min": 600}, "types": ["driveway", "lawn"]}
+    o = ds.create_selection_order(em, spec, member=True, account_email=em)
+    ds.mark_paid(o["id"], "test")
+    custs = crm.list_customers(c["id"])
+    n = ds.get_order(o["id"])["count"]
+    assert len(custs) == n and all(x["name"] == "Jane Doe" for x in custs)
+    ests = crm.list_estimates(c["id"])
+    assert len(ests) == n and all(e["total_cents"] > 0 for e in ests)  # priced from their rates
+    assert '"customers_added": %d' % n in ds.get_order(o["id"])["crm_fed"]
+    # the same homes again: no duplicate customers or estimates
+    o2 = ds.create_selection_order(em, spec, member=True, account_email=em)
+    ds.mark_paid(o2["id"], "test")
+    assert len(crm.list_customers(c["id"])) == n and len(crm.list_estimates(c["id"])) == n
+    # not a member: nothing goes into a CRM
+    em2 = f"nofeed{_t.time_ns()}@x.co"
+    accounts.create_company("No Feed Co", em2, "password123")
+    o3 = ds.create_selection_order(em2, spec, account_email=em2)
+    ds.mark_paid(o3["id"], "test")
+    assert not ds.get_order(o3["id"]).get("crm_fed")

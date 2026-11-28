@@ -183,6 +183,8 @@ def init():
         for col in ("grp", "grp_token"):  # several ZIPs bought together, paid in one checkout
             if col not in have:
                 con.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
+        if "crm_fed" not in have:  # members: how many homes went into their CRM (with estimates)
+            con.execute("ALTER TABLE orders ADD COLUMN crm_fed TEXT")
         for col in ("spec", "area_label", "filter_label"):  # area + job-size orders (bound to a frozen home list)
             if col not in have:
                 con.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
@@ -976,6 +978,7 @@ def mark_paid(oid: str, note: str = "") -> dict:
         def ready():
             _set(oid, status="ready")
             _email_ready(oid)
+            feed_crm_async(oid)
         if o.get("spec"):  # area + job size: the homes are already measured and saved with the order
             if (o.get("product") or "standard") == "premier":
                 from . import premier
@@ -995,12 +998,57 @@ def mark_paid(oid: str, note: str = "") -> dict:
     return get_order(oid)
 
 
+def order_rows(o: dict) -> list[dict]:
+    """The homes an order delivers, in sheet format (frozen list, or the ZIP's sheet)."""
+    if o.get("spec"):
+        return [dict(r) for r in (read_snapshot(o["id"]) or {}).get("rows", [])]
+    classes = o["classes"].split(",") if o["classes"] else ["R"]
+    if not dataset_ready(o["zip"], classes):
+        return []
+    return rows_in_bands(read_dataset(o["zip"], classes), *order_bands(o))
+
+
+def feed_crm(oid: str) -> dict | None:
+    """Members with the CRM: a paid list's homes go into their CRM as customers
+    with draft estimates priced from their rates. Once per order."""
+    from . import accounts, crm
+    o = get_order(oid)
+    if not o or o.get("crm_fed"):
+        return None
+    c = accounts.company_by_email(o["email"])
+    c = accounts.get_company(c["id"]) if c else None
+    if not c or not accounts.is_member(c) or not c.get("crm"):
+        return None
+    rows = order_rows(o)
+    for z in sorted({r.get("zip") for r in rows if r.get("zip")} or {o["zip"]}):
+        rows = add_owners(rows, z, (o["classes"] or "R").split(","))
+    label = f"{o.get('area_label') or 'ZIP ' + o['zip']} list (order {oid})"
+    out = crm.import_list(c, rows, label)
+    _set(oid, crm_fed=json.dumps({**out, "at": time.time()}))
+    return out
+
+
+def feed_crm_async(oid: str):
+    def go():
+        try:
+            feed_crm(oid)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+    threading.Thread(target=go, daemon=True, name=f"crm-feed-{oid}").start()
+
+
 def order_view(o: dict) -> dict:
     classes = o["classes"].split(",") if o["classes"] else []
     v = {k: o[k] for k in ("id", "zip", "classes", "count", "amount_cents", "status", "created", "paid")}
     v["email"] = o["email"]
     v["product"] = o.get("product") or "standard"
     v["value_label"] = range_label(*order_bands(o))
+    if o.get("crm_fed"):
+        try:
+            v["crm_fed"] = json.loads(o["crm_fed"])
+        except Exception:
+            pass
     if o.get("spec"):
         snap = read_snapshot(o["id"]) or {}
         v["area_label"], v["filter_label"] = o.get("area_label"), o.get("filter_label")

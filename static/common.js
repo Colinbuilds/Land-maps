@@ -268,7 +268,7 @@ window.planInfo = async function (el, focus) {
   ];
   const member = [
     [`Unlimited property reports`, `For your trades (${P.included_trades || 2} included; more trades add a little). Pay-as-you-go is ${usd(P.credit_price_cents)} a report.`],
-    [`The CRM, included`, P.crm_price_cents ? `${usd(P.crm_price_cents)}/month add-on.` : "No extra charge for members."],
+    [`The CRM, included`, (P.crm_price_cents ? `${usd(P.crm_price_cents)}/month add-on.` : "No extra charge for members.") + " Lists you buy drop straight in, every home already estimated at your rates."],
     [`${Math.round((P.list_discount || 0.5) * 100)}% off ZIP data`, "Every ZIP sheet, drawn-area list and Premier folder at half price."],
     ["Postcards for any home", "Print-ready cards with the home from above, its measurements and your price."],
   ];

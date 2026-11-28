@@ -38,7 +38,8 @@
       ${o.columns && o.columns.length ? `<div class="small muted">Spreadsheet columns: ${o.columns.map((c) => esc(c.label)).join(", ")}</div>` : ""}
       ${o.flagged ? `<div class="small muted">${o.flagged.toLocaleString()} of these homes are flagged "review" (worth a second look).</div>` : ""}
       ${o.price && o.price.minimum_applied ? `<div class="small muted">Includes the minimum order.</div>` : ""}
-      ${o.price && o.price.member_discount ? `<div class="small muted">Member price: half off ${usd(o.price.full_price_cents)}.</div>` : ""}`;
+      ${o.price && o.price.member_discount ? `<div class="small muted">Member price: half off ${usd(o.price.full_price_cents)}.</div>` : ""}
+      ${o.crm_fed ? `<div class="small" style="margin-top:6px;color:#166534"><b>Added to your CRM:</b> ${o.crm_fed.customers_added.toLocaleString()} new customers, ${o.crm_fed.estimates.toLocaleString()} estimates priced from your rates. <a href="/crm">Open the CRM</a></div>` : ""}`;
     let body = "";
     if (o.status === "awaiting_payment") {
       body = o.stripe
