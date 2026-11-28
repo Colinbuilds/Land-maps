@@ -280,6 +280,37 @@
   .dp .try-grid .tc h4 { margin: 0 0 4px; font-size: 15px; }
   .dp .try-grid .tc div { display: flex; justify-content: space-between; gap: 8px; }
   .dp .try-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .dp details.more { margin-top: 14px; background: rgba(255,255,255,.7); border: 1px solid var(--hair); border-radius: 16px; }
+  .dp details.more > summary { list-style: none; cursor: pointer; padding: 14px 18px; font-weight: 700; color: #15803d; display: flex; align-items: center; gap: 10px; }
+  .dp details.more > summary::-webkit-details-marker { display: none; }
+  .dp details.more > summary::before { content: "+"; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: #e3f5e9; color: #15803d; font-weight: 800; flex: 0 0 auto; }
+  .dp details.more[open] > summary::before { content: "–"; }
+  .dp details.more > summary:hover { background: #f3faf5; border-radius: 16px; }
+  .dp details.more .more-body { padding: 4px 18px 18px; }
+  .dp details.more .more-body .sec-head { margin-bottom: 12px; }
+  .dp details.more .more-body .sec-head h2 { font-size: clamp(22px, 3.6vw, 28px); }
+  .dp details.acc-more { margin: 0 0 4px; }
+  .dp .hero-alt { margin: 12px 0 0; font-weight: 700; }
+  @media (max-width: 640px) {
+    /* phones: same content, less scrolling */
+    .dp .tiles { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
+    .dp .feature { padding: 14px !important; }
+    .dp .feature .top { margin-bottom: 8px !important; }
+    .dp .feature .ico { width: 36px; height: 36px; border-radius: 10px; }
+    .dp .feature .idx { display: none; }
+    .dp .feature h3 { font-size: 15.5px !important; line-height: 1.25 !important; margin: 0 0 4px !important; }
+    .dp .feature p { font-size: 13px !important; line-height: 1.45 !important; margin: 0 !important; }
+    .dp .svc-chips { gap: 6px; } .dp .svc-chips span { font-size: 12.5px; padding: 4px 10px; }
+    .dp .feature.pick .go { font-size: 13px; margin-top: 8px; }
+    .dp .feature .ex-line { font-size: 12px; }
+    .dp .pains { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 10px; padding-bottom: 6px; margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+    .dp .pain { flex: 0 0 82%; scroll-snap-align: start; padding: 16px; }
+    .dp .pain .big { font-size: 32px; }
+    .dp .fix { padding: 16px; }
+    .dp .hero .lead { font-size: 16px !important; line-height: 1.5 !important; }
+    .dp .steps li p, .dp .faq details p { font-size: 15px; }
+  }
+  .dp .hero-alt a { color: #15803d; text-decoration: none; border-bottom: 2px solid #bbe5c8; }
   .dp .pv-list { display: grid; gap: 8px; }
   .dp .pv-row { display: grid; grid-template-columns: 26px minmax(0, 1fr) 26px; gap: 8px; align-items: center; }
   .dp .pv-row .n { width: 26px; height: 26px; border-radius: 50%; background: var(--acc-soft, #e7f4eb); color: #15803d; font-weight: 800; font-size: 13px; display: grid; place-items: center; }
@@ -561,6 +592,7 @@
             <li>Preview up to 15 homes free</li>
             <li>Pay per home, no subscription needed</li>
           </ul>
+          <p class="hero-alt"><a href="#try">Not sure yet? Measure one address free →</a></p>
         </div>
 
         <figure class="soft illus" aria-label="A real property measured by this system" style="margin:0">
@@ -726,109 +758,6 @@
     </div>
   </section>
 
-  <!-- ============================================================ membership value -->
-  <section class="sec tint" id="member-value">
-    <div class="wrap">
-      <div class="sec-head">
-        <p class="eyebrow">Membership</p>
-        <h2>Half off every ZIP sheet. <span class="soft-t">It pays for itself on the first one.</span></h2>
-        <p id="mvLead">Members pay half for every ZIP sheet and Premier folder, get unlimited property reports for their trades, postcards for any home, and the CRM.</p>
-      </div>
-      <div class="soft mv">
-        <div class="mv-top">
-          <label>Homes in your ZIP<input type="number" id="mvN" min="100" step="100" value="6000" inputmode="numeric"></label>
-          <span class="small muted">A typical suburban ZIP has 5,000 to 8,000 homes.</span>
-        </div>
-        <div class="tablewrap"><table class="mvt" id="mvTable"></table></div>
-        <div class="mv-call" id="mvCall"></div>
-        <p class="small muted" style="margin:10px 0 0" id="mvNote"></p>
-        <div class="mv-ctas"><a class="btn arrow" href="/join">Become a member</a><a class="btn secondary" href="#zipbox">Price my ZIP</a></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================================ everything -->
-  <section class="sec" id="everything">
-    <div class="wrap">
-      <div class="sec-head">
-        <p class="eyebrow">One place</p>
-        <h2>From a list of houses to booked, paid jobs.</h2>
-      </div>
-      <div class="tiles4">
-        <a class="soft tile4" href="/reports"><span class="ic">📐</span><h3>Property reports</h3><p>Type an address, get the measurements your trade prices from, as a PDF and a share link. Unlimited for members.</p><b>Order a report →</b></a>
-        <a class="soft tile4" href="#zipbox"><span class="ic">🗂️</span><h3>A ZIP or a few streets</h3><p>Search a ZIP or draw the area you work, set the job size, and buy only the homes that fit.</p><b>Pick a ZIP →</b></a>
-        <a class="soft tile4" href="/join"><span class="ic">✉️</span><h3>Mail-ready postcards</h3><p>Their home from above, their measurements and your price, as a print-ready file for every house on your list.</p><b>With membership →</b></a>
-        <a class="soft tile4" href="/crm"><span class="ic">📋</span><h3>CRM</h3><p>Estimates in one tap, weekly schedules, job photos and invoices from your phone. Free with membership.</p><b>Open the CRM →</b></a>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================================ try it -->
-  <section class="sec" id="try">
-    <div class="wrap">
-      <div class="sec-head">
-        <p class="eyebrow">Try it free</p>
-        <h2>Measure any address. <span class="soft-t">One free test per email.</span></h2>
-        <p>Type a home you know. In about a minute you get the full property report: roof, walls, lawn, driveway and beds, with the numbers each trade quotes from.</p>
-      </div>
-      <div class="soft trybox">
-        <div class="try-row">
-          <input type="email" id="tEmail" placeholder="you@company.com" autocomplete="email" aria-label="Your email">
-          <input type="text" id="tAddr" list="tSuggest" autocomplete="off" placeholder="Address to measure" aria-label="Address to measure">
-          <button id="tGo" class="arrow">Measure it free</button>
-        </div>
-        <datalist id="tSuggest"></datalist>
-        <div id="tMsg" class="small"></div>
-      </div>
-      <div class="tryout hidden" id="tOut">
-        <div class="soft try-res">
-          <div><h3 id="tTitle" style="margin:0"></h3><div class="small muted" id="tSub"></div></div>
-          <div class="try-imgs"><img id="tAerial" alt="The roof from above"><img id="tYard" alt="The yard, shaded by surface"></div>
-          <div class="try-grid" id="tGrid"></div>
-          <div class="try-acts"><a class="btn" id="tReport" target="_blank" rel="noopener">Open the full report</a><a class="btn secondary" id="tPdf" target="_blank" rel="noopener">PDF</a>
-            <a class="btn secondary" href="/join">Unlimited reports with membership</a></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================================ see what you get -->
-  <section class="sec" id="see">
-    <div class="wrap">
-      <div class="sec-head">
-        <p class="eyebrow">See what you get</p>
-        <h2>Real rows from the spreadsheet. <span class="soft-t">A finished postcard.</span></h2>
-        <p>These are real measured homes in the same columns you buy, with the address, owner, ZIP, map location and property id taken out. Assessed value is shown as a range and year built as a decade.</p>
-      </div>
-      <div class="soft showcase" id="showcase"><p class="small muted">Loading the sample…</p></div>
-      <div class="pc-sample">
-        <div class="soft pc-card" id="pcSample"><p class="small muted">Loading the sample postcard…</p></div>
-        <div class="pc-text">
-          <h3>A postcard that quotes the price</h3>
-          <p>The home from above, its lawn measurement and the price at your rate, ready for the printer (9 × 6 in, 1/8 in bleed). This one is a real home's measurements with a made-up owner, address and company.</p>
-          <p class="small muted">Run a free preview to make one for a home in your area at your own rate. Print-ready postcards for every home on a list come with a Premier list.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================================ accuracy -->
-  <section class="sec" id="accuracy">
-    <div class="wrap">
-      <div class="sec-head">
-        <p class="eyebrow">How we measure</p>
-        <h2>What the numbers come from, <span class="soft-t">and when to double-check.</span></h2>
-      </div>
-      <div class="acc-grid">
-        <div class="soft acc"><b>Aerial photos</b><p>Lawn, driveway, sidewalk and patios are traced on the county's recent aerial photos (or USDA aerial photos where the county has none). Each area shows its photo source and year when you pick it.</p></div>
-        <div class="soft acc"><b>LiDAR height data</b><p>Laser height scans take out anything raised (decks, sheds, play sets, shrubs) so the lawn is grass only, and measure house walls.</p></div>
-        <div class="soft acc"><b>County records</b><p>Lot lines, address, owner, year built and assessed value come from the county's public parcel data.</p></div>
-        <div class="soft acc" id="accFlag"><b>Flagged for review</b><p>Homes where the photo is hard to read, like heavy tree cover or most of the yard looking paved, are marked "review" in the spreadsheet so you know which to check.</p></div>
-      </div>
-      <p class="small muted" style="margin:12px 0 0">We haven't published accuracy figures yet: we'll only show error rates once they're checked against on-site measurements. Until then, the free preview is the best check. Include up to 5 homes you've already measured yourself.</p>
-    </div>
-  </section>
-
   <!-- ============================================================ who -->
   <section class="sec">
     <div class="wrap">
@@ -902,9 +831,55 @@
     </div>
   </section>
 
-  <!-- ============================================================ rows -->
-  <section class="sec">
+  <!-- ============================================================ try it -->
+  <section class="sec" id="try">
     <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">Try it free</p>
+        <h2>Measure any address. <span class="soft-t">One free test per email.</span></h2>
+        <p>Type a home you know. In about a minute you get the full property report: roof, walls, lawn, driveway and beds, with the numbers each trade quotes from.</p>
+      </div>
+      <div class="soft trybox">
+        <div class="try-row">
+          <input type="email" id="tEmail" placeholder="you@company.com" autocomplete="email" aria-label="Your email">
+          <input type="text" id="tAddr" list="tSuggest" autocomplete="off" placeholder="Address to measure" aria-label="Address to measure">
+          <button id="tGo" class="arrow">Measure it free</button>
+        </div>
+        <datalist id="tSuggest"></datalist>
+        <div id="tMsg" class="small"></div>
+      </div>
+      <div class="tryout hidden" id="tOut">
+        <div class="soft try-res">
+          <div><h3 id="tTitle" style="margin:0"></h3><div class="small muted" id="tSub"></div></div>
+          <div class="try-imgs"><img id="tAerial" alt="The roof from above"><img id="tYard" alt="The yard, shaded by surface"></div>
+          <div class="try-grid" id="tGrid"></div>
+          <div class="try-acts"><a class="btn" id="tReport" target="_blank" rel="noopener">Open the full report</a><a class="btn secondary" id="tPdf" target="_blank" rel="noopener">PDF</a>
+            <a class="btn secondary" href="/join">Unlimited reports with membership</a></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ see what you get -->
+  <section class="sec" id="see">
+    <div class="wrap">
+      <div class="sec-head">
+        <p class="eyebrow">See what you get</p>
+        <h2>Real rows from the spreadsheet. <span class="soft-t">A finished postcard.</span></h2>
+        <p>These are real measured homes in the same columns you buy, with the address, owner, ZIP, map location and property id taken out. Assessed value is shown as a range and year built as a decade.</p>
+      </div>
+      <div class="soft showcase" id="showcase"><p class="small muted">Loading the sample…</p></div>
+      <div class="pc-sample">
+        <div class="soft pc-card" id="pcSample"><p class="small muted">Loading the sample postcard…</p></div>
+        <div class="pc-text">
+          <h3>A postcard that quotes the price</h3>
+          <p>The home from above, its lawn measurement and the price at your rate, ready for the printer (9 × 6 in, 1/8 in bleed). This one is a real home's measurements with a made-up owner, address and company.</p>
+          <p class="small muted">Run a free preview to make one for a home in your area at your own rate. Print-ready postcards for every home on a list come with a Premier list.</p>
+        </div>
+      </div>
+      <details class="more">
+        <summary><span>See the spreadsheet layout, column by column</span></summary>
+        <div class="more-body">
       <div class="sec-head">
         <p class="eyebrow">What you get</p>
         <h2>One row per property, ready for Excel or Google Sheets.</h2>
@@ -923,12 +898,11 @@
         </div>
       </div>
       <p class="note">All in square feet. "review" flags the few properties worth a second look, such as heavy tree cover.</p>
-    </div>
-  </section>
-
-  <!-- ============================================================ price examples -->
-  <section class="sec tint">
-    <div class="wrap">
+        </div>
+      </details>
+      <details class="more">
+        <summary><span>See how square feet turn into quotes</span></summary>
+        <div class="more-body">
       <div class="sec-head">
         <p class="eyebrow">From measurement to price</p>
         <h2>Turn square feet into quotes in one formula.</h2>
@@ -945,39 +919,26 @@
           <p>1,020 sq ft driveway + 300 sq ft sidewalk = 1,320 sq ft per push. Sort by street, add up a route, and know your season price before the first storm.</p>
         </div>
       </div>
+        </div>
+      </details>
     </div>
   </section>
 
-  <!-- ============================================================ savings -->
-  <section class="sec" id="savings">
+  <!-- ============================================================ accuracy -->
+  <section class="sec" id="accuracy">
     <div class="wrap">
       <div class="sec-head">
-        <p class="eyebrow">The math</p>
-        <h2>What it saves you.</h2>
-        <p>Put in your own numbers. After you check a ZIP, the home count and price come from that ZIP.</p>
+        <p class="eyebrow">How we measure</p>
+        <h2>What the numbers come from, <span class="soft-t">and when to double-check.</span></h2>
       </div>
-      <div class="soft calc">
-        <div class="calc-fields">
-          <label>Homes<input type="number" id="cN" min="1" value="5000" inputmode="numeric"></label>
-          <label>Minutes per home<input type="number" id="cMin" min="0" step="0.5" value="4" inputmode="decimal"></label>
-          <label class="wide how">How you measure today
-            <select id="cHow">
-              <option value="online">On a satellite map, at a desk</option>
-              <option value="drive">Driving out to each property</option>
-            </select>
-          </label>
-          <label class="labor">Labor $/hour<input type="number" id="cWage" min="0" step="1" value="22" inputmode="decimal"></label>
-          <label id="cMilesBox" class="hidden">Driving $/home<input type="number" id="cMiles" min="0" step="0.5" value="3" inputmode="decimal"></label>
-          <label class="wide">A new customer is worth $/year<input type="number" id="cVal" min="0" step="10" value="400" inputmode="decimal"></label>
-        </div>
-        <div class="outs">
-          <div class="out"><span class="lbl">Measuring it yourself</span><div class="stat" id="cHand"></div><span class="sub" id="cHandSub"></span></div>
-          <div class="out"><span class="lbl">This sheet</span><div class="stat" id="cOurs"></div><span class="sub" id="cOursSub"></span></div>
-          <div class="out good"><span class="lbl">You save</span><div class="stat" id="cSave"></div><span class="sub" id="cSaveSub"></span></div>
-          <div class="out hl"><span class="lbl">Pays for itself after</span><div class="stat" id="cPay"></div><span class="sub" id="cPaySub"></span></div>
-        </div>
-        <p class="fine">Not counted above: quotes go out the same day a lead calls instead of after a site visit, crews stay on paying work, and every postcard carries a real price instead of "call for a quote".</p>
-      </div>
+      <details class="more acc-more"><summary><span>Aerial photos, LiDAR height data and county records. Homes that are hard to read are flagged. See how</span></summary>
+      <div class="more-body"><div class="acc-grid">
+        <div class="soft acc"><b>Aerial photos</b><p>Lawn, driveway, sidewalk and patios are traced on the county's recent aerial photos (or USDA aerial photos where the county has none). Each area shows its photo source and year when you pick it.</p></div>
+        <div class="soft acc"><b>LiDAR height data</b><p>Laser height scans take out anything raised (decks, sheds, play sets, shrubs) so the lawn is grass only, and measure house walls.</p></div>
+        <div class="soft acc"><b>County records</b><p>Lot lines, address, owner, year built and assessed value come from the county's public parcel data.</p></div>
+        <div class="soft acc" id="accFlag"><b>Flagged for review</b><p>Homes where the photo is hard to read, like heavy tree cover or most of the yard looking paved, are marked "review" in the spreadsheet so you know which to check.</p></div>
+      </div></div></details>
+      <p class="small muted" style="margin:12px 0 0">We haven't published accuracy figures yet: we'll only show error rates once they're checked against on-site measurements. Until then, the free preview is the best check. Include up to 5 homes you've already measured yourself.</p>
     </div>
   </section>
 
@@ -1006,6 +967,73 @@
           </table>
         </div>
       </div>
+      <details class="more" id="member-value">
+        <summary><span>Members pay half: see what that's worth on a real ZIP</span></summary>
+        <div class="more-body">
+      <div class="sec-head">
+        <p class="eyebrow">Membership</p>
+        <h2>Half off every ZIP sheet. <span class="soft-t">It pays for itself on the first one.</span></h2>
+        <p id="mvLead">Members pay half for every ZIP sheet and Premier folder, get unlimited property reports for their trades, postcards for any home, and the CRM.</p>
+      </div>
+      <div class="soft mv">
+        <div class="mv-top">
+          <label>Homes in your ZIP<input type="number" id="mvN" min="100" step="100" value="6000" inputmode="numeric"></label>
+          <span class="small muted">A typical suburban ZIP has 5,000 to 8,000 homes.</span>
+        </div>
+        <div class="tablewrap"><table class="mvt" id="mvTable"></table></div>
+        <div class="mv-call" id="mvCall"></div>
+        <p class="small muted" style="margin:10px 0 0" id="mvNote"></p>
+        <div class="mv-ctas"><a class="btn arrow" href="/join">Become a member</a><a class="btn secondary" href="#zipbox">Price my ZIP</a></div>
+      </div>
+        </div>
+      </details>
+      <details class="more" id="everything">
+        <summary><span>Everything that comes with membership</span></summary>
+        <div class="more-body">
+      <div class="sec-head">
+        <p class="eyebrow">One place</p>
+        <h2>From a list of houses to booked, paid jobs.</h2>
+      </div>
+      <div class="tiles4">
+        <a class="soft tile4" href="/reports"><span class="ic">📐</span><h3>Property reports</h3><p>Type an address, get the measurements your trade prices from, as a PDF and a share link. Unlimited for members.</p><b>Order a report →</b></a>
+        <a class="soft tile4" href="#zipbox"><span class="ic">🗂️</span><h3>A ZIP or a few streets</h3><p>Search a ZIP or draw the area you work, set the job size, and buy only the homes that fit.</p><b>Pick a ZIP →</b></a>
+        <a class="soft tile4" href="/join"><span class="ic">✉️</span><h3>Mail-ready postcards</h3><p>Their home from above, their measurements and your price, as a print-ready file for every house on your list.</p><b>With membership →</b></a>
+        <a class="soft tile4" href="/crm"><span class="ic">📋</span><h3>CRM</h3><p>Estimates in one tap, weekly schedules, job photos and invoices from your phone. Free with membership.</p><b>Open the CRM →</b></a>
+      </div>
+        </div>
+      </details>
+      <details class="more" id="savings">
+        <summary><span>What it saves you: run the numbers</span></summary>
+        <div class="more-body">
+      <div class="sec-head">
+        <p class="eyebrow">The math</p>
+        <h2>What it saves you.</h2>
+        <p>Put in your own numbers. After you check a ZIP, the home count and price come from that ZIP.</p>
+      </div>
+      <div class="soft calc">
+        <div class="calc-fields">
+          <label>Homes<input type="number" id="cN" min="1" value="5000" inputmode="numeric"></label>
+          <label>Minutes per home<input type="number" id="cMin" min="0" step="0.5" value="4" inputmode="decimal"></label>
+          <label class="wide how">How you measure today
+            <select id="cHow">
+              <option value="online">On a satellite map, at a desk</option>
+              <option value="drive">Driving out to each property</option>
+            </select>
+          </label>
+          <label class="labor">Labor $/hour<input type="number" id="cWage" min="0" step="1" value="22" inputmode="decimal"></label>
+          <label id="cMilesBox" class="hidden">Driving $/home<input type="number" id="cMiles" min="0" step="0.5" value="3" inputmode="decimal"></label>
+          <label class="wide">A new customer is worth $/year<input type="number" id="cVal" min="0" step="10" value="400" inputmode="decimal"></label>
+        </div>
+        <div class="outs">
+          <div class="out"><span class="lbl">Measuring it yourself</span><div class="stat" id="cHand"></div><span class="sub" id="cHandSub"></span></div>
+          <div class="out"><span class="lbl">This sheet</span><div class="stat" id="cOurs"></div><span class="sub" id="cOursSub"></span></div>
+          <div class="out good"><span class="lbl">You save</span><div class="stat" id="cSave"></div><span class="sub" id="cSaveSub"></span></div>
+          <div class="out hl"><span class="lbl">Pays for itself after</span><div class="stat" id="cPay"></div><span class="sub" id="cPaySub"></span></div>
+        </div>
+        <p class="fine">Not counted above: quotes go out the same day a lead calls instead of after a site visit, crews stay on paying work, and every postcard carries a real price instead of "call for a quote".</p>
+      </div>
+        </div>
+      </details>
     </div>
   </section>
 
@@ -1222,6 +1250,21 @@
   }
   $("tGo").onclick = go;
   $("tAddr").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+})();
+</script>
+<script>
+// a link to something inside a folded panel opens the panel first
+(function () {
+  function openFor(hash) {
+    if (!hash || hash.length < 2) return;
+    const el = document.getElementById(decodeURIComponent(hash.slice(1)));
+    if (!el) return;
+    let d = el.tagName === "DETAILS" ? el : el.closest("details.more");
+    while (d) { d.open = true; d = d.parentElement && d.parentElement.closest("details.more"); }
+  }
+  addEventListener("hashchange", () => openFor(location.hash));
+  document.addEventListener("click", (e) => { const a = e.target.closest('a[href^="#"]'); if (a) openFor(a.getAttribute("href")); });
+  openFor(location.hash);
 })();
 </script>
 </body>
