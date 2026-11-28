@@ -522,3 +522,127 @@ def test_learning_from_fixes(monkeypatch, tmp_path):
     # once outlines start pre-shifted, a roofer who leaves them alone keeps the shift
     L.record_roof_edit("roof_cty", "p6", e, e)
     assert 2.5 < L.roof_shift_ft("roof_cty")[0] < 3.5
+
+
+# ---------------------------------------------------------------- free preview (5 yours + 10 more)
+def _fake_zip(monkeypatch, n_homes=40, sheet=True):
+    """A ZIP (the unit square) with n measured homes; addresses 'N Oak St'."""
+    from shapely.geometry import Point, box
+    from app import datastore as ds
+    homes = [{"pin": f"test_xx:{i}", "address": f"{i} OAK ST", "lot_sqft": 3000 + 400 * i, "building_sqft": 1500,
+              "lawn_sqft": 2000 + 100 * i, "living_sqft": 1400, "x": 0.02 * (i % 40) + 0.1, "y": 0.5} for i in range(1, n_homes + 1)]
+    by_pin = {h["pin"]: h for h in homes}
+    monkeypatch.setattr(ds.bulk, "zip_polygon", lambda z: box(0, 0, 1, 1))
+    monkeypatch.setattr(ds, "dataset_ready", lambda z, c: sheet)
+    monkeypatch.setattr(ds, "read_dataset", lambda z, c: [{k: v for k, v in h.items() if k not in ("x", "y")} for h in homes])
+    monkeypatch.setattr(ds, "mailer", None, raising=False)
+
+    class M:
+        c = {"name": "Test County"}
+        def parcel_attrs(self, a):
+            return {"pin": a["PIN"], "address": a["ADDR"]}
+    monkeypatch.setattr(ds, "measurer_for", lambda cid: M())
+    import app.mailer
+    monkeypatch.setattr(app.mailer, "notify_owner", lambda *a, **k: None)
+
+    def resolve(text):
+        t = " ".join(text.upper().replace(",", " ").split())
+        if t.startswith("FAR "):  # an address in another ZIP
+            return "test_xx", {"attributes": {"PIN": "999", "ADDR": "1 FAR RD"}, "geometry": Point(5, 5)}, "1 Far Rd"
+        if t.startswith("NOWHERE"):
+            raise LookupError("Check the spelling.")
+        num = int(t.split()[0])
+        if num not in range(1, 200):
+            raise LookupError("no such house")
+        h = by_pin.get(f"test_xx:{num}") or {"x": 0.5, "y": 0.5}
+        # "12 Oak Street" and "12 oak st" are the same lot
+        return "test_xx", {"attributes": {"PIN": str(num), "ADDR": f"{num} OAK ST"}, "geometry": Point(h["x"], h["y"])}, f"{num} Oak St"
+    return ds, homes, resolve
+
+
+def test_preview_five_yours_plus_ten_more(monkeypatch):
+    ds, homes, resolve = _fake_zip(monkeypatch)
+    mine = ["3 Oak St", "10 oak st", "17 Oak St", "25 Oak St", "31 Oak St"]
+    out = ds.take_preview("a@b.co", None, "99999", ["R"], mine, resolve)
+    pins = [r["pin"] for r in out["rows"]]
+    assert len(out["yours"]) == 5 and len(out["more"]) == 10 and len(out["rows"]) == 15
+    assert len(set(pins)) == 15  # no duplicates
+    assert {r["pin"] for r in out["yours"]} == {f"test_xx:{n}" for n in (3, 10, 17, 25, 31)}
+    assert not {r["pin"] for r in out["more"]} & {r["pin"] for r in out["yours"]}
+    assert all(r["group"] == "yours" for r in out["yours"]) and all(r["group"] == "more" for r in out["more"])
+    lots = sorted(r["lot_sqft"] for r in out["more"])  # a mix of sizes, small to large
+    assert lots[0] < 7000 and lots[-1] > 15000
+
+
+def test_preview_rejects_duplicates_outside_and_unmeasured(monkeypatch):
+    import pytest
+    ds, homes, resolve = _fake_zip(monkeypatch)
+    # the same address typed twice, and one lot spelled two ways
+    with pytest.raises(ds.PreviewProblem) as e:
+        ds.take_preview("a@b.co", None, "99999", ["R"], ["3 Oak St", "3 OAK ST.", "4 Oak St", "4 oak street", "5 Oak St"], resolve)
+    probs = {p["index"]: p["problem"] for p in e.value.problems}
+    assert probs == {1: "duplicate", 3: "duplicate"}
+    # outside the ZIP, not found, and a lot with no measurements (not on the sheet, can't measure)
+    monkeypatch.setattr(ds, "_measured_row", lambda cid, f: None)
+    with pytest.raises(ds.PreviewProblem) as e:
+        ds.take_preview("a@b.co", None, "99999", ["R"], ["Far Rd 1", "Nowhere 9", "150 Oak St", "4 Oak St", "5 Oak St"], resolve)
+    probs = {p["index"]: p["problem"] for p in e.value.problems}
+    assert probs == {0: "outside_zip", 1: "not_found", 2: "no_measurements"}
+    assert "isn't in ZIP 99999" in e.value.problems[0]["message"]
+    with pytest.raises(ds.PreviewProblem):  # exactly 5
+        ds.take_preview("a@b.co", None, "99999", ["R"], ["3 Oak St"], resolve)
+
+
+def test_preview_limited_coverage(monkeypatch):
+    import pytest
+    ds, homes, resolve = _fake_zip(monkeypatch, n_homes=12)
+    with pytest.raises(ds.PreviewShort) as e:
+        ds.take_preview("a@b.co", None, "99999", ["R"], ["1 Oak St", "2 Oak St", "3 Oak St", "4 Oak St", "5 Oak St"], resolve)
+    assert e.value.available == 12 and "has 12 measured homes" in str(e.value) and "needs 15" in str(e.value)
+
+
+def test_preview_endpoint(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+    ds, homes, resolve = _fake_zip(monkeypatch)
+    monkeypatch.setattr(main, "_preview_resolver", lambda z: resolve)
+    monkeypatch.setattr(ds, "SAMPLES_PER_IP_PER_DAY", 10 ** 6)  # repeated test runs share one connection
+    monkeypatch.setattr(ds, "add_owners", lambda rows, z, c: rows)
+    monkeypatch.setattr(ds, "taken_by_others", lambda z, e=None: [])
+    c = TestClient(main.app)
+    email = f"preview{__import__('time').time_ns()}@test.co"
+    body = {"email": email, "zip": "99999", "addresses": ["3 Oak St", "3 Oak St", "4 Oak St", "Far Rd 1", "6 Oak St"]}
+    r = c.post("/api/data/sample", json=body)
+    assert r.status_code == 422 and {p["problem"] for p in r.json()["problems"]} == {"duplicate", "outside_zip"}
+    r = c.post("/api/data/sample/address", json={"zip": "99999", "address": "Far Rd 1"})
+    assert r.status_code == 422 and r.json()["problems"][0]["problem"] == "outside_zip"
+    assert c.post("/api/data/sample/address", json={"zip": "99999", "address": "7 Oak St"}).json()["ok"]
+    body["addresses"] = ["3 Oak St", "8 Oak St", "4 Oak St", "20 Oak St", "6 Oak St"]
+    r = c.post("/api/data/sample", json=body)  # the failed try didn't use up the free preview
+    j = r.json()
+    assert r.status_code == 200 and j["yours"] == 5 and j["more"] == 10 and len({x["pin"] for x in j["rows"]}) == 15
+    assert j["csv"].splitlines()[0].startswith("Group,") and "Your 5 properties" in j["csv"] and "10 more homes in this ZIP" in j["csv"]
+    assert c.post("/api/data/sample", json=body).status_code == 429  # one preview per email
+
+
+def test_preview_measured_on_the_spot(monkeypatch):
+    """No sheet yet: parcels are measured now; a lot that can't be measured is
+    swapped for one of similar size, and the 5 chosen never come back as 'more'."""
+    from shapely.geometry import box
+    ds, homes, resolve = _fake_zip(monkeypatch, sheet=False)
+    items = [("test_xx", {"attributes": {"PIN": h["pin"].split(":")[1], "ADDR": h["address"]},
+                          "geometry": box(h["x"], 0.5, h["x"] + 0.001 * (1 + i), 0.501)}) for i, h in enumerate(homes)]
+    monkeypatch.setattr(ds.bulk, "_zip_parcels", lambda z, c: list(items))
+    by_pin = {h["pin"]: h for h in homes}
+
+    def measured(cid, f):
+        pin = f"test_xx:{f['attributes']['PIN']}"
+        if pin == "test_xx:22":
+            return None  # can't be measured
+        h = by_pin[pin]
+        return {"pin": pin, "address": h["address"], "lot_sqft": h["lot_sqft"], "building_sqft": 1500, "lawn_sqft": 2000, "living_sqft": 1400}
+    monkeypatch.setattr(ds, "_measured_row", measured)
+    out = ds.take_preview("a@b.co", None, "99999", ["R"], ["3 Oak St", "10 Oak St", "17 Oak St", "25 Oak St", "31 Oak St"], resolve)
+    pins = [r["pin"] for r in out["rows"]]
+    assert len(out["yours"]) == 5 and len(out["more"]) == 10 and len(set(pins)) == 15
+    assert "test_xx:22" not in pins

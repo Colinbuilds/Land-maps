@@ -1172,25 +1172,94 @@ class SampleReq(BaseModel):
     email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     zip: str
     classes: list[str] = ["R"]
+    # the 5 addresses the contractor already services (checked server-side)
+    addresses: list[str] = Field(default_factory=list, max_length=10)
+
+
+class PreviewAddressReq(BaseModel):
+    zip: str
+    classes: list[str] = ["R"]
+    address: str = Field(min_length=1, max_length=200)
+
+
+def _preview_resolver(zip_code: str):
+    """Address text -> (county, full parcel feature, matched address), using the
+    same geocoder and lot finder as reports. The ZIP being previewed is added
+    when the address doesn't name one, so "1204 Elm St" finds the one there."""
+    import re
+
+    def resolve(text: str):
+        q = text.strip()
+        if not re.search(r"\b\d{5}\b", q):
+            q = f"{q}, {zip_code}"
+        W, S, E, N = _region_bbox()
+        d = get_json(_GEOCODER + "/findAddressCandidates", {"SingleLine": q, "outSR": 4326, "maxLocations": 3, "f": "json",
+                                                           "countryCode": "USA", "forStorage": "false",
+                                                           "searchExtent": f"{W},{S},{E},{N}"}, ttl=86400)
+        cands = [c for c in d.get("candidates", []) if c.get("score", 0) >= 80]
+        if not cands:
+            raise LookupError("Check the spelling, or pick it from the suggestions.")
+        best = cands[0]
+        lat, lon = best["location"]["y"], best["location"]["x"]
+        cid = counties.county_at(lon, lat)
+        if not cid:
+            raise LookupError("That address is outside the areas we cover.")
+        hit = _parcel_at(lat, lon, cid, best["address"])
+        if not hit:
+            raise LookupError("No property lot found at that address.")
+        m = measurer_for(cid)
+        full = m.get_parcel(hit["attributes"][m.pf["pin"]]) or hit
+        return cid, full, best["address"]
+    return resolve
+
+
+def _preview_error(e):
+    if isinstance(e, datastore.PreviewProblem):
+        return JSONResponse({"detail": str(e), "problems": e.problems}, status_code=422)
+    return JSONResponse({"detail": str(e), "available": e.available, "needed": datastore.PREVIEW_TOTAL}, status_code=409)
+
+
+@app.post("/api/data/sample/address")
+def data_sample_address(body: PreviewAddressReq):
+    """Check one address for the free preview as it's picked (in the ZIP, a real
+    lot, measurable). The preview itself checks all five again."""
+    z = _zip5(body.zip)
+    try:
+        c = datastore.check_preview_address(z, _classes(body.classes), body.address, _preview_resolver(z))
+    except datastore.PreviewProblem as e:
+        return _preview_error(e)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "pin": c["pid"], "address": c["address"]}
 
 
 @app.post("/api/data/sample")
 def data_sample(body: SampleReq, request: Request):
+    """Free preview: the contractor's 5 addresses + 10 more measured homes from the ZIP."""
     z = _zip5(body.zip)
     why = datastore.sample_allowed(body.email, _client_ip(request))
     if why:
         raise HTTPException(429, why)
+    cls = _classes(body.classes)
     try:
-        rows = datastore.add_owners(datastore.take_sample(body.email, _client_ip(request), z, _classes(body.classes)),
-                                    z, _classes(body.classes))
+        out = datastore.take_preview(body.email, _client_ip(request), z, cls, body.addresses, _preview_resolver(z))
+    except (datastore.PreviewProblem, datastore.PreviewShort) as e:
+        return _preview_error(e)
     except LookupError as e:
         raise HTTPException(404, str(e))
+    rows = datastore.add_owners(out["rows"], z, cls)
     c = _session_company(request)
     rows, taken = datastore.strip_locked(rows, z, (c or {}).get("email"))
     taken_cols = {c for k, _, cs in datastore.MEASURE_TYPES if k in taken for c in cs}
     cols = [(k, l) for k, l in datastore.COLUMNS if k not in taken_cols]
+    csv_cols = [("group", "Group")] + cols
+    for r in rows:
+        r["group_label"] = "Your 5 properties" if r.get("group") == "yours" else "10 more homes in this ZIP"
+    csv_rows = [{**r, "group": r["group_label"]} for r in rows]
     return {"zip": z, "columns": [{"key": k, "label": l} for k, l in cols], "rows": rows,
-            "csv": datastore.to_csv(rows, cols), "keys": [k for k, _ in cols], "taken_types": taken}
+            "csv": datastore.to_csv(csv_rows, csv_cols), "keys": [k for k, _ in cols], "taken_types": taken,
+            "yours": sum(1 for r in rows if r.get("group") == "yours"),
+            "more": sum(1 for r in rows if r.get("group") == "more")}
 
 
 class OrderReq(BaseModel):

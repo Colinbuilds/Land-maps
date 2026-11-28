@@ -1,4 +1,4 @@
-// Data storefront: quote a ZIP, free 25-property sample, buy the full sheet.
+// Data storefront: quote a ZIP, free 15-home preview (5 of theirs + 10 more), buy the full sheet.
 (async function () {
   const $ = (id) => document.getElementById(id);
   const cfg = await api("/api/config");
@@ -29,6 +29,7 @@
     }
     $("quoteMsg").textContent = "";
     $("result").classList.remove("hidden");
+    if (window.__pvReset) window.__pvReset();
     $("qZip").textContent = `ZIP ${q.zip} · ${$("cls").selectedOptions[0].textContent}`;
     $("qCount").textContent = `${q.count.toLocaleString()} properties`;
     $("qBy").textContent = Object.entries(q.by_county || {}).map(([k, v]) => `${k}: ${v.toLocaleString()}`).join(" · ");
@@ -340,28 +341,125 @@
   $("check").addEventListener("click", check);
   $("zip").addEventListener("keydown", (e) => { if (e.key === "Enter") check(); });
 
+  // ---- free preview: the contractor's 5 addresses + 10 more homes from the ZIP
+  const PV_CHOSEN = 5, PV_TOTAL = 15;
+  const pv = Array.from({ length: PV_CHOSEN }, () => ({ text: "", state: "", msg: "", seq: 0 }));
+  const normAddr = (t) => String(t || "").toUpperCase().replace(/[.,]/g, " ").replace(/\s+/g, " ").trim();
+  async function postJSON(path, body) {
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let data = {}; try { data = await r.json(); } catch (e) {}
+    return { ok: r.ok, status: r.status, data };
+  }
+  function pvRender() {
+    const box = $("pvList");
+    if (!box.dataset.built) {
+      box.dataset.built = "1";
+      box.innerHTML = pv.map((_, i) => `<div class="pv-row" data-i="${i}"><span class="n">${i + 1}</span>
+        <input type="text" list="pvSuggest" autocomplete="off" placeholder="Address you service" aria-label="Address ${i + 1} you already service">
+        <span class="st" aria-hidden="true"></span><div class="pv-msg" role="status"></div></div>`).join("");
+      box.querySelectorAll(".pv-row").forEach((row) => {
+        const i = +row.dataset.i, inp = row.querySelector("input");
+        let t = null;
+        inp.addEventListener("input", () => {
+          pv[i] = { ...pv[i], text: inp.value, state: "", msg: "", checked: null, pin: null }; pvPaint();
+          clearTimeout(t);
+          t = setTimeout(() => pvSuggest(inp.value), 250);
+        });
+        inp.addEventListener("change", () => pvCheck(i));
+        inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); pvCheck(i); } });
+      });
+    }
+    pvPaint();
+  }
+  function pvPaint() {
+    $("pvList").querySelectorAll(".pv-row").forEach((row) => {
+      const s = pv[+row.dataset.i], inp = row.querySelector("input");
+      if (document.activeElement !== inp && inp.value !== s.text) inp.value = s.text;
+      inp.classList.toggle("bad", s.state === "bad");
+      inp.classList.toggle("good", s.state === "good");
+      row.querySelector(".st").textContent = s.state === "good" ? "✅" : s.state === "bad" ? "⚠️" : s.state === "busy" ? "…" : "";
+      const m = row.querySelector(".pv-msg");
+      m.className = "pv-msg " + (s.state === "bad" ? "err" : "ok");
+      m.textContent = s.msg || "";
+    });
+    const ready = pv.every((s) => s.state === "good");
+    $("sBtn").disabled = !q || !ready || (q && q.count < PV_TOTAL);
+  }
+  async function pvSuggest(text) {
+    if (!q || text.trim().length < 3) return;
+    try {
+      const list = await api(`/api/suggest?q=${encodeURIComponent(text + " " + q.zip)}`);
+      $("pvSuggest").innerHTML = list.map((s) => `<option value="${esc(s.text)}"></option>`).join("");
+    } catch (e) {}
+  }
+  async function pvCheck(i) {
+    if (!q) return;
+    const text = pv[i].text.trim();
+    if (!text) { pv[i] = { ...pv[i], state: "", msg: "" }; pvPaint(); return; }
+    // the same address twice: say so right away (the server checks again)
+    const dup = pv.findIndex((s, j) => j !== i && s.text.trim() && normAddr(s.text) === normAddr(text));
+    if (dup >= 0) { pv[i] = { ...pv[i], state: "bad", msg: `Same as address ${dup + 1}. Pick ${PV_CHOSEN} different homes.` }; pvPaint(); return; }
+    if (pv[i].checked === text && (pv[i].state === "good" || pv[i].state === "bad")) return;  // already checked
+    const seq = ++pv[i].seq;
+    pv[i] = { ...pv[i], state: "busy", msg: "Checking…", checked: text }; pvPaint();
+    const r = await postJSON("/api/data/sample/address", { zip: q.zip, classes: $("cls").value.split(","), address: text });
+    if (seq !== pv[i].seq) return;  // they typed something newer
+    if (r.ok) {
+      const samePin = pv.findIndex((s, j) => j !== i && s.pin && s.pin === r.data.pin);
+      pv[i] = samePin >= 0
+        ? { ...pv[i], state: "bad", msg: `That's the same property as address ${samePin + 1}. Pick a different home.`, pin: null }
+        : { ...pv[i], state: "good", msg: `Found: ${r.data.address}`, pin: r.data.pin };
+    } else {
+      const p = (r.data.problems || [])[0];
+      pv[i] = { ...pv[i], state: "bad", pin: null,
+                msg: (p ? p.message : (r.data.detail || "We couldn't check that address.")) + " Replace it with another address." };
+    }
+    pvPaint();
+  }
+  function pvReset() {  // a new ZIP: start the 5 over, and say up front if the ZIP is too thin
+    pv.forEach((s, i) => { pv[i] = { text: "", state: "", msg: "", seq: s.seq + 1 }; });
+    $("sMsg").textContent = "";
+    const short = q && q.count < PV_TOTAL;
+    $("pvShort").classList.toggle("hidden", !short);
+    if (short) $("pvShort").innerHTML = `<span class="err">ZIP ${esc(q.zip)} has ${q.count} propert${q.count === 1 ? "y" : "ies"} we cover, and a free preview needs ${PV_TOTAL}. Try a neighbouring ZIP, or buy the sheet.</span>`;
+    pvRender();
+  }
+  window.__pvReset = pvReset;
+  pvRender();
+
   $("sBtn").addEventListener("click", async () => {
     if (!q) return;
     const email = $("sEmail").value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { $("sMsg").innerHTML = '<span class="err">Enter your email for the preview.</span>'; return; }
     remember(email);
     $("sBtn").disabled = true;
-    $("sMsg").innerHTML = q.ready ? '<span class="spinner"></span>Pulling your sample…'
-      : '<span class="spinner"></span>Measuring 25 properties across the ZIP. This takes about 30 to 60 seconds.';
+    $("sMsg").innerHTML = q.ready ? '<span class="spinner"></span>Pulling your 15 homes…'
+      : '<span class="spinner"></span>Measuring your 5 homes and 10 more across the ZIP. This takes about 30 to 60 seconds.';
     try {
-      const r = await api("/api/data/sample", { method: "POST", json: { email, zip: q.zip, classes: $("cls").value.split(",") } });
-      $("sMsg").innerHTML = `<span class="ok">Here are ${r.rows.length} properties.</span>`;
+      const res = await postJSON("/api/data/sample", { email, zip: q.zip, classes: $("cls").value.split(","), addresses: pv.map((s) => s.text.trim()) });
+      if (res.status === 422 && res.data.problems) {  // one or more addresses need replacing
+        res.data.problems.forEach((p) => { if (p.index != null) pv[p.index] = { ...pv[p.index], state: "bad", pin: null, checked: pv[p.index].text.trim(), msg: p.message + " Replace it with another address." }; });
+        pvPaint();
+        $("sMsg").innerHTML = '<span class="err">Fix the marked address' + (res.data.problems.length > 1 ? "es" : "") + ' and try again. Your free preview hasn\'t been used.</span>';
+        return;
+      }
+      if (!res.ok) throw new Error(res.data.detail || "Something went wrong. Try again.");
+      const r = res.data;
+      $("sMsg").innerHTML = `<span class="ok">Here are your ${r.rows.length} homes: your ${r.yours} plus ${r.more} more from ZIP ${esc(r.zip)}.</span>`;
       const num = (k) => /_sqft$|_ft$|_count$|^est_/.test(k);
       const show = ["address", "city", "lawn_sqft", "parkway_sqft", "driveway_sqft", "sidewalk_sqft", "building_sqft", "lot_sqft", "beds_sqft", "wall_sqft", "est_windows"].filter((k) => r.keys.includes(k));
       const lab = Object.fromEntries(r.columns.map((c) => [c.key, c.label]));
+      const body = (rows) => rows.map((row) => `<tr>${show.map((k) => `<td class="${num(k) ? "num" : ""}">${num(k) ? fmt(row[k]) : esc(row[k])}</td>`).join("")}</tr>`).join("");
+      const group = (title, rows) => `<tr class="grp"><td colspan="${show.length}">${title}</td></tr>` + body(rows);
       $("sampleTable").innerHTML = `<thead><tr>${show.map((k) => `<th class="${num(k) ? "num" : ""}">${esc(lab[k])}</th>`).join("")}</tr></thead>
-        <tbody>${r.rows.map((row) => `<tr>${show.map((k) => `<td class="${num(k) ? "num" : ""}">${num(k) ? fmt(row[k]) : esc(row[k])}</td>`).join("")}</tr>`).join("")}</tbody>`;
+        <tbody>${group("Your 5 properties", r.rows.filter((x) => x.group === "yours"))}${group("10 more homes in this ZIP", r.rows.filter((x) => x.group === "more"))}</tbody>`;
       $("sDl").href = URL.createObjectURL(new Blob([r.csv], { type: "text/csv" }));
-      $("sDl").download = `sample_${r.zip}.csv`;
+      $("sDl").download = `preview_${r.zip}.csv`;
       $("sampleCard").classList.remove("hidden");
       $("sampleCard").scrollIntoView({ behavior: "smooth" });
     } catch (e) {
       $("sMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
-    } finally { $("sBtn").disabled = false; }
+    } finally { pvPaint(); }
   });
 
   $("bBtn").addEventListener("click", async () => {

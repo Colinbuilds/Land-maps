@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Home Service Info</title>
-<meta name="description" content="Stop driving out to quote. Every home in your ZIP already measured (lawn, driveway, roof, walls) with the owner's name and your price. 25 homes free.">
+<meta name="description" content="Stop driving out to quote. Every home in your ZIP already measured (lawn, driveway, roof, walls) with the owner's name and your price. Preview 15 homes free.">
 <meta name="theme-color" content="#f6f7f2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -215,6 +215,16 @@
   .dp #sampleCard .tablewrap { margin: 14px -22px -8px; padding: 0 22px 8px; -webkit-overflow-scrolling: touch; }
   .dp #sampleTable th, .dp #sampleTable td { font-size: 13px; padding: 10px 10px; border-bottom-color: var(--hair); }
   .dp #sampleTable tbody tr:nth-child(odd) td { background: #fafbf8; }
+  .dp #sampleTable tr.grp td { background: #e7f4eb !important; color: #14532d; font-weight: 800; font-size: 14px; padding-top: 14px; }
+  .dp .pv-list { display: grid; gap: 8px; }
+  .dp .pv-row { display: grid; grid-template-columns: 26px minmax(0, 1fr) 26px; gap: 8px; align-items: center; }
+  .dp .pv-row .n { width: 26px; height: 26px; border-radius: 50%; background: var(--acc-soft, #e7f4eb); color: #15803d; font-weight: 800; font-size: 13px; display: grid; place-items: center; }
+  .dp .pv-row input { min-height: 44px; font-size: 15px; }
+  .dp .pv-row input.bad { border: 2px solid #dc2626; }
+  .dp .pv-row input.good { border: 2px solid #16a34a; }
+  .dp .pv-row .st { font-size: 18px; text-align: center; }
+  .dp .pv-msg { grid-column: 2 / 4; font-size: 13px; margin-top: -2px; }
+  .dp .pv-msg.err { color: #b91c1c; } .dp .pv-msg.ok { color: #166534; }
 
   /* ---------------------------------------------------------- who */
   .dp .tiles { display: grid; grid-template-columns: 1fr; gap: 14px; }
@@ -459,7 +469,7 @@
           <div id="me"></div>
           <p class="eyebrow">For lawn, irrigation, snow, concrete, roofing, siding &amp; every home-service trade</p>
           <h1>Stop driving out to quote. <span class="soft-t">Every home in your ZIP is already measured.</span></h1>
-          <p class="lead">Lawn, driveway, sidewalk, roof and walls for every house, with the owner's name and your price on each one. Mail them, call them, quote them before you ever leave the shop. Check your ZIP and get 25 homes free:</p>
+          <p class="lead">Lawn, driveway, sidewalk, roof and walls for every house, with the owner's name and your price on each one. Mail them, call them, quote them before you ever leave the shop. Check your ZIP, then preview 15 homes free, including 5 you already service:</p>
           <div class="soft" id="zipbox">
             <div class="zipform">
               <input type="text" id="zip" inputmode="numeric" maxlength="5" placeholder="ZIP code" aria-label="ZIP code" autocomplete="postal-code">
@@ -471,12 +481,12 @@
               </select>
               <button id="check" class="arrow">See my ZIP</button>
             </div>
-            <div id="quoteMsg" class="small muted">Shows the number of homes and the exact price. Then get 25 free, no card needed.</div>
+            <div id="quoteMsg" class="small muted">Shows the number of homes and the exact price. Then preview 15 homes free, no card needed.</div>
           </div>
           <ul class="trust">
             <li>Grass only: no driveways, beds, decks or sheds</li>
             <li>Measured from aerial photos + LiDAR</li>
-            <li>25 free, instantly</li>
+            <li>15 homes free, 5 you choose</li>
             <li>No subscription</li>
           </ul>
         </div>
@@ -512,10 +522,14 @@
             <div id="qReady"></div>
           </div>
           <div class="card stack" id="freeCard">
-            <h2>Free sample: 25 properties</h2>
-            <p class="small muted" style="margin:6px 0 0">Picked from across the whole ZIP so you can check them against yards you know. One free sample per email.</p>
-            <div class="formrow"><input type="email" id="sEmail" placeholder="you@company.com" autocomplete="email" aria-label="Email for free sample"><button id="sBtn">Get 25 free</button></div>
+            <h2>Preview 15 homes free</h2>
+            <p class="small muted" style="margin:6px 0 0">Choose 5 addresses you already service to check our measurements against properties you know. We'll add 10 more homes from your ZIP. No card needed.</p>
+            <div id="pvShort" class="small hidden"></div>
+            <div class="pv-list" id="pvList"></div>
+            <datalist id="pvSuggest"></datalist>
+            <div class="formrow"><input type="email" id="sEmail" placeholder="you@company.com" autocomplete="email" aria-label="Email for the free preview"><button id="sBtn">Preview 15 homes free</button></div>
             <div id="sMsg" class="small"></div>
+            <p class="small muted" style="margin:0">One free preview per email.</p>
           </div>
           <div class="card stack buy-card">
             <h2>Buy the list</h2>
@@ -563,8 +577,8 @@
 
       <div class="soft hidden" id="sampleCard">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-          <h2 style="margin:0;font-size:22px">Your free sample</h2>
-          <a class="btn secondary" id="sDl" download="sample.csv" href="#">Download CSV</a>
+          <h2 style="margin:0;font-size:22px" id="pvTitle">Your free preview: 15 homes</h2>
+          <a class="btn secondary" id="sDl" download="preview.csv" href="#">Download CSV</a>
         </div>
         <div class="tablewrap"><table id="sampleTable"></table></div>
       </div>
@@ -695,7 +709,7 @@
       </div>
       <ol class="steps">
         <li><span class="n">1</span><div><h3>Pick your ZIP</h3><p>Choose the area you serve and the property type. You see the exact number of homes and the exact price right away.</p></div></li>
-        <li><span class="n">2</span><div><h3>Check 25 free</h3><p>A sample from across the ZIP appears on this page in about a minute. No card, no sales call. Compare it with yards you know.</p></div></li>
+        <li><span class="n">2</span><div><h3>Preview 15 homes free</h3><p>Choose 5 addresses you already service to check our measurements against properties you know. We'll add 10 more homes from your ZIP. No card needed.</p></div></li>
         <li><span class="n">3</span><div><h3>Put the sheet to work</h3><p><span id="rateLine">Pay by card and download a spreadsheet. Quote before you visit, mail postcards with real prices, and plan routes.</span></p></div></li>
       </ol>
     </div>
@@ -788,7 +802,7 @@
         <h2>Pay per home, <span class="soft-t">or half that as a member.</span></h2>
       </div>
       <div class="tiers">
-        <div class="soft tier free"><span class="t-lbl">First 25 in any ZIP</span><div class="stat">Free</div><span class="t-sub">Instantly, on this page</span></div>
+        <div class="soft tier free"><span class="t-lbl">15-home preview</span><div class="stat">Free</div><span class="t-sub">5 you choose + 10 more, on this page</span></div>
         <div class="soft tier"><span class="t-lbl" id="pTier1Lbl">Your first measurement</span><div class="stat" id="pTier1">10¢</div><span class="t-sub">per home</span></div>
         <div class="soft tier"><span class="t-lbl" id="pTier2Lbl">Each extra measurement</span><div class="stat" id="pTier2">+5¢</div><span class="t-sub" id="pMin">per home · $25 minimum order</span></div>
       </div>
@@ -817,8 +831,8 @@
       </div>
       <div class="faq">
         <details><summary>Does it replace a site visit?</summary><p>It replaces the measuring, not your judgement. Measurements are estimates from aerial photos and LiDAR; confirm on the first visit before final billing. Every row has a quality flag so you know which to double-check.</p></details>
-        <details><summary>How accurate is it?</summary><p>Lawn is traced on recent aerial photos, with LiDAR removing anything raised (decks, sheds, play sets, shrubs) and infrared confirming what's actually growing. Check the free sample against yards you've already measured.</p></details>
-        <details><summary>What's in the free sample?</summary><p>25 real properties picked from across the ZIP, with every column the full sheet has. One free sample per email.</p></details>
+        <details><summary>How accurate is it?</summary><p>Lawn is traced on recent aerial photos, with LiDAR removing anything raised (decks, sheds, play sets, shrubs) and infrared confirming what's actually growing. Check the free preview against yards you've already measured.</p></details>
+        <details><summary>What's in the free preview?</summary><p>15 homes from your ZIP with every column the full sheet has: the 5 addresses you already service, so you can check our measurements against properties you know, plus 10 more measured homes from small lots to large. All 5 have to be different homes inside that ZIP. One free preview per email.</p></details>
         <details><summary>Is owner information included?</summary><p>Yes: the owner's name and mailing address from public county records, where the state allows it for marketing (not in Kansas). Follow do-not-mail and do-not-call requests.</p></details>
         <details><summary>Which ZIPs can I pick?</summary><p>Omaha and Lincoln today, with Des Moines, Kansas City, Denver and more metros being added every week. Type your ZIP above to see if it's ready.</p></details>
         <details><summary>What does membership add?</summary><p>Half off every ZIP sheet and Premier folder, unlimited property reports for your trades, postcard files for any home, and the CRM. Cancel any time.</p></details>
@@ -830,9 +844,9 @@
   <!-- ============================================================ closing cta -->
   <section class="sec cta-sec" id="closing">
     <div class="wrap">
-      <p class="eyebrow">25 properties free</p>
+      <p class="eyebrow">15 homes free</p>
       <h2>See your ZIP in 10 seconds.</h2>
-      <p>Home count, exact price, and 25 free properties. No card needed.</p>
+      <p>Home count, exact price, and a free 15-home preview with 5 addresses you already service. No card needed.</p>
       <a class="btn arrow" href="#zipbox" id="ctaBtn">Check my ZIP</a>
     </div>
   </section>
@@ -841,13 +855,13 @@
     <p style="margin:0">Measurements come from public aerial photos, LiDAR and county parcel data, which can be a few years old. Coverage grows every week: type your ZIP above to check.</p>
   </div>
 
-  <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Get 25 free</a>
+  <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Preview 15 homes free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/common.js?v=25"></script>
 <script src="/static/data.js?v=20"></script>
 <script>
-// Phone-only sticky "Get 25 free" button: shown once the ZIP box has scrolled
+// Phone-only sticky "Preview 15 homes free" button: shown once the ZIP box has scrolled
 // away, hidden while the ZIP box or the closing CTA is on screen and once a
 // result is showing. Purely presentational; data.js owns all behavior.
 (function () {
