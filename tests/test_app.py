@@ -616,6 +616,8 @@ def test_preview_endpoint(monkeypatch):
     monkeypatch.setattr(ds, "taken_by_others", lambda z, e=None: [])
     monkeypatch.setattr(ds, "SAMPLES_PER_IP_PER_DAY", 10 ** 6)  # repeated test runs share one connection
     c = TestClient(main.app)
+    assert c.post("/api/data/sample/address", json={"spec": {"area": {"zip": "99999"}}, "address": "1 Oak St"}).status_code == 410  # retired by default
+    monkeypatch.setattr(main, "FREE_PREVIEW", True)
     email = f"preview{__import__('time').time_ns()}@test.co"
     spec = {"area": {"zip": "99999"}, "filter": {"measure": "lawn", "min": 4000, "max": 6000}, "types": ["lawn"]}
     body = {"email": email, "spec": spec, "addresses": ["3 Oak St", "3 Oak St", "4 Oak St", "Far Rd 1", "6 Oak St"]}

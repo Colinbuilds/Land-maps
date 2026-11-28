@@ -12,7 +12,7 @@
   document.documentElement.setAttribute("data-page", PAGES[p] || "home");
 })();
 </script>
-<meta name="description" content="Pick the area. Pick the job size. Buy only the homes that fit. Every home measured (lawn, driveway, sidewalk, walls) with the owner's name. Preview up to 15 homes free.">
+<meta name="description" content="Pick the area. Pick the job size. Buy only the homes that fit. Every home measured (lawn, driveway, sidewalk, walls) with the owner's name. Measure one address free.">
 <meta name="theme-color" content="#f6f7f2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -616,12 +616,12 @@
               </select>
               <button id="check" class="arrow">See my ZIP</button>
             </div>
-            <div id="quoteMsg" class="small muted">Shows how many homes match and the exact price. Then preview up to 15 homes free, no card needed.</div>
+            <div id="quoteMsg" class="small muted">Shows how many homes match and the exact price before you pay.</div>
           </div>
           <ul class="trust">
             <li>A whole ZIP or just a few streets</li>
             <li>Only the job sizes you want</li>
-            <li>Preview up to 15 homes free</li>
+            <li>Measure one address free</li>
             <li>Pay per home, no subscription needed</li>
           </ul>
           <p class="hero-alt"><a href="#try">Not sure yet? Measure one address free →</a></p>
@@ -661,25 +661,6 @@
             <div class="stat" id="qCount"></div>
             <div class="muted small" id="qBy"></div>
             <div id="qReady"></div>
-          </div>
-          <div class="card stack" id="freeCard" style="order:3">
-            <h2>Preview up to 15 homes free</h2>
-            <p class="small muted" style="margin:6px 0 0">Choose up to 5 addresses you already service in this area, any size, to check our measurements against properties you know. We'll add up to 10 homes from the homes that match your selection. No card needed.</p>
-            <div class="pv-list" id="pvList"></div>
-            <datalist id="pvSuggest"></datalist>
-            <details class="qbox" id="qBox">
-              <summary>Add your price to each home (optional)</summary>
-              <div class="q-row">
-                <label class="small">$ per 1,000 sq ft<input id="qRateIn" type="number" min="0" step="0.25" inputmode="decimal" placeholder="e.g. 5.50"></label>
-                <label class="small">Minimum charge $<input id="qMinIn" type="number" min="0" step="1" inputmode="decimal" placeholder="e.g. 40"></label>
-              </div>
-              <div id="qTiers"></div>
-              <button type="button" class="secondary small-btn" id="qAddTier">+ Size tier</button>
-              <p class="small muted" id="qRule" style="margin:6px 0 0">Your price = size ÷ 1,000 × your rate, never less than your minimum. Size is the job-size measurement (or the first measurement you picked). With tiers, a home at or above a tier's size uses that tier's rate for its whole size.</p>
-            </details>
-            <div class="formrow"><input type="email" id="sEmail" placeholder="you@company.com" autocomplete="email" aria-label="Email for the free preview"><button id="sBtn">Preview up to 15 homes free</button></div>
-            <div id="sMsg" class="small"></div>
-            <p class="small muted" style="margin:0">One free preview per email.</p>
           </div>
           <div class="card stack buy-card" style="order:2">
             <h2>Buy the list</h2>
@@ -755,16 +736,6 @@
         </div>
       </div>
 
-      <div class="soft hidden" id="sampleCard">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-          <h2 style="margin:0;font-size:22px" id="pvTitle">Your free preview</h2>
-          <span class="pv-acts"><a class="btn secondary" id="sDl" download="preview.csv" href="#">Download spreadsheet</a>
-          <button type="button" class="secondary" id="pcBtn">Make a sample postcard</button></span>
-        </div>
-        <p class="small muted" id="pvNotes" style="margin:8px 0 0"></p>
-        <div class="tablewrap"><table id="sampleTable"></table></div>
-        <div id="pcOut" class="pc-out hidden"></div>
-      </div>
     </div>
   </section>
 
@@ -781,7 +752,7 @@
     <div class="wrap">
       <p class="eyebrow">Pricing</p>
       <h1>Pay per home. Members pay half.</h1>
-      <p class="lead">No subscription needed to buy a list. You see the exact price for your area before you pay, and you can preview up to 15 homes free first.</p>
+      <p class="lead">No subscription needed to buy a list. You see the exact price for your area before you pay, and you can measure one address free first.</p>
       <div class="jump"><a href="#member-value">What membership saves</a><a href="#savings">Run your numbers</a><a href="#faq">Questions</a></div>
     </div>
   </section>
@@ -875,7 +846,7 @@
       </div>
       <ol class="steps">
         <li><span class="n">1</span><div><h3>Pick the area and job size</h3><p>Search a ZIP or draw an area (it can cross ZIP lines). Set the job size, like driveways 1,000 sq ft and up. You see exactly how many homes match and the exact price.</p></div></li>
-        <li><span class="n">2</span><div><h3>Preview up to 15 homes free</h3><p>Choose up to 5 addresses you already service to check our measurements against properties you know. We'll add up to 10 homes from your matching results. No card needed.</p></div></li>
+        <li><span class="n">2</span><div><h3>Try one address free</h3><p>Type a home you know and get its full report: roof, walls, lawn, driveway and beds. Check our numbers against a property you've measured yourself. One free test per email, no card needed.</p></div></li>
         <li><span class="n">3</span><div><h3>Put the sheet to work</h3><p><span id="rateLine">Pay by card and download a spreadsheet. Quote before you visit, mail postcards with real prices, and plan routes.</span></p></div></li>
       </ol>
     </div>
@@ -924,7 +895,7 @@
         <div class="pc-text">
           <h3>A postcard that quotes the price</h3>
           <p>The home from above, its lawn measurement and the price at your rate, ready for the printer (9 × 6 in, 1/8 in bleed). This one is a real home's measurements with a made-up owner, address and company.</p>
-          <p class="small muted">Run a free preview to make one for a home in your area at your own rate. Print-ready postcards for every home on a list come with a Premier list.</p>
+          <p class="small muted">Members can make one for any home at their own rate. Print-ready postcards for every home on a list come with a Premier list.</p>
         </div>
       </div>
       <details class="more">
@@ -988,7 +959,7 @@
         <div class="soft acc"><b>County records</b><p>Lot lines, address, owner, year built and assessed value come from the county's public parcel data.</p></div>
         <div class="soft acc" id="accFlag"><b>Flagged for review</b><p>Homes where the photo is hard to read, like heavy tree cover or most of the yard looking paved, are marked "review" in the spreadsheet so you know which to check.</p></div>
       </div></div></details>
-      <p class="small muted" style="margin:12px 0 0">We haven't published accuracy figures yet: we'll only show error rates once they're checked against on-site measurements. Until then, the free preview is the best check. Include up to 5 homes you've already measured yourself.</p>
+      <p class="small muted" style="margin:12px 0 0">We haven't published accuracy figures yet: we'll only show error rates once they're checked against on-site measurements. Until then, the free test is the best check: measure a home you've already measured yourself.</p>
     </div>
   </section>
 
@@ -1000,7 +971,7 @@
         <h2>Pay per home, <span class="soft-t">or half that as a member.</span></h2>
       </div>
       <div class="tiers">
-        <div class="soft tier free"><span class="t-lbl">Preview</span><div class="stat">Free</div><span class="t-sub">Up to 15 homes: up to 5 you choose + up to 10 matching</span></div>
+        <div class="soft tier free"><span class="t-lbl">Try it</span><div class="stat">Free</div><span class="t-sub">One full property report on any address, one per email</span></div>
         <div class="soft tier"><span class="t-lbl" id="pTier1Lbl">Your first measurement</span><div class="stat" id="pTier1">10¢</div><span class="t-sub">per home</span></div>
         <div class="soft tier"><span class="t-lbl" id="pTier2Lbl">Each extra measurement</span><div class="stat" id="pTier2">+5¢</div><span class="t-sub" id="pMin">per home · $25 minimum order</span></div>
       </div>
@@ -1096,12 +1067,12 @@
       </div>
       <div class="faq">
         <details><summary>Does it replace a site visit?</summary><p>It replaces the measuring, not your judgement. Measurements are estimates from aerial photos and LiDAR; confirm on the first visit before final billing. Every row has a quality flag so you know which to double-check.</p></details>
-        <details><summary>How accurate is it?</summary><p>Lawn is traced on recent aerial photos, with LiDAR removing anything raised (decks, sheds, play sets, shrubs) and infrared confirming what's actually growing. We haven't published accuracy figures yet (see "How we measure" above). The free preview lets you check homes you've already measured.</p></details>
+        <details><summary>How accurate is it?</summary><p>Lawn is traced on recent aerial photos, with LiDAR removing anything raised (decks, sheds, play sets, shrubs) and infrared confirming what's actually growing. We haven't published accuracy figures yet (see "How we measure" above). The free test lets you check a home you've already measured.</p></details>
         <details><summary>Can I buy just a few streets?</summary><p>Yes. Choose <b>Draw an area</b>, click around the neighborhood, subdivision or streets you want, and you'll see the exact homes and price. Areas can cross ZIP lines; every home is counted once. Whole ZIPs are still available.</p></details>
         <details><summary>How does job size work?</summary><p>Pick one measurement and a minimum, a maximum or both, like "Driveway: 1,000 sq ft and up" or "Lawn: 4,000–10,000 sq ft". Homes exactly at a limit are included; homes without that measurement are left out. That measurement decides which homes you get; any other measurements you tick come along as extra columns.</p></details>
         <details><summary>How is the price worked out?</summary><p>Per home: 10¢ for the first measurement and 5¢ for each extra one (Premier: 25¢ a home). Homes in higher assessed-value bands cost a little more. Every order has a $25 minimum; members then pay half. You see the exact total, and the line items, before checkout, and that's what you pay.</p></details>
         <details><summary>What's a Premier list?</summary><p>The full property report for every home on your list, as one PDF per home in a folder: roof lengths, pitch and facets, walls and elevations, gutters, and the lot and yard on the aerial photo. It's for roofing, gutter, siding and window companies; lawn and snow companies usually just need the spreadsheet.</p></details>
-        <details><summary>What's in the free preview?</summary><p>Up to 15 homes with every column the paid spreadsheet has. Up to 5 are addresses you already service in the area you picked (any size), so you can check our measurements against properties you know. Up to 10 more come from the homes that match your area and job size, from small to large. Add your rate to see your price on each home and on a sample postcard. One free preview per email.</p></details>
+        <details><summary>What's in the free test?</summary><p>One full property report on any address you choose: roof, walls, lawn, driveway, sidewalk and beds, with the numbers each trade quotes from. Pick a home you've already measured to check our numbers. One free test per email. To see what a whole list looks like, open the <a href="/sample">sample data</a>.</p></details>
         <details><summary>Is owner information included?</summary><p>Yes: the owner's name and mailing address from public county records, where the state allows it for marketing (not in Kansas). Follow do-not-mail and do-not-call requests.</p></details>
         <details><summary>Which ZIPs can I pick?</summary><p>Omaha and Lincoln today, with Des Moines, Kansas City, Denver and more metros being added every week. Type your ZIP above to see if it's ready.</p></details>
         <details><summary>What does membership add?</summary><p>Half off every ZIP sheet, drawn-area list and Premier folder, unlimited property reports for your trades, postcard files for any home, and the CRM. When a member buys a list, every home goes straight into their CRM as a customer with an estimate already priced from their rates. Cancel any time.</p></details>
@@ -1126,9 +1097,9 @@
   <!-- ============================================================ closing cta -->
   <section data-on="home how sample pricing faq" class="sec cta-sec" id="closing">
     <div class="wrap">
-      <p class="eyebrow">Up to 15 homes free</p>
+      <p class="eyebrow">Exact price before you pay</p>
       <h2>Pick the area. Pick the job size.</h2>
-      <p>See exactly which homes match and what they cost, then preview up to 15 homes free. No card needed.</p>
+      <p>See exactly which homes match and what they cost before you pay. Not sure yet? <a href="/#try" style="color:inherit">Measure one address free</a>.</p>
       <a class="btn arrow" href="#zipbox" id="ctaBtn">Search a ZIP</a>
     </div>
   </section>
@@ -1137,13 +1108,13 @@
     <p style="margin:0">Measurements come from public aerial photos, LiDAR and county parcel data, which can be a few years old. Coverage grows every week: type your ZIP above to check.</p>
   </div>
 
-  <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Preview up to 15 homes free</a>
+  <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Search my ZIP</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/common.js?v=28"></script>
 <script src="/static/data.js?v=30"></script>
 <script>
-// Phone-only sticky "Preview up to 15 homes free" button: shown once the ZIP box has scrolled
+// Phone-only sticky "Search my ZIP" button: shown once the ZIP box has scrolled
 // away, hidden while the ZIP box or the closing CTA is on screen and once a
 // result is showing. Purely presentational; data.js owns all behavior.
 (function () {
