@@ -569,6 +569,8 @@
 
   function selQuote() {
     clearTimeout(selT);
+    // show it's working straight away: never let anyone buy at a price that's about to change
+    if (q && !(areaMode === "draw" && !drawPoly)) { $("qPrice").innerHTML = '<span class="spinner"></span>'; $("bBtn").disabled = true; }
     selT = setTimeout(selQuoteNow, 250);
   }
   async function selQuoteNow() {
@@ -583,6 +585,7 @@
     S = r; renderSel(r);
   }
   function renderSel(r, err) {
+    $("selSum").dataset.n = (+$("selSum").dataset.n || 0) + 1;  // a fresh answer (the browser tests wait on this)
     const filtered = !!(r && (r.controls || areaMode === "draw"));
     document.querySelector(".zcart").classList.toggle("hidden", filtered || areaMode === "draw");
     if (!r) {
@@ -650,6 +653,7 @@
     ensureDrawQ();
     $("result").classList.remove("hidden");
     if (!map) map = makeMap("zmap", cfg);
+    window.__selMap = map; window.__selSpec = spec;  // read by the browser tests
     bindDraw();
     if (zl) { map.removeLayer(zl); zl = null; }
     if (!drawPoly && !drawPts.length) {
@@ -670,8 +674,11 @@
   }
   function redrawLine() {
     if (drawLine) map.removeLayer(drawLine);
-    drawLine = L.polyline(drawPts, { color: "#f59e0b", weight: 3, dashArray: "6 6" }).addTo(map);
-    drawPts.forEach((p, i) => i === 0 && L.circleMarker(p, { radius: 7, color: "#f59e0b", fillColor: "#fff", fillOpacity: 1 }).addTo(drawLine));
+    drawLine = L.layerGroup([L.polyline(drawPts, { color: "#f59e0b", weight: 3, dashArray: "6 6" })]).addTo(map);
+    if (drawPts.length) {  // the first corner: clicking it closes the shape
+      const first = L.circleMarker(drawPts[0], { radius: 8, color: "#f59e0b", fillColor: "#fff", fillOpacity: 1, bubblingMouseEvents: false }).addTo(drawLine);
+      first.on("click", (e) => { L.DomEvent.stop(e); if (drawing && drawPts.length >= 3) finishDraw(); });
+    }
   }
   function finishDraw() {
     if (drawPts.length < 3) { $("drawHint").textContent = "Add at least 3 corners first."; return; }

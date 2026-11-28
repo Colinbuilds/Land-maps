@@ -32,7 +32,7 @@ _building: dict = {}
 
 PREVIEW_TOTAL = 15     # free preview: up to 5 of the contractor's own homes + up to 10 matching
 PREVIEW_CHOSEN = 5
-SAMPLES_PER_IP_PER_DAY = 3
+SAMPLES_PER_IP_PER_DAY = int(os.environ.get("PREVIEWS_PER_IP_PER_DAY", "3"))  # free previews per connection a day
 DATASET_MAX_AGE_DAYS = 365
 
 # Columns sold. Owner names come from the county assessor and are filled in at

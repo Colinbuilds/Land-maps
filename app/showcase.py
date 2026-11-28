@@ -11,9 +11,9 @@ from .pricing import DATA_DIR
 
 # Left out of the public sample: anything that points to a specific home or person.
 HIDDEN = {"address", "city", "zip", "owner", "owner_mailing", "lat", "lon", "pin", "notes"}
-FAKE = {"address": "1234 Example St", "city": "Anytown", "zip": "00000", "owner": "JORDAN SAMPLE"}
-_CACHE = DATA_DIR / "showcase.json"
-_POSTCARD = DATA_DIR / "showcase_postcard.json"
+FAKE = {"address": "1234 Example St", "city": "Anytown", "zip": "00000", "owner": "SAMPLE JORDAN"}  # county style: last first
+_CACHE = DATA_DIR / "showcase_v2.json"
+_POSTCARD = DATA_DIR / "showcase_postcard_v2.json"
 MAX_AGE = 24 * 3600
 
 
@@ -57,7 +57,7 @@ def sample(n: int = 12) -> dict:
                 return c
         except Exception:
             pass
-    rows = [r for r in _source_rows() if r.get("lawn_sqft") not in (None, "")]
+    rows = [r for r in _source_rows() if (ds._num_or_none(r.get("lawn_sqft")) or 0) > 0]  # homes with a lawn
     if not rows:
         return {"available": False, "rows": [], "columns": []}
     ok = [r for r in rows if (r.get("quality") or "ok") == "ok"]
