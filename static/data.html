@@ -4,13 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Home Service Info</title>
+<script>
+// One file, five pages: mark which one this is before the page draws.
+(function () {
+  var PAGES = { "/": "home", "/how-it-works": "how", "/sample": "sample", "/pricing": "pricing", "/faq": "faq" };
+  var p = location.pathname.replace(/\/+$/, "") || "/";
+  document.documentElement.setAttribute("data-page", PAGES[p] || "home");
+})();
+</script>
 <meta name="description" content="Pick the area. Pick the job size. Buy only the homes that fit. Every home measured (lawn, driveway, sidewalk, walls) with the owner's name. Preview up to 15 homes free.">
 <meta name="theme-color" content="#f6f7f2">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Manrope:wght@600;700;800&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=21">
+<link rel="stylesheet" href="/static/styles.css?v=22">
 <style>
   /* home page: the problem, membership value, everything tiles */
   .dp .pains { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
@@ -280,6 +288,28 @@
   .dp .try-grid .tc h4 { margin: 0 0 4px; font-size: 15px; }
   .dp .try-grid .tc div { display: flex; justify-content: space-between; gap: 8px; }
   .dp .try-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  html[data-page="home"] .dp main > section[data-on]:not([data-on~="home"]),
+  html[data-page="how"] .dp main > section[data-on]:not([data-on~="how"]),
+  html[data-page="sample"] .dp main > section[data-on]:not([data-on~="sample"]),
+  html[data-page="pricing"] .dp main > section[data-on]:not([data-on~="pricing"]),
+  html[data-page="faq"] .dp main > section[data-on]:not([data-on~="faq"]) { display: none; }
+  html[data-page="sample"] #see > .wrap > .sec-head, html[data-page="pricing"] #pricing > .wrap > .sec-head { display: none; }
+  html[data-page="how"] #how, html[data-page="faq"] #faq { padding-top: 40px; }
+  .dp main > section.page-intro { background: #f6f7f2; padding-top: 34px; padding-bottom: 26px; }
+  .dp .page-intro h1 { font-family: Manrope, sans-serif; font-size: clamp(30px, 5vw, 46px); line-height: 1.08; letter-spacing: -.02em; margin: 6px 0 10px; max-width: 18ch; }
+  .dp .page-intro .lead { max-width: 60ch; margin: 0; }
+  .dp .page-intro .jump { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+  .dp .page-intro .jump a { padding: 8px 14px; border-radius: 999px; background: #fff; border: 1px solid #cfe9d8; color: #15803d; font-weight: 700; text-decoration: none; font-size: 14px; }
+  .dp .page-intro .jump a:hover { background: #16a34a; color: #fff; border-color: #16a34a; }
+  .dp main > section.explore { background: #ffffff; }
+  .dp .xgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .dp .xcard { display: grid; gap: 6px; align-content: start; padding: 18px; border-radius: 18px; background: #f6f7f2; border: 2px solid transparent; color: inherit; text-decoration: none; transition: transform .12s, border-color .12s; }
+  .dp .xcard:hover { transform: translateY(-2px); border-color: #86d3a0; }
+  .dp .xcard b { font-size: 17px; }
+  .dp .xcard span { color: #55665c; font-size: 14.5px; }
+  .dp .xcard i { font-style: normal; color: #15803d; font-weight: 700; font-size: 14px; margin-top: 4px; }
+  @media (max-width: 899px) { .dp .xgrid { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 480px) { .dp .xgrid { grid-template-columns: 1fr; } }
   .dp details.more { margin-top: 14px; background: rgba(255,255,255,.7); border: 1px solid var(--hair); border-radius: 16px; }
   .dp details.more > summary { list-style: none; cursor: pointer; padding: 14px 18px; font-weight: 700; color: #15803d; display: flex; align-items: center; gap: 10px; }
   .dp details.more > summary::-webkit-details-marker { display: none; }
@@ -538,12 +568,14 @@
   .dp .trust { margin-top: 14px; }
   .dp main > section { border-top: 1px solid rgba(21, 52, 43, .07); }
   .dp main > section.hero-sec { background: #f6f7f2; border-top: 0; }
-  .dp main > section:nth-of-type(6n+2) { background: #fdf4ee; }   /* warm: the problem */
-  .dp main > section:nth-of-type(6n+3) { background: #e7f4eb; }   /* green: membership */
-  .dp main > section:nth-of-type(6n+4) { background: #edf2f8; }   /* blue */
-  .dp main > section:nth-of-type(6n+5) { background: #faf6ea; }   /* sand */
-  .dp main > section:nth-of-type(6n+6) { background: #f1eef8; }   /* lavender */
-  .dp main > section:nth-of-type(6n+7) { background: #ffffff; }   /* white */
+  .dp main > section#problem { background: #fdf4ee; }    /* warm: the problem */
+  .dp main > section#services { background: #e7f4eb; }   /* green: trades */
+  .dp main > section#how { background: #edf2f8; }        /* blue */
+  .dp main > section#try { background: #faf6ea; }        /* sand */
+  .dp main > section#see { background: #f1eef8; }        /* lavender */
+  .dp main > section#accuracy { background: #ffffff; }
+  .dp main > section#pricing { background: #e7f4eb; }
+  .dp main > section#faq { background: #faf6ea; }
   .dp main > section.cta-sec { background: #11302a; background: color-mix(in srgb, var(--accent) 14%, #0e2a22); color: #fff; }
   .dp .cta-sec h2 { font-size: clamp(28px, 5vw, 40px); margin: 0 0 10px; }
   .dp .cta-sec p { margin: 0 auto 18px; }
@@ -557,7 +589,7 @@
 <main>
 
   <!-- ============================================================ hero -->
-  <section class="hero-sec">
+  <section data-on="home" class="hero-sec">
     <div class="wrap">
       <div class="hero">
         <div>
@@ -736,8 +768,26 @@
     </div>
   </section>
 
+  <!-- ============================================================ page intros -->
+  <section class="sec page-intro" data-on="sample">
+    <div class="wrap">
+      <p class="eyebrow">Sample data</p>
+      <h1>Real rows. A finished postcard.</h1>
+      <p class="lead">This is what you download: measured homes from a real ZIP (with the addresses and owners taken out), and a postcard built from one of them.</p>
+      <div class="jump"><a href="/#zipbox">Search your ZIP</a><a href="/pricing">See pricing</a></div>
+    </div>
+  </section>
+  <section class="sec page-intro" data-on="pricing">
+    <div class="wrap">
+      <p class="eyebrow">Pricing</p>
+      <h1>Pay per home. Members pay half.</h1>
+      <p class="lead">No subscription needed to buy a list. You see the exact price for your area before you pay, and you can preview up to 15 homes free first.</p>
+      <div class="jump"><a href="#member-value">What membership saves</a><a href="#savings">Run your numbers</a><a href="#faq">Questions</a></div>
+    </div>
+  </section>
+
   <!-- ============================================================ the problem -->
-  <section class="sec" id="problem">
+  <section data-on="home" class="sec" id="problem">
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">The problem</p>
@@ -759,7 +809,7 @@
   </section>
 
   <!-- ============================================================ who -->
-  <section class="sec">
+  <section class="sec" id="services" data-on="home">
     <div class="wrap">
       <div class="sec-head split">
         <div>
@@ -816,7 +866,7 @@
   </section>
 
   <!-- ============================================================ how -->
-  <section class="sec tint">
+  <section data-on="home how" class="sec tint" id="how">
     <div class="wrap how">
       <div class="sec-head">
         <p class="eyebrow">How it works</p>
@@ -832,7 +882,7 @@
   </section>
 
   <!-- ============================================================ try it -->
-  <section class="sec" id="try">
+  <section data-on="home how" class="sec" id="try">
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">Try it free</p>
@@ -861,7 +911,7 @@
   </section>
 
   <!-- ============================================================ see what you get -->
-  <section class="sec" id="see">
+  <section data-on="sample" class="sec" id="see">
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">See what you get</p>
@@ -925,7 +975,7 @@
   </section>
 
   <!-- ============================================================ accuracy -->
-  <section class="sec" id="accuracy">
+  <section data-on="how sample" class="sec" id="accuracy">
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">How we measure</p>
@@ -943,7 +993,7 @@
   </section>
 
   <!-- ============================================================ pricing -->
-  <section class="sec tint" id="pricing">
+  <section data-on="pricing" class="sec tint" id="pricing">
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">Pricing</p>
@@ -1038,7 +1088,7 @@
   </section>
 
   <!-- ============================================================ faq -->
-  <section class="sec">
+  <section class="sec" id="faq" data-on="faq pricing">
     <div class="wrap faq-grid">
       <div class="sec-head">
         <p class="eyebrow">Good to know</p>
@@ -1060,8 +1110,21 @@
     </div>
   </section>
 
+  <!-- ============================================================ explore -->
+  <section class="sec explore" data-on="home">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Look closer</p><h2>Everything else, one click away.</h2></div>
+      <div class="xgrid">
+        <a class="xcard" href="/sample"><b>See a real sample</b><span>Measured rows from a real ZIP and a finished postcard.</span><i>Open the sample →</i></a>
+        <a class="xcard" href="/pricing"><b>Pricing &amp; member savings</b><span>Per-home rates, the $25 minimum, and what half-off is worth on a real ZIP.</span><i>See pricing →</i></a>
+        <a class="xcard" href="/how-it-works#accuracy"><b>How we measure</b><span>Aerial photos, LiDAR and county records. Hard-to-read homes are flagged.</span><i>How it works →</i></a>
+        <a class="xcard" href="/faq"><b>Questions</b><span>Data sources, coverage, refunds and what's in each column.</span><i>Read the FAQ →</i></a>
+      </div>
+    </div>
+  </section>
+
   <!-- ============================================================ closing cta -->
-  <section class="sec cta-sec" id="closing">
+  <section data-on="home how sample pricing faq" class="sec cta-sec" id="closing">
     <div class="wrap">
       <p class="eyebrow">Up to 15 homes free</p>
       <h2>Pick the area. Pick the job size.</h2>
@@ -1077,7 +1140,7 @@
   <a href="#zipbox" class="btn sticky-cta off" id="stickyCta" aria-hidden="true" tabindex="-1">Preview up to 15 homes free</a>
 </main>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/common.js?v=27"></script>
+<script src="/static/common.js?v=28"></script>
 <script src="/static/data.js?v=30"></script>
 <script>
 // Phone-only sticky "Preview up to 15 homes free" button: shown once the ZIP box has scrolled
@@ -1100,6 +1163,7 @@
     update();
   }).observe(box);
   new IntersectionObserver(function (es) { seen.closing = es[0].isIntersecting; update(); }).observe(closing);
+  if ((document.documentElement.dataset.page || "home") !== "home") { btn.href = "/#zipbox"; seen.box = false; update(); return; }
   btn.addEventListener("click", function (e) {
     e.preventDefault();
     box.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
@@ -1179,6 +1243,7 @@
   }));
   $("mvN").addEventListener("input", draw);
   draw();
+  window.__tilesReady = true;  // a ?trade= link can now pick its service
 })();
 </script>
 <script>
@@ -1250,6 +1315,34 @@
   }
   $("tGo").onclick = go;
   $("tAddr").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+})();
+</script>
+<script>
+// Pages: a #link to a section on another page goes there; per-page titles;
+// on a dedicated page, its main panel starts open; ?trade= picks a service.
+(function () {
+  const page = document.documentElement.dataset.page || "home";
+  const URLS = { home: "/", how: "/how-it-works", sample: "/sample", pricing: "/pricing", faq: "/faq" };
+  const TITLES = { how: "How it works", sample: "Sample data", pricing: "Pricing", faq: "Questions" };
+  if (TITLES[page]) document.title = TITLES[page] + " · Home Service Info";
+  const pagesOf = (el) => { const sec = el && el.closest("main > section[data-on]"); return sec ? sec.dataset.on.split(" ") : null; };
+  document.querySelectorAll('a[href^="#"]').forEach((a) => {
+    const id = decodeURIComponent(a.getAttribute("href").slice(1));
+    const on = id && pagesOf(document.getElementById(id));
+    if (on && !on.includes(page)) a.setAttribute("href", URLS[on[0]] + "#" + id);
+  });
+  if (page === "pricing") { const d = document.getElementById("member-value"); if (d) d.open = true; }
+  const trade = new URLSearchParams(location.search).get("trade");
+  if (page === "home" && trade) {
+    const t = document.querySelector(`.feature.pick[data-trade="${CSS.escape(trade)}"]`);
+    // wait until the trade chips and job-size options are on the page
+    let n = 0;
+    const go = () => {
+      const ready = window.__tilesReady && document.querySelector("#tradeChips button") && document.querySelector('#fMeasure option:nth-child(2)');
+      if (ready || ++n > 40) { if (t) t.click(); } else setTimeout(go, 250);
+    };
+    go();
+  }
 })();
 </script>
 <script>

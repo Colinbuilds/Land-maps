@@ -192,11 +192,44 @@ function measurementCards(r, keys, labels) {
     { href: "/command#settings", label: "Settings", icon: "⚙️" },
   ] : [
     { href: "/", label: "Home", icon: "🏠" },
-    { href: "/reports", label: "Reports", icon: "📐" },
+    { href: "/pricing", label: "Pricing", icon: "💲" },
     { href: "/crm", label: "CRM", icon: "📋" },
     { href: "/join", label: "Membership", icon: "⭐", cls: "member" },
+    { href: "#menu", label: "Menu", icon: "☰", cls: "menu-btn" },
     { href: "/signin", label: "Sign in", icon: "👤", cls: "acct" },
   ];
+  // Customer menu groups (desktop dropdowns; the phone "Menu" sheet)
+  const T = (k) => "/?trade=" + k + "#zipbox";
+  const groups = owner ? [] : [
+    { label: "Services", items: [
+      [T("lawn"), "Lawn care & fertilizer", "Grass-only lawn and parkway per home"],
+      [T("irrigation"), "Sprinklers & irrigation", "Lawn plus parkway to size and price systems"],
+      [T("snow"), "Snow removal", "Driveway and public sidewalk square feet"],
+      [T("concrete"), "Concrete & sealing", "Driveway, patio and walk areas"],
+      [T("siding"), "Siding & windows", "Wall area and an estimated window count"],
+      [T("pressure"), "Pressure washing", "Flatwork plus house-wall area"],
+    ] },
+    { label: "How it works", items: [
+      ["/how-it-works", "How it works", "From a ZIP code to customers in three steps"],
+      ["/sample", "Sample data & postcard", "Real measured rows and a finished postcard"],
+      ["/how-it-works#accuracy", "How we measure", "Aerial photos, LiDAR and county records"],
+      ["/#try", "Try one address free", "A full report on a home you know"],
+      ["/faq", "Questions", "Straight answers about the data and buying"],
+    ] },
+    { label: "Pricing", items: [
+      ["/pricing", "Pricing", "Pay per home, $25 minimum, exact price up front"],
+      ["/pricing#member-value", "What members save", "Half off every list, worked out on a real ZIP"],
+      ["/pricing#savings", "Savings calculator", "Your hours and miles back, in dollars"],
+      ["/join", "Membership", "Unlimited reports, the CRM and half-off lists"],
+    ] },
+    { label: "Tools", items: [
+      ["/reports", "Property reports", "Measure any address: roof, walls and yard"],
+      ["/crm", "CRM", "Customers, estimates, scheduling and invoices"],
+      ["/", "Buy ZIP data", "Search a ZIP or draw an area"],
+    ] },
+  ];
+  const pathOf = (h) => (h.split("#")[0].split("?")[0] || "/");
+  const groupActive = (g) => g.items.some(([h]) => !/[#?]/.test(h) && pathOf(h) !== "/" && (here === pathOf(h) || here.startsWith(pathOf(h) + "/")));
   const tabNow = (location.hash || "#status").slice(1);
   const isActive = (h) => (h === "/" ? here === "/" : h.startsWith("/command#") ? h.slice(9) === tabNow
     : here === h || here.startsWith(h + "/") || (h === "/reports" && here.startsWith("/r/")) || (h === "/" && here === "/data"));
@@ -206,7 +239,24 @@ function measurementCards(r, keys, labels) {
       const nav = document.createElement("nav");
       nav.className = "site-nav";
       nav.setAttribute("aria-label", "Site");
-      nav.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""} ${l.cls || ""}">${l.label}</a>`).join("");
+      if (owner) nav.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""} ${l.cls || ""}">${l.label}</a>`).join("");
+      else {
+        nav.innerHTML = groups.map((g, i) => `<div class="dd">
+            <button type="button" class="dd-btn ${groupActive(g) ? "active" : ""}" aria-expanded="false" aria-controls="dd${i}">${g.label}<span aria-hidden="true">▾</span></button>
+            <div class="dd-menu" id="dd${i}">${g.items.map(([h, t, d]) => `<a href="${h}"><b>${t}</b><small>${d}</small></a>`).join("")}</div>
+          </div>`).join("")
+          + `<a href="/join" class="member ${isActive("/join") ? "active" : ""}">Membership</a><a href="/signin" class="acct ${isActive("/signin") ? "active" : ""}">Sign in</a>`;
+        const close = (except) => nav.querySelectorAll(".dd.open").forEach((d) => { if (d !== except) { d.classList.remove("open"); d.querySelector(".dd-btn").setAttribute("aria-expanded", "false"); } });
+        nav.querySelectorAll(".dd-btn").forEach((b) => b.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const d = b.parentElement, on = !d.classList.contains("open");
+          close(d); d.classList.toggle("open", on); b.setAttribute("aria-expanded", on ? "true" : "false");
+        }));
+        document.addEventListener("click", () => close());
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+        // a menu link to a section of this same page: close the menu
+        nav.querySelectorAll(".dd-menu a").forEach((a) => a.addEventListener("click", () => close()));
+      }
       header.insertBefore(nav, header.children[1] || null);
     }
     // the account button: "Sign in", or who's signed in (owner -> command center)
@@ -244,8 +294,18 @@ function measurementCards(r, keys, labels) {
       const bar = document.createElement("nav");
       bar.className = "tabbar" + (links.length > 6 ? " many" : "");
       bar.setAttribute("aria-label", "Site");
-      bar.innerHTML = links.map((l) => `<a href="${l.href}" class="${isActive(l.href) ? "active" : ""} ${l.cls || ""}"><span aria-hidden="true">${l.icon}</span>${l.label}</a>`).join("");
+      bar.innerHTML = links.map((l) => `<a href="${l.href}" class="${l.href[0] !== "#" && isActive(l.href) ? "active" : ""} ${l.cls || ""}"><span aria-hidden="true">${l.icon}</span>${l.label}</a>`).join("");
       document.body.appendChild(bar);
+      if (groups.length) {  // phones: every menu group in one sheet
+        const sh = document.createElement("div");
+        sh.className = "menu-sheet"; sh.hidden = true;
+        sh.innerHTML = `<div class="ms-card" role="dialog" aria-label="Menu"><button type="button" class="ms-x" aria-label="Close">×</button>
+          ${groups.map((g) => `<h4>${g.label}</h4>${g.items.map(([h, t]) => `<a href="${h}">${t}</a>`).join("")}`).join("")}</div>`;
+        document.body.appendChild(sh);
+        const mb = bar.querySelector("a.menu-btn");
+        mb.addEventListener("click", (e) => { e.preventDefault(); sh.hidden = false; });
+        sh.addEventListener("click", (e) => { if (e.target === sh || e.target.closest(".ms-x") || e.target.closest("a")) sh.hidden = true; });
+      }
     }
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", build);
