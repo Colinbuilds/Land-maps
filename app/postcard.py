@@ -287,7 +287,7 @@ def _wrap(c, text, x, y, width, font, size, lead, color):
 
 def render_postcard(d: dict, company: dict, trade: str | None = None, headline: str | None = None,
                     offer: str | None = None, photo_jpg: bytes | None = None, cv=None,
-                    layout: dict | None = None) -> bytes | None:
+                    layout: dict | None = None, price_override: dict | None = None) -> bytes | None:
     """Front + back for one property. Pass ``cv`` to add the pages to an
     existing canvas (a whole mailing in one print file)."""
     own = cv is None
@@ -298,7 +298,7 @@ def render_postcard(d: dict, company: dict, trade: str | None = None, headline: 
     accent = colors.HexColor(company.get("brand_color") or "#1d4ed8")
     dark = colors.HexColor("#0f172a")
     from .trades import report_price
-    pr = report_price(trade, company.get("rates"), d) if trade else None
+    pr = price_override or (report_price(trade, company.get("rates"), d) if trade else None)
     h_def, o_def = copy_for(trade, bool(pr))  # a priced card: no "call for your price"
     headline, offer = (headline or h_def), (offer or o_def)
     lay = layout or studio()["layout"]

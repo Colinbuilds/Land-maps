@@ -1170,29 +1170,40 @@ def data_quote(request: Request, zip: str, classes: str = "R", types: str = "law
 
 class SampleReq(BaseModel):
     email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-    zip: str
+    zip: str | None = None             # older pages: a whole ZIP
     classes: list[str] = ["R"]
-    # the 5 addresses the contractor already services (checked server-side)
+    spec: dict | None = None           # area + job size + columns (same as the purchase)
+    # up to 5 addresses the contractor already services (checked server-side)
     addresses: list[str] = Field(default_factory=list, max_length=10)
+    quote: dict | None = None          # {rate per 1,000 sq ft, minimum, tiers: [{from, rate}]} (illustrative)
 
 
 class PreviewAddressReq(BaseModel):
-    zip: str
+    zip: str | None = None
     classes: list[str] = ["R"]
+    spec: dict | None = None
     address: str = Field(min_length=1, max_length=200)
 
 
-def _preview_resolver(zip_code: str):
+def _sample_spec(zip_: str | None, classes: list[str], spec: dict | None) -> dict:
+    from . import selection as sel
+    if spec:
+        return sel.normalize(spec)
+    return sel.normalize({"area": {"zip": _zip5(zip_ or "")}, "classes": classes})
+
+
+def _preview_resolver(zip_code: str | None, extent=None):
     """Address text -> (county, full parcel feature, matched address), using the
-    same geocoder and lot finder as reports. The ZIP being previewed is added
-    when the address doesn't name one, so "1204 Elm St" finds the one there."""
+    same geocoder and lot finder as reports. For a ZIP, that ZIP is added when
+    the address doesn't name one; for a drawn area, the search is limited to
+    around the drawing."""
     import re
 
     def resolve(text: str):
         q = text.strip()
-        if not re.search(r"\b\d{5}\b", q):
+        if zip_code and not re.search(r"\b\d{5}\b", q):
             q = f"{q}, {zip_code}"
-        W, S, E, N = _region_bbox()
+        W, S, E, N = extent or _region_bbox()
         d = get_json(_GEOCODER + "/findAddressCandidates", {"SingleLine": q, "outSR": 4326, "maxLocations": 3, "f": "json",
                                                            "countryCode": "USA", "forStorage": "false",
                                                            "searchExtent": f"{W},{S},{E},{N}"}, ttl=86400)
@@ -1213,21 +1224,34 @@ def _preview_resolver(zip_code: str):
     return resolve
 
 
+def _resolver_for(spec: dict):
+    if spec["area"].get("zip"):
+        return _preview_resolver(spec["area"]["zip"])
+    from . import selection as sel
+    w, s_, e, n = sel.area_polygon(spec).bounds
+    pad = 0.02
+    return _preview_resolver(None, (w - pad, s_ - pad, e + pad, n + pad))
+
+
 def _preview_error(e):
-    if isinstance(e, datastore.PreviewProblem):
-        return JSONResponse({"detail": str(e), "problems": e.problems}, status_code=422)
-    return JSONResponse({"detail": str(e), "available": e.available, "needed": datastore.PREVIEW_TOTAL}, status_code=409)
+    return JSONResponse({"detail": str(e), "problems": e.problems}, status_code=422)
 
 
 @app.post("/api/data/sample/address")
 def data_sample_address(body: PreviewAddressReq):
-    """Check one address for the free preview as it's picked (in the ZIP, a real
-    lot, measurable). The preview itself checks all five again."""
-    z = _zip5(body.zip)
+    """Check one address for the free preview as it's picked (inside the
+    selected area, a real lot, measurable). The preview checks them all again."""
+    from . import selection as sel
     try:
-        c = datastore.check_preview_address(z, _classes(body.classes), body.address, _preview_resolver(z))
+        spec = _sample_spec(body.zip, _classes(body.classes), body.spec)
+        b = sel.build(spec)
+        area_name = f"ZIP {spec['area']['zip']}" if spec["area"].get("zip") else "the area you drew"
+        c = datastore.check_preview_address(area_name, spec["classes"], body.address, _resolver_for(spec),
+                                            sel.area_polygon(spec), [x["zip"] for x in b.get("coverage") or []])
     except datastore.PreviewProblem as e:
         return _preview_error(e)
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
     except LookupError as e:
         raise HTTPException(404, str(e))
     return {"ok": True, "pin": c["pid"], "address": c["address"]}
@@ -1235,31 +1259,112 @@ def data_sample_address(body: PreviewAddressReq):
 
 @app.post("/api/data/sample")
 def data_sample(body: SampleReq, request: Request):
-    """Free preview: the contractor's 5 addresses + 10 more measured homes from the ZIP."""
-    z = _zip5(body.zip)
+    """Free preview: up to 5 of the contractor's addresses + up to 10 homes
+    from the actual filtered purchase results, with an illustrative quote."""
+    from . import selection as sel
+    try:
+        spec = _sample_spec(body.zip, _classes(body.classes), body.spec)
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
     why = datastore.sample_allowed(body.email, _client_ip(request))
     if why:
         raise HTTPException(429, why)
-    cls = _classes(body.classes)
     try:
-        out = datastore.take_preview(body.email, _client_ip(request), z, cls, body.addresses, _preview_resolver(z))
-    except (datastore.PreviewProblem, datastore.PreviewShort) as e:
+        out = datastore.take_preview(body.email, _client_ip(request), spec, body.addresses, _resolver_for(spec), body.quote)
+    except datastore.PreviewProblem as e:
         return _preview_error(e)
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
     except LookupError as e:
         raise HTTPException(404, str(e))
-    rows = datastore.add_owners(out["rows"], z, cls)
+    rows = out["rows"]
+    for z in sorted({r.get("zip") for r in rows if r.get("zip")}):
+        rows = datastore.add_owners(rows, z, spec["classes"])
     c = _session_company(request)
-    rows, taken = datastore.strip_locked(rows, z, (c or {}).get("email"))
-    taken_cols = {c for k, _, cs in datastore.MEASURE_TYPES if k in taken for c in cs}
-    cols = [(k, l) for k, l in datastore.COLUMNS if k not in taken_cols]
-    csv_cols = [("group", "Group")] + cols
+    if spec["area"].get("zip"):
+        rows, taken = datastore.strip_locked(rows, spec["area"]["zip"], (c or {}).get("email"))
+    else:
+        taken = []
+    # the same columns as the paid export, plus the illustrative quote
+    cols = [(k, l) for k, l in datastore.columns_for(spec["types"])
+            if k not in {cc for kk, _, cs in datastore.MEASURE_TYPES if kk in taken for cc in cs}]
     for r in rows:
-        r["group_label"] = "Your 5 properties" if r.get("group") == "yours" else "10 more homes in this ZIP"
+        r["group_label"] = "Your properties" if r.get("group") == "yours" else "Matching homes"
+    csv_cols = [("group", "Group")] + cols + ([("quote", "Your price (illustrative)")] if body.quote else [])
     csv_rows = [{**r, "group": r["group_label"]} for r in rows]
-    return {"zip": z, "columns": [{"key": k, "label": l} for k, l in cols], "rows": rows,
+    return {"zip": spec["area"].get("zip"), "area_label": out["area_label"], "filter_label": out["filter_label"],
+            "measure": out["measure"], "match_count": out["match_count"], "notes": out["notes"], "token": out["token"],
+            "columns": [{"key": k, "label": l} for k, l in cols], "rows": rows,
             "csv": datastore.to_csv(csv_rows, csv_cols), "keys": [k for k, _ in cols], "taken_types": taken,
             "yours": sum(1 for r in rows if r.get("group") == "yours"),
             "more": sum(1 for r in rows if r.get("group") == "more")}
+
+
+@app.get("/api/data/showcase")
+def data_showcase():
+    """Real measured rows with everything that identifies a home removed, and
+    a flagged example. Same columns as the paid export (minus the identifying ones)."""
+    from . import showcase
+    return showcase.sample()
+
+
+@app.get("/api/data/showcase/postcard")
+def data_showcase_postcard():
+    """A finished sample postcard: made-up owner and address, real measurements."""
+    from . import showcase
+    try:
+        return showcase.postcard()
+    except Exception as e:
+        return {"available": False, "error": str(e)[:200]}
+
+
+_MEASURE_TRADE = {"lawn": "lawn", "driveway": "concrete", "sidewalk": "snow", "patios": "concrete",
+                  "beds": "landscaping", "walls": "siding", "building": "hvac"}
+_postcards_made: dict = {}
+
+
+class PreviewPostcardReq(BaseModel):
+    token: str = Field(min_length=8, max_length=64)
+    row: dict
+    quote: dict | None = None
+    company: str | None = Field(default=None, max_length=80)
+    phone: str | None = Field(default=None, max_length=40)
+
+
+@app.post("/api/data/preview/postcard")
+def data_preview_postcard(body: PreviewPostcardReq):
+    """One finished postcard for a home in the buyer's free preview, priced at
+    the rate they entered. (Postcards for a whole list stay a paid Premier
+    feature.)"""
+    from . import postcard, selection as sel
+    pin = str(body.row.get("pin") or "")
+    if pin not in datastore.preview_pins(body.token):
+        raise HTTPException(404, "That home isn't in your preview.")
+    n = _postcards_made.get(body.token, 0)
+    if n >= 5:
+        raise HTTPException(429, "That's enough sample postcards for one preview.")
+    _postcards_made[body.token] = n + 1
+    measure = body.row.get("size_measure")
+    num = lambda k: datastore._num_or_none(body.row.get(k))
+    yard = {k: num(k) for k, _ in datastore.COLUMNS if k.endswith("_sqft") or k.endswith("_ft")}
+    d = {"pin": pin, "address": body.row.get("address"), "city": body.row.get("city"), "zip": body.row.get("zip"),
+         "owner": body.row.get("owner"), "yard": yard,
+         "walls": {"gross_wall_sqft": num("wall_sqft"), "est_openings": num("est_windows")}}
+    trade = _MEASURE_TRADE.get(measure)
+    price = datastore.quote_price(sel.size_of(body.row, measure), body.quote)
+    comp = {"name": body.company or "Your Company Name", "phone": body.phone or "(402) 555-0100", "brand_color": "#15803d"}
+    pr = {"price": price, "label": "estimate", "text": f"${price:,.0f} estimate"} if price else None
+    pdf = postcard.render_postcard(d, comp, trade, price_override=pr)
+    import base64 as _b64
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(pdf)
+    pages = []
+    for i in range(len(doc)):
+        im = doc[i].render(scale=1.4).to_pil()
+        b_ = io.BytesIO()
+        im.save(b_, "JPEG", quality=82)
+        pages.append("data:image/jpeg;base64," + _b64.b64encode(b_.getvalue()).decode())
+    return {"pages": pages, "price": price}
 
 
 class OrderReq(BaseModel):

@@ -560,68 +560,81 @@ def _fake_zip(monkeypatch, n_homes=40, sheet=True):
     return ds, homes, resolve
 
 
+def _zspec(z="99999"):
+    from app import selection as sel
+    return sel.normalize({"area": {"zip": z}, "types": ["lawn"]})
+
+
 def test_preview_five_yours_plus_ten_more(monkeypatch):
     ds, homes, resolve = _fake_zip(monkeypatch)
     mine = ["3 Oak St", "10 oak st", "17 Oak St", "25 Oak St", "31 Oak St"]
-    out = ds.take_preview("a@b.co", None, "99999", ["R"], mine, resolve)
+    out = ds.take_preview("a@b.co", None, _zspec(), mine, resolve)
     pins = [r["pin"] for r in out["rows"]]
     assert len(out["yours"]) == 5 and len(out["more"]) == 10 and len(out["rows"]) == 15
     assert len(set(pins)) == 15  # no duplicates
     assert {r["pin"] for r in out["yours"]} == {f"test_xx:{n}" for n in (3, 10, 17, 25, 31)}
     assert not {r["pin"] for r in out["more"]} & {r["pin"] for r in out["yours"]}
-    assert all(r["group"] == "yours" for r in out["yours"]) and all(r["group"] == "more" for r in out["more"])
-    lots = sorted(r["lot_sqft"] for r in out["more"])  # a mix of sizes, small to large
-    assert lots[0] < 7000 and lots[-1] > 15000
+    lawns = sorted(r["lawn_sqft"] for r in out["more"])  # a mix of sizes, small to large
+    assert lawns[0] <= 2300 and lawns[-1] >= 5800
+    # fewer than 5 is fine ("up to 5"), and so is none
+    assert len(ds.take_preview("a@b.co", None, _zspec(), ["3 Oak St"], resolve)["rows"]) == 11
+    assert len(ds.take_preview("a@b.co", None, _zspec(), [], resolve)["rows"]) == 10
 
 
 def test_preview_rejects_duplicates_outside_and_unmeasured(monkeypatch):
     import pytest
     ds, homes, resolve = _fake_zip(monkeypatch)
-    # the same address typed twice, and one lot spelled two ways
     with pytest.raises(ds.PreviewProblem) as e:
-        ds.take_preview("a@b.co", None, "99999", ["R"], ["3 Oak St", "3 OAK ST.", "4 Oak St", "4 oak street", "5 Oak St"], resolve)
-    probs = {p["index"]: p["problem"] for p in e.value.problems}
-    assert probs == {1: "duplicate", 3: "duplicate"}
-    # outside the ZIP, not found, and a lot with no measurements (not on the sheet, can't measure)
+        ds.take_preview("a@b.co", None, _zspec(), ["3 Oak St", "3 OAK ST.", "4 Oak St", "4 oak street", "5 Oak St"], resolve)
+    assert {p["index"]: p["problem"] for p in e.value.problems} == {1: "duplicate", 3: "duplicate"}
     monkeypatch.setattr(ds, "_measured_row", lambda cid, f: None)
     with pytest.raises(ds.PreviewProblem) as e:
-        ds.take_preview("a@b.co", None, "99999", ["R"], ["Far Rd 1", "Nowhere 9", "150 Oak St", "4 Oak St", "5 Oak St"], resolve)
-    probs = {p["index"]: p["problem"] for p in e.value.problems}
-    assert probs == {0: "outside_zip", 1: "not_found", 2: "no_measurements"}
+        ds.take_preview("a@b.co", None, _zspec(), ["Far Rd 1", "Nowhere 9", "150 Oak St", "4 Oak St", "5 Oak St"], resolve)
+    assert {p["index"]: p["problem"] for p in e.value.problems} == {0: "outside_zip", 1: "not_found", 2: "no_measurements"}
     assert "isn't in ZIP 99999" in e.value.problems[0]["message"]
-    with pytest.raises(ds.PreviewProblem):  # exactly 5
-        ds.take_preview("a@b.co", None, "99999", ["R"], ["3 Oak St"], resolve)
+    with pytest.raises(ds.PreviewProblem):  # at most 5
+        ds.take_preview("a@b.co", None, _zspec(), [f"{i} Oak St" for i in range(1, 7)], resolve)
 
 
 def test_preview_limited_coverage(monkeypatch):
-    import pytest
     ds, homes, resolve = _fake_zip(monkeypatch, n_homes=12)
-    with pytest.raises(ds.PreviewShort) as e:
-        ds.take_preview("a@b.co", None, "99999", ["R"], ["1 Oak St", "2 Oak St", "3 Oak St", "4 Oak St", "5 Oak St"], resolve)
-    assert e.value.available == 12 and "has 12 measured homes" in str(e.value) and "needs 15" in str(e.value)
+    out = ds.take_preview("a@b.co", None, _zspec(), ["1 Oak St", "2 Oak St", "3 Oak St", "4 Oak St", "5 Oak St"], resolve)
+    assert len(out["yours"]) == 5 and len(out["more"]) == 7  # the actual count, not an error
+    assert "7 other homes match" in out["notes"][0]
 
 
 def test_preview_endpoint(monkeypatch):
     from fastapi.testclient import TestClient
     from app import main
     ds, homes, resolve = _fake_zip(monkeypatch)
-    monkeypatch.setattr(main, "_preview_resolver", lambda z: resolve)
-    monkeypatch.setattr(ds, "SAMPLES_PER_IP_PER_DAY", 10 ** 6)  # repeated test runs share one connection
+    monkeypatch.setattr(main, "_resolver_for", lambda spec: resolve)
     monkeypatch.setattr(ds, "add_owners", lambda rows, z, c: rows)
     monkeypatch.setattr(ds, "taken_by_others", lambda z, e=None: [])
+    monkeypatch.setattr(ds, "SAMPLES_PER_IP_PER_DAY", 10 ** 6)  # repeated test runs share one connection
     c = TestClient(main.app)
     email = f"preview{__import__('time').time_ns()}@test.co"
-    body = {"email": email, "zip": "99999", "addresses": ["3 Oak St", "3 Oak St", "4 Oak St", "Far Rd 1", "6 Oak St"]}
+    spec = {"area": {"zip": "99999"}, "filter": {"measure": "lawn", "min": 4000, "max": 6000}, "types": ["lawn"]}
+    body = {"email": email, "spec": spec, "addresses": ["3 Oak St", "3 Oak St", "4 Oak St", "Far Rd 1", "6 Oak St"]}
     r = c.post("/api/data/sample", json=body)
     assert r.status_code == 422 and {p["problem"] for p in r.json()["problems"]} == {"duplicate", "outside_zip"}
-    r = c.post("/api/data/sample/address", json={"zip": "99999", "address": "Far Rd 1"})
+    r = c.post("/api/data/sample/address", json={"spec": spec, "address": "Far Rd 1"})
     assert r.status_code == 422 and r.json()["problems"][0]["problem"] == "outside_zip"
-    assert c.post("/api/data/sample/address", json={"zip": "99999", "address": "7 Oak St"}).json()["ok"]
+    assert c.post("/api/data/sample/address", json={"spec": spec, "address": "7 Oak St"}).json()["ok"]
+    # chosen homes can be any size; the matching homes come from the filtered results
     body["addresses"] = ["3 Oak St", "8 Oak St", "4 Oak St", "20 Oak St", "6 Oak St"]
+    body["quote"] = {"rate": 6, "minimum": 30, "tiers": [{"from": 5000, "rate": 5}]}
     r = c.post("/api/data/sample", json=body)  # the failed try didn't use up the free preview
     j = r.json()
     assert r.status_code == 200 and j["yours"] == 5 and j["more"] == 10 and len({x["pin"] for x in j["rows"]}) == 15
-    assert j["csv"].splitlines()[0].startswith("Group,") and "Your 5 properties" in j["csv"] and "10 more homes in this ZIP" in j["csv"]
+    assert all(4000 <= x["lawn_sqft"] <= 6000 for x in j["rows"] if x["group"] == "more")
+    assert any(x["lawn_sqft"] < 4000 for x in j["rows"] if x["group"] == "yours")
+    head = j["csv"].splitlines()[0]
+    assert head.startswith("Group,") and head.endswith("Your price (illustrative)")
+    assert "Your properties" in j["csv"] and "Matching homes" in j["csv"]
+    # quote rule: size/1000 x tier rate, never under the minimum
+    q = {x["lawn_sqft"]: x["quote"] for x in j["rows"]}
+    for size, price in q.items():
+        assert price == round(max(30, size / 1000 * (5 if size >= 5000 else 6)), 2)
     assert c.post("/api/data/sample", json=body).status_code == 429  # one preview per email
 
 
@@ -633,6 +646,8 @@ def test_preview_measured_on_the_spot(monkeypatch):
     items = [("test_xx", {"attributes": {"PIN": h["pin"].split(":")[1], "ADDR": h["address"]},
                           "geometry": box(h["x"], 0.5, h["x"] + 0.001 * (1 + i), 0.501)}) for i, h in enumerate(homes)]
     monkeypatch.setattr(ds.bulk, "_zip_parcels", lambda z, c: list(items))
+    monkeypatch.setattr(ds.bulk, "preview", lambda z, c: {"count": len(items), "by_county": {"Test County": len(items)}})
+    monkeypatch.setattr(ds.bulk, "value_bands", lambda z, c: {"bands": [], "labels": [], "total": len(items)})
     by_pin = {h["pin"]: h for h in homes}
 
     def measured(cid, f):
@@ -642,7 +657,7 @@ def test_preview_measured_on_the_spot(monkeypatch):
         h = by_pin[pin]
         return {"pin": pin, "address": h["address"], "lot_sqft": h["lot_sqft"], "building_sqft": 1500, "lawn_sqft": 2000, "living_sqft": 1400}
     monkeypatch.setattr(ds, "_measured_row", measured)
-    out = ds.take_preview("a@b.co", None, "99999", ["R"], ["3 Oak St", "10 Oak St", "17 Oak St", "25 Oak St", "31 Oak St"], resolve)
+    out = ds.take_preview("a@b.co", None, _zspec(), ["3 Oak St", "10 Oak St", "17 Oak St", "25 Oak St", "31 Oak St"], resolve)
     pins = [r["pin"] for r in out["rows"]]
     assert len(out["yours"]) == 5 and len(out["more"]) == 10 and len(set(pins)) == 15
     assert "test_xx:22" not in pins
@@ -798,3 +813,21 @@ def test_selection_order_download_matches_checkout(monkeypatch):
     # nothing matches: no order
     spec["filter"]["min"] = 10 ** 6
     assert c.post("/api/data/select/order", json={"email": "buyer@test.co", "spec": spec}).status_code == 404
+
+
+def test_showcase_sample_is_anonymous(monkeypatch, tmp_path):
+    from app import showcase
+    rows = [{"pin": f"x:{i}", "address": f"{i} Real St", "city": "Omaha", "zip": "68116", "owner": "REAL PERSON",
+             "owner_mailing": "1 Real St", "lat": 41.3, "lon": -96.1, "notes": "heavy tree cover" if i == 3 else "",
+             "lawn_sqft": 2000 + 100 * i, "driveway_sqft": 600, "home_value": 312000, "year_built": "1994",
+             "county": "Douglas County, NE", "quality": "review" if i == 3 else "ok"} for i in range(30)]
+    monkeypatch.setattr(showcase, "_source_rows", lambda limit_zips=6: rows)
+    monkeypatch.setattr(showcase, "_CACHE", tmp_path / "s.json")
+    s = showcase.sample()
+    assert s["available"] and len(s["rows"]) == 12
+    for r in s["rows"]:
+        assert not set(r) & showcase.HIDDEN
+        assert r["home_value"] == "$250k-$500k" and r["year_built"] == "1990s"
+    assert "Real St" not in s["csv"] and "REAL PERSON" not in s["csv"] and "68116" not in s["csv"]
+    assert s["flagged"]["quality"] == "review" and "tree" in s["flagged"]["reason"]
+    assert s["csv"].splitlines()[0].split(",")[:2] == ["County", "Lot sq ft"]
