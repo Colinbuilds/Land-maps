@@ -928,3 +928,34 @@ def test_member_list_feeds_crm_with_estimates(monkeypatch):
     o3 = ds.create_selection_order(em2, spec, account_email=em2)
     ds.mark_paid(o3["id"], "test")
     assert not ds.get_order(o3["id"]).get("crm_fed")
+
+
+def test_company_logo_on_estimates_invoices_and_postcards(monkeypatch):
+    import base64, io as _io, time as _t
+    from PIL import Image
+    from fastapi.testclient import TestClient
+    from app import main, accounts, crm, postcard
+    c = TestClient(main.app)
+    em = f"logo{_t.time_ns()}@x.co"
+    co = accounts.create_company("Logo Co", em, "password123")
+    accounts.set_membership(co["id"], _t.time() + 86400, active=True)
+    assert c.post("/api/roof/login", json={"email": em, "password": "password123"}).status_code == 200
+    assert c.post("/api/roof/logo", json={"data": "data:image/png;base64," + base64.b64encode(b"not an image").decode()}).status_code == 400
+    buf = _io.BytesIO(); Image.new("RGBA", (1200, 300), (20, 120, 60, 255)).save(buf, "PNG")
+    r = c.post("/api/roof/logo", json={"data": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()})
+    assert r.status_code == 200 and r.json()["logo"]
+    img = c.get(f"/logo/{co['id']}.png")
+    assert img.status_code == 200 and Image.open(_io.BytesIO(img.content)).size[0] <= 800  # resized
+    # public estimate and invoice pages carry it
+    cu = crm.add_customer(co["id"], name="Pat Example", address="1 Example St")
+    est = crm.create_estimate(co["id"], cu["id"], [{"desc": "Mow", "qty": 1, "price_cents": 4000}])
+    d = c.get(f"/api/public/estimate/{est['token']}").json()
+    assert d["company"]["logo_url"].startswith(f"/logo/{co['id']}.png")
+    # postcards draw it (the PDF grows by the image)
+    comp = accounts.get_company(co["id"])
+    monkeypatch.setattr(postcard, "property_photo", lambda *a, **k: (_ for _ in ()).throw(LookupError("no photo in tests")))
+    dd = {"pin": "x:1", "address": "1 Example St", "owner": "DOE JANE", "yard": {"lawn_sqft": 5000, "lot_sqft": 9000}}
+    with_logo = postcard.render_postcard(dd, comp, "lawn")
+    without = postcard.render_postcard(dd, {**comp, "logo": None}, "lawn")
+    assert len(with_logo) > len(without) + 200
+    assert not c.delete("/api/roof/logo").json()["logo"] and c.get(f"/logo/{co['id']}.png").status_code == 404

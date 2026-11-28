@@ -219,12 +219,8 @@ def build(spec: dict, member: bool = False, email: str | None = None, start_meas
             cov["measured"] = meta.get("finished")
         coverage.append(cov)
         if not ready:
-            if start_measuring:
-                try:
-                    ds.ensure_dataset(z, classes)
-                    cov["measuring"] = True
-                except Exception:
-                    pass
+            if start_measuring:  # never start jobs from a public page: join the background queue if it's running
+                cov["measuring"] = ds.queue_zip(z)
             continue
         taken = [t for t in ds.taken_by_others(z, email) if t in types]
         if taken:
@@ -260,7 +256,7 @@ def build(spec: dict, member: bool = False, email: str | None = None, start_meas
     pending = [c["zip"] for c in coverage if not c["ready"]]
     if pending:
         out["notes"].append(("Not measured yet, so not included: ZIP " + ", ".join(pending) + ". ")
-                            + ("We've started measuring; check back in about an hour." if start_measuring else ""))
+                            + ("They're in line to be measured." if any(c.get("measuring") for c in coverage) else ""))
     for c in coverage:
         if c.get("excluded"):
             out["notes"].append(f"ZIP {c['zip']} is left out: {c['excluded']}.")

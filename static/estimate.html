@@ -52,6 +52,12 @@
     document.documentElement.style.setProperty("--accent", c.brand_color || "#15803d");
     document.title = `${est ? "Estimate" : "Invoice"} from ${c.name || ""}`;
     document.getElementById("co").textContent = c.name || "";
+    if (c.logo_url && !document.getElementById("coLogo")) {  // the company's own logo
+      const im = document.createElement("img");
+      im.id = "coLogo"; im.src = c.logo_url; im.alt = c.name || "Logo";
+      im.style.cssText = "max-height:44px;max-width:160px;margin-right:10px;vertical-align:middle;border-radius:6px";
+      document.getElementById("co").before(im);
+    }
     document.getElementById("coLine").textContent = [c.phone, c.email].filter(Boolean).join(" · ");
     const status = est
       ? (d.status === "accepted" ? '<div class="done">You accepted this estimate. We\'ll be in touch to schedule.</div>'

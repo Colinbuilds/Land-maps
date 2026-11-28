@@ -40,7 +40,7 @@ def init():
         for col, typ in (("plan", "TEXT"), ("member_until", "REAL"), ("stripe_customer", "TEXT"),
                          ("stripe_sub", "TEXT"), ("trade", "TEXT"), ("trades", "TEXT"), ("rates", "TEXT"),
                          ("crm", "INTEGER"), ("disabled", "INTEGER"), ("last_seen", "REAL"),
-                         ("admin_notes", "TEXT"), ("pay_note", "TEXT"),
+                         ("admin_notes", "TEXT"), ("pay_note", "TEXT"), ("logo", "TEXT"),
                          ("billing", "TEXT")):  # "month" or "year" (paid a year up front)
             if col not in have:
                 con.execute(f"ALTER TABLE companies ADD COLUMN {col} {typ}")
@@ -170,7 +170,7 @@ def update_company(cid: int, **fields) -> dict | None:
         fields["trades"] = ",".join(fields["trades"])
     if isinstance(fields.get("rates"), dict):
         fields["rates"] = json.dumps(fields["rates"])
-    allowed = {k: v for k, v in fields.items() if k in ("name", "phone", "brand_color", "trade", "trades", "rates",
+    allowed = {k: v for k, v in fields.items() if k in ("name", "phone", "brand_color", "trade", "trades", "rates", "logo",
                "crm", "disabled", "admin_notes", "pay_note", "credits", "billing") and v is not None}
     if fields.get("password"):
         allowed["pw_hash"] = hash_pw(fields["password"])
@@ -292,3 +292,45 @@ def read_reset(tok: str | None) -> int | None:
     except Exception:
         pass
     return None
+
+
+# ------------------------------------------------------------------ logos
+LOGO_DIR = DATA_DIR / "logos"
+LOGO_DIR.mkdir(parents=True, exist_ok=True)
+LOGO_MAX_BYTES = 3 * 1024 * 1024
+
+
+def logo_path(c: dict | None):
+    """The company's logo file (PNG), if they've uploaded one."""
+    if not c or not c.get("logo") or not c.get("id"):
+        return None
+    p = LOGO_DIR / f"{int(c['id'])}.png"
+    return p if p.exists() else None
+
+
+def save_logo(cid: int, data: bytes) -> dict:
+    """Check and store a logo: a real PNG/JPEG/WebP/GIF image, resized to fit
+    800 x 400 px, saved as PNG (transparency kept)."""
+    import io
+    from PIL import Image
+    if len(data) > LOGO_MAX_BYTES:
+        raise ValueError("That image is over 3 MB. Use a smaller file.")
+    try:
+        im = Image.open(io.BytesIO(data))
+        im.verify()
+        im = Image.open(io.BytesIO(data))
+    except Exception:
+        raise ValueError("That file isn't an image we can read. Use a PNG or JPEG.")
+    if (im.format or "").upper() not in ("PNG", "JPEG", "WEBP", "GIF"):
+        raise ValueError("Use a PNG, JPEG, WebP or GIF image.")
+    im = im.convert("RGBA")
+    im.thumbnail((800, 400))
+    im.save(LOGO_DIR / f"{int(cid)}.png", "PNG", optimize=True)
+    return update_company(cid, logo=str(int(time.time())))
+
+
+def clear_logo(cid: int) -> dict:
+    p = LOGO_DIR / f"{int(cid)}.png"
+    if p.exists():
+        p.unlink()
+    return update_company(cid, logo="")

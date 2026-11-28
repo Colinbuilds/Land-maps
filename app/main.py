@@ -1948,6 +1948,38 @@ class Profile(BaseModel):
     pay_note: str | None = Field(default=None, max_length=300)
 
 
+class LogoIn(BaseModel):
+    data: str = Field(max_length=5_000_000)  # a data: URL from the page
+
+
+@app.post("/api/roof/logo")
+def set_logo(body: LogoIn, c: dict = Depends(roof_company)):
+    """The company logo, shown on estimates, invoices and postcards."""
+    import base64 as _b64
+    raw = body.data.split(",", 1)[-1]
+    try:
+        data = _b64.b64decode(raw, validate=False)
+    except Exception:
+        raise HTTPException(400, "That file couldn't be read.")
+    try:
+        return accounts.save_logo(c["id"], data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/roof/logo")
+def delete_logo(c: dict = Depends(roof_company)):
+    return accounts.clear_logo(c["id"])
+
+
+@app.get("/logo/{cid}.png")
+def company_logo(cid: int):
+    p = accounts.logo_path(accounts.get_company(cid))
+    if not p:
+        raise HTTPException(404)
+    return FileResponse(p, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.put("/api/roof/profile")
 def set_profile(body: Profile, c: dict = Depends(roof_company)):
     return accounts.update_company(c["id"], **body.model_dump())
@@ -2123,7 +2155,8 @@ def _public_doc(kind: str, d: dict) -> dict:
     cu = _crm.get_customer(d["company_id"], d["customer_id"]) or {}
     out = {"kind": kind, "id": d["id"], "items": d["items"], "total_cents": d["total_cents"], "note": d.get("note"),
            "status": d["status"], "created": d["created"], "due": d.get("due"),
-           "company": {k: co.get(k) for k in ("name", "phone", "email", "brand_color", "pay_note")},
+           "company": {**{k: co.get(k) for k in ("name", "phone", "email", "brand_color", "pay_note")},
+                       "logo_url": f"/logo/{co['id']}.png?v={co['logo']}" if accounts.logo_path(co) else None},
            "customer": {k: cu.get(k) for k in ("name", "address", "city", "zip")}}
     if kind == "estimate" and d.get("report_id"):
         rep = accounts.get_report(d["report_id"])

@@ -598,7 +598,7 @@
     $("qZip").textContent = r.area_label + (r.controls ? "" : ` · ${$("cls").selectedOptions[0].textContent}`);
     $("qCount").textContent = `${n.toLocaleString()} home${n === 1 ? "" : "s"} match`;
     $("qBy").textContent = r.filter_label;
-    const cov = (r.coverage || []).map((c) => `ZIP ${c.zip}: ${c.excluded ? "left out (" + c.excluded + ")" : c.ready ? `${(c.homes || 0).toLocaleString()} measured homes${c.measured ? `, measured ${new Date(c.measured * 1000).toLocaleDateString()}` : ""}` : (r.measured_after ? "measured after you buy" : "not measured yet" + (c.measuring ? " (measuring now)" : ""))}`);
+    const cov = (r.coverage || []).map((c) => `ZIP ${c.zip}: ${c.excluded ? "left out (" + c.excluded + ")" : c.ready ? `${(c.homes || 0).toLocaleString()} measured homes${c.measured ? `, measured ${new Date(c.measured * 1000).toLocaleDateString()}` : ""}` : (r.measured_after ? "measured after you buy" : "not measured yet" + (c.measuring ? " (in line to be measured)" : ""))}`);
     const img = (r.imagery || []).map((i) => `${i.county}: ${i.imagery || "aerial photo"}${i.lidar_year ? `, LiDAR ${i.lidar_year}` : ""}`);
     const cols = (r.columns || []).map((c) => c.label);
     const per = p.base_cents_per_home != null ? `${+(+p.base_cents_per_home).toFixed(2)}¢` : "";

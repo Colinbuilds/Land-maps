@@ -463,11 +463,39 @@
 
   // ------------------------------------------------------------ settings
   $("gear").onclick = () => sheet(`<h2>Settings</h2>
+    <label>Your logo (on estimates, invoices and postcards)</label>
+    <div class="logo-row">
+      <img id="sLogoImg" alt="Your logo" ${me.logo ? `src="/logo/${me.id}.png?v=${esc(me.logo)}"` : 'hidden'}>
+      <span id="sLogoNone" class="small muted" ${me.logo ? "hidden" : ""}>No logo yet</span>
+      <input id="sLogo" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+      <button type="button" class="secondary" id="sLogoDel" ${me.logo ? "" : "hidden"}>Remove</button>
+    </div>
+    <div id="sLogoMsg" class="small"></div>
     <label>How customers pay you (shown on invoices)<textarea id="sPay" placeholder="Venmo @greenacres · Zelle 402-555-0142 · checks to Green Acres Lawn Co.">${esc(me.pay_note || "")}</textarea></label>
     <div class="two"><label>Phone<input id="sPhone" value="${esc(me.phone || "")}"></label><label>Brand color<input id="sColor" type="color" value="${esc(me.brand_color || "#15803d")}"></label></div>
     <button id="sSave" style="width:100%;margin-top:14px">Save</button>
     <p class="small muted">Your prices per trade are on the <a href="/reports">Reports</a> page under <b>Your prices</b>. Membership and CRM billing: <a href="/join">Membership</a>.</p>
     <div id="sMsg" class="small"></div>`, () => {
+    $("sLogo").onchange = () => {
+      const f = $("sLogo").files[0];
+      if (!f) return;
+      if (f.size > 3 * 1024 * 1024) { $("sLogoMsg").innerHTML = '<span class="err">That image is over 3 MB.</span>'; return; }
+      const rd = new FileReader();
+      rd.onload = async () => {
+        $("sLogoMsg").innerHTML = '<span class="spinner"></span>Uploading…';
+        try {
+          me = await api("/api/roof/logo", { method: "POST", json: { data: rd.result } });
+          $("sLogoImg").src = `/logo/${me.id}.png?v=${me.logo}`; $("sLogoImg").hidden = false;
+          $("sLogoNone").hidden = true; $("sLogoDel").hidden = false;
+          $("sLogoMsg").innerHTML = '<span class="ok">Saved. It now shows on your estimates, invoices and postcards.</span>';
+        } catch (e) { $("sLogoMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+      };
+      rd.readAsDataURL(f);
+    };
+    $("sLogoDel").onclick = async () => {
+      try { me = await api("/api/roof/logo", { method: "DELETE" }); $("sLogoImg").hidden = true; $("sLogoNone").hidden = false; $("sLogoDel").hidden = true; $("sLogoMsg").textContent = "Removed."; }
+      catch (e) { $("sLogoMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
     $("sSave").onclick = async () => {
       try { me = await api("/api/roof/profile", { method: "PUT", json: { pay_note: $("sPay").value, phone: $("sPhone").value, brand_color: $("sColor").value } }); toast("Saved"); close(); }
       catch (e) { $("sMsg").innerHTML = `<span class="err">${esc(e.message)}</span>`; }

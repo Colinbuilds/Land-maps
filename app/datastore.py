@@ -1196,6 +1196,18 @@ def queue_order(zips: list[str], fetch: bool = True) -> list[str]:
     return sorted(zips, key=key)
 
 
+def queue_zip(z: str) -> bool:
+    """Put a ZIP buyers asked about in the running measuring queue (no new
+    job is started). True if it's queued or being measured."""
+    st = _pre.get("st")
+    if not (_pre["thread"] and _pre["thread"].is_alive()) or st is None:
+        return False
+    if z not in st["zips"]:
+        st["zips"].append(z)
+        _save_pre(st)
+    return True
+
+
 def prebuild_status() -> dict:
     st = json.loads(PREBUILD_STATE.read_text()) if PREBUILD_STATE.exists() else {"status": "idle"}
     st["running"] = bool(_pre["thread"] and _pre["thread"].is_alive())
