@@ -646,3 +646,155 @@ def test_preview_measured_on_the_spot(monkeypatch):
     pins = [r["pin"] for r in out["rows"]]
     assert len(out["yours"]) == 5 and len(out["more"]) == 10 and len(set(pins)) == 15
     assert "test_xx:22" not in pins
+
+
+# ---------------------------------------------------------------- selection: area + job size + columns
+def _two_zips(monkeypatch, n_a=400, n_b=200, extra_rows=None, value=50000):
+    """Two side-by-side ZIPs in Nebraska, 0.01 degrees wide: 11111 west, 22222
+    east; homes on a line across each. Driveways count up from 500 sq ft;
+    every 10th home has no driveway figure."""
+    from shapely.geometry import box
+    from app import datastore as ds, selection as sel
+    def rows_for(z, n, x0, start):
+        out = []
+        for i in range(n):
+            pin = f"test_xx:{z}-{i}"
+            out.append({"pin": pin, "address": f"{i} {z} Way", "zip": z, "county": "Test County", "lot_sqft": 5000 + 10 * i,
+                        "lawn_sqft": 3000 + 20 * i, "driveway_sqft": "" if i % 10 == 9 else 500 + 5 * i,
+                        "sidewalk_sqft": 100, "building_sqft": 1600, "living_sqft": 1500, "home_value": value,
+                        "quality": "review" if i % 25 == 0 else "ok", "lat": 41.005, "lon": x0 + (i + 0.5) / n * 0.00999})
+        return out
+    data = {"11111": rows_for("11111", n_a, -96.0, 0), "22222": rows_for("22222", n_b, -95.99, 0)}
+    for z, rows in (extra_rows or {}).items():
+        data[z] = data.get(z, []) + rows
+    monkeypatch.setattr(ds, "dataset_ready", lambda z, c: z in data)
+    monkeypatch.setattr(ds, "dataset_meta", lambda z, c: {"status": "ready", "finished": 1.7e9} if z in data else None)
+    monkeypatch.setattr(ds, "read_dataset", lambda z, c: [dict(r) for r in data.get(z, [])])
+    monkeypatch.setattr(ds, "taken_by_others", lambda z, e=None: [])
+    zp = {"11111": box(-96.0, 41.0, -95.99, 41.01), "22222": box(-95.99, 41.0, -95.98, 41.01)}
+    monkeypatch.setattr(ds.bulk, "zip_polygon", lambda z: zp[z])
+    monkeypatch.setattr(sel, "zips_in", lambda poly: sorted(z for z, g in zp.items() if g.intersects(poly)))
+    monkeypatch.setattr(ds, "pricing", lambda: dict(ds.DEFAULT_PRICING))
+    return ds, sel, data
+
+
+def _spec(**kw):
+    from app import selection as sel
+    s = {"area": {"zip": "11111"}, "types": ["driveway"]}
+    s.update(kw)
+    return sel.normalize(s)
+
+
+def test_selection_full_zip_and_price(monkeypatch):
+    ds, sel, data = _two_zips(monkeypatch)
+    b = sel.build(_spec())
+    assert b["count"] == 400 and b["price"]["price_cents"] == 4000  # 400 homes x 10c = $40
+    assert b["price"]["minimum_applied"] is False and b["flagged"] == 16
+    b = sel.build(_spec(area={"zip": "22222"}))
+    assert b["count"] == 200 and b["price"]["price_cents"] == 2500 and b["price"]["subtotal_cents"] == 2000  # $25 minimum
+    assert b["price"]["minimum_applied"] is True
+    # member: half, after the minimum (the current rule)
+    b = sel.build(_spec(area={"zip": "22222"}), member=True)
+    assert b["price"]["price_cents"] == 1250 and b["price"]["full_price_cents"] == 2500
+    # an extra column: +5c a home
+    b = sel.build(_spec(types=["driveway", "sidewalk"]))
+    assert b["types"] == ["driveway", "sidewalk"] and b["price"]["price_cents"] == 6000
+    assert [c for c in ("driveway_sqft", "sidewalk_sqft") if c in [k for k, _ in ds.columns_for(b["types"])]] == ["driveway_sqft", "sidewalk_sqft"]
+
+
+def test_selection_size_filter_inclusive_missing_and_zero(monkeypatch):
+    ds, sel, data = _two_zips(monkeypatch)
+    # driveway = 500 + 5i; 1000 sq ft is i=100 exactly
+    b = sel.build(_spec(filter={"measure": "driveway", "min": 1000}))
+    sizes = sorted(float(r["driveway_sqft"]) for r in b["rows"])
+    assert sizes[0] == 1000.0  # exactly at the threshold is in
+    assert b["missing"] == 40 and all(r["driveway_sqft"] != "" for r in b["rows"])  # no figure: left out
+    assert b["count"] == len([i for i in range(400) if i % 10 != 9 and 500 + 5 * i >= 1000])
+    b = sel.build(_spec(filter={"measure": "driveway", "min": 1000, "max": 1000}))
+    assert b["count"] == 1 and float(b["rows"][0]["driveway_sqft"]) == 1000.0  # both ends inclusive
+    b = sel.build(_spec(filter={"measure": "driveway", "min": 99999}))
+    assert b["count"] == 0 and b["price"]["price_cents"] == 0 and not sel.public_view(b)["can_buy"]
+    assert sel.describe_filter(_spec(filter={"measure": "driveway", "min": 1000})) == "Driveway: 1,000 sq ft and up"
+    assert sel.describe_filter(_spec(filter={"measure": "lawn", "min": 4000, "max": 10000})) == "Lawn: 4,000–10,000 sq ft"
+    import pytest
+    with pytest.raises(sel.SelectionError):
+        _spec(filter={"measure": "driveway", "min": 2000, "max": 1000})
+
+
+def test_selection_drawn_area_across_zips_counts_each_home_once(monkeypatch):
+    from shapely.geometry import box, mapping
+    # the same home listed in both ZIP sheets (a lot on the line) must count once
+    lon300 = -96.0 + 300.5 / 400 * 0.00999  # home 300 of ZIP A, inside the drawn area
+    dup = {"pin": "test_xx:11111-300", "address": "300 11111 Way", "zip": "22222", "lot_sqft": 1, "lawn_sqft": 1,
+           "driveway_sqft": 2000, "building_sqft": 1600, "home_value": 50000, "quality": "ok", "lat": 41.005, "lon": lon300}
+    ds, sel, data = _two_zips(monkeypatch, extra_rows={"22222": [dup]})
+    poly = mapping(box(-95.995, 41.002, -95.985, 41.008))  # east half of A, west half of B
+    b = sel.build(_spec(area={"polygon": poly}))
+    pins = [r["pin"] for r in b["rows"]]
+    assert len(pins) == len(set(pins))
+    assert {c["zip"] for c in b["coverage"]} == {"11111", "22222"}
+    assert all(-95.995 <= float(r["lon"]) <= -95.985 for r in b["rows"])
+    assert b["count"] == 200 + 100  # half of A's 400, half of B's 200
+    assert b["area_label"].startswith("Drawn area (2 ZIPs")
+    # bad shapes are refused server-side
+    import pytest
+    with pytest.raises(sel.SelectionError):
+        sel.normalize({"area": {"polygon": {"type": "Polygon", "coordinates": [[[-96, 41], [-95.99, 41.01], [-95.99, 41], [-96, 41.01], [-96, 41]]]}}})
+    with pytest.raises(sel.SelectionError):
+        sel.normalize({"area": {"polygon": {"type": "Polygon", "coordinates": [[[-96, 41], [-95.99, 41], [-96, 41]]]}}})
+    with pytest.raises(sel.SelectionError):  # far too big
+        sel.normalize({"area": {"polygon": mapping(box(-97, 40, -95, 42))}})
+
+
+def test_selection_lock_in_drawn_area_and_value_pricing(monkeypatch):
+    from shapely.geometry import box, mapping
+    ds, sel, data = _two_zips(monkeypatch)
+    monkeypatch.setattr(ds, "taken_by_others", lambda z, e=None: ["driveway"] if z == "22222" else [])
+    b = sel.build(_spec(area={"polygon": mapping(box(-95.995, 41.002, -95.985, 41.008))}))
+    assert b["count"] == 200 and any("ZIP 22222 is left out" in n for n in b["notes"])
+    # higher-value homes cost more under the existing home-value multipliers
+    ds2, sel2, _ = _two_zips(monkeypatch, value=900000)
+    b = sel2.build(_spec())
+    assert b["price"]["price_cents"] > 4000
+
+
+def test_selection_order_download_matches_checkout(monkeypatch):
+    import csv as _csv, io as _io
+    from fastapi.testclient import TestClient
+    from shapely.geometry import box, mapping
+    from app import main
+    ds, sel, data = _two_zips(monkeypatch)
+    monkeypatch.setattr(ds, "add_owners", lambda rows, z, c: rows)
+    monkeypatch.setattr(ds, "_email_new_order", lambda o: None)
+    monkeypatch.setattr(ds, "_email_ready", lambda oid: None)
+    import app.mailer
+    monkeypatch.setattr(app.mailer, "notify_owner", lambda *a, **k: None)
+    c = TestClient(main.app)
+    spec = {"area": {"polygon": mapping(box(-95.995, 41.002, -95.985, 41.008))},
+            "filter": {"measure": "driveway", "min": 1000}, "types": ["driveway", "sidewalk"]}
+    q = c.post("/api/data/select/quote", json={"spec": spec}).json()
+    assert q["count"] > 0 and q["controls"] == "driveway" and q["can_buy"]
+    assert "sidewalk_sqft" in [x["key"] for x in q["columns"]]
+    o = c.post("/api/data/select/order", json={"email": "buyer@test.co", "spec": spec}).json()
+    assert o["amount_cents"] == q["price"]["price_cents"] and o["count"] == q["count"]  # checkout = quote
+    expected_pins = {r["pin"] for r in sel.build(sel.normalize(spec))["rows"]}
+    ds.mark_paid(o["id"], "test")
+    # measurements change after purchase: the paid download must not
+    for z in data:
+        for r in data[z]:
+            if r["driveway_sqft"] != "":
+                r["driveway_sqft"] = 1
+    r = c.get(f"/api/data/order/{o['id']}/csv?t={o['token']}")
+    assert r.status_code == 200
+    rows = list(_csv.DictReader(_io.StringIO(r.text)))
+    head = r.text.splitlines()[0].split(",")
+    labels = dict(ds.COLUMNS)
+    assert head == [labels[k] for k, _ in ds.columns_for(["driveway", "sidewalk"])]  # exactly the columns shown
+    assert len(rows) == q["count"] == len(expected_pins)
+    assert {x["Property id"] for x in rows} == expected_pins  # exactly the homes paid for
+    assert min(float(x["Driveway sq ft"]) for x in rows) >= 1000  # frozen at purchase, not the later edit
+    view = c.get(f"/api/data/order/{o['id']}?t={o['token']}").json()
+    assert view["status"] == "ready" and view["area_label"].startswith("Drawn area") and view["filter_label"] == "Driveway: 1,000 sq ft and up"
+    # nothing matches: no order
+    spec["filter"]["min"] = 10 ** 6
+    assert c.post("/api/data/select/order", json={"email": "buyer@test.co", "spec": spec}).status_code == 404

@@ -1296,6 +1296,61 @@ def data_order(body: OrderReq, request: Request):
     return out
 
 
+# ---- area + job size: one server-side selection for the live quote, the order and the receipt
+class SelectionReq(BaseModel):
+    spec: dict
+
+
+class SelectionOrderReq(BaseModel):
+    email: str = Field(min_length=5, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    spec: dict
+
+
+@app.post("/api/data/select/quote")
+def data_select_quote(body: SelectionReq, request: Request):
+    """Exactly which homes match (count, flagged, coverage, imagery) and the
+    exact price, for a ZIP or a drawn area with an optional job-size filter."""
+    from . import selection as sel
+    c = _session_company(request)
+    try:
+        spec = sel.normalize(body.spec)
+        b = sel.build(spec, member=bool(c and c["member"]), email=(c or {}).get("email"), start_measuring=True)
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    out = sel.public_view(b)
+    out["member"] = bool(c and c["member"])
+    out["logged_in"] = bool(c)
+    out["pricing"] = datastore.pricing()
+    return out
+
+
+@app.post("/api/data/select/order")
+def data_select_order(body: SelectionOrderReq, request: Request):
+    """Buy a selection: the server recomputes the homes and price, saves the
+    exact rows and columns with the order, then checkout charges that amount."""
+    from . import selection as sel
+    c = _session_company(request)
+    try:
+        o = datastore.create_selection_order(body.email, body.spec, site=_base_url(request), member=bool(c and c["member"]),
+                                             account_email=(c or {}).get("email"))
+    except sel.SelectionError as e:
+        raise HTTPException(400, str(e))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except PermissionError as e:
+        raise HTTPException(409, str(e))
+    out = {"id": o["id"], "token": o["token"], "amount_cents": o["amount_cents"], "count": o["count"],
+           "order_url": f"/data/order/{o['id']}?t={o['token']}"}
+    if datastore.stripe_enabled():
+        try:
+            out["checkout_url"] = datastore.stripe_checkout(o, _base_url(request))
+        except Exception as e:
+            raise HTTPException(502, f"Payment provider error: {str(e)[:200]}")
+    return out
+
+
 class GroupOrderReq(OrderReq):
     zip: str | None = None
     zips: list[str] = Field(min_length=1, max_length=25)
@@ -1398,6 +1453,29 @@ def data_order_checkout(oid: str, request: Request, t: str | None = None):
 def data_order_csv(oid: str, t: str | None = None):
     o = _order_access(oid, t)
     classes = o["classes"].split(",") if o["classes"] else ["R"]
+    if o.get("spec"):  # area + job size: exactly the homes and columns paid for
+        if o["status"] not in ("ready", "processing"):
+            raise HTTPException(409, "This order isn't paid yet.")
+        if (o.get("product") or "standard") == "premier":
+            from . import premier
+            if not premier.order_ready(o["id"]):
+                raise HTTPException(409, "Your Premier list isn't ready yet.")
+            datastore.log_download(o, "premier")
+            return FileResponse(premier.order_path(o["id"]), media_type="application/zip",
+                                filename=f"premier_{o['id']}.zip")
+        snap = datastore.read_snapshot(o["id"])
+        if not snap:
+            raise HTTPException(404, "order data missing")
+        rows = [dict(r) for r in snap["rows"]]
+        for z in snap.get("zips") or []:
+            rows = datastore.add_owners(rows, z, classes)
+        cols = [(k, dict(datastore.COLUMNS).get(k, k)) for k in snap["columns"]]
+        buyer = accounts.company_by_email(o["email"])
+        if buyer:
+            rows, cols = datastore.add_prices(rows, cols, (accounts.get_company(buyer["id"]) or {}).get("rates"))
+        datastore.log_download(o, "sheet")
+        return Response(datastore.to_csv(rows, cols), media_type="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="properties_{o["id"]}.csv"'})
     if (o.get("product") or "standard") == "premier":
         from . import premier
         bands = datastore.order_bands(o)

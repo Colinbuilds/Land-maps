@@ -177,6 +177,9 @@ def init():
         for col in ("grp", "grp_token"):  # several ZIPs bought together, paid in one checkout
             if col not in have:
                 con.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
+        for col in ("spec", "area_label", "filter_label"):  # area + job-size orders (bound to a frozen home list)
+            if col not in have:
+                con.execute(f"ALTER TABLE orders ADD COLUMN {col} TEXT")
         con.execute("""CREATE TABLE IF NOT EXISTS downloads (
             id INTEGER PRIMARY KEY, order_id TEXT, zip TEXT, email TEXT, kind TEXT, ts REAL NOT NULL)""")
         # Exclusive ZIP locks: one holder per (ZIP, measurement type)
@@ -243,13 +246,20 @@ def list_price(count: int, types=None, product: str = "standard", member: bool =
         raw = sum(bands[i] * base * float(mult[i]) for i in range(lo, hi + 1)) + count * addon
     else:
         raw = count * per
-    cents = int(max(math.ceil(raw - 1e-9), round(float(p["min_order_usd"]) * 100))) if count else 0
+    min_c = int(round(float(p["min_order_usd"]) * 100))
+    raw_c = int(math.ceil(raw - 1e-9)) if count else 0
+    cents = max(raw_c, min_c) if count else 0
     full = cents
+    off = 0.0
     if member:
         from .billing import plans
-        cents = int(round(cents * (1 - float(plans()["list_discount"]))))
-    return {"per_property_cents": per * (0.5 if member else 1), "price_cents": cents, "full_price_cents": full,
-            "member_discount": member, "count": count}
+        off = float(plans()["list_discount"])
+        cents = int(round(cents * (1 - off)))
+    return {"per_property_cents": per * (1 - off), "price_cents": cents, "full_price_cents": full,
+            "member_discount": member, "count": count,
+            # the parts, for an exact breakdown (one source for page, checkout and receipt)
+            "base_cents_per_home": per, "subtotal_cents": raw_c, "minimum_cents": min_c,
+            "minimum_applied": bool(count) and raw_c < min_c, "discount": off}
 
 
 def quote(zip_code: str, classes: list[str], types=None, product: str = "standard", member: bool = False,
@@ -736,6 +746,58 @@ def create_order(email: str, zip_code: str, classes: list[str], types=None, site
     return o
 
 
+ORDERS_DIR = DATA_DIR / "orders"
+ORDERS_DIR.mkdir(exist_ok=True)
+
+
+def snapshot_path(oid: str):
+    return ORDERS_DIR / f"{''.join(ch for ch in oid if ch.isalnum())}.json"
+
+
+def read_snapshot(oid: str) -> dict | None:
+    p = snapshot_path(oid)
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def create_selection_order(email: str, spec_raw: dict, site: str = "", member: bool = False,
+                           account_email: str | None = None, notify: bool = True) -> dict:
+    """An order for an area + job size. The homes and price are worked out
+    here (never trusted from the page) and the exact rows and columns are
+    saved with the order, so the download always matches what was paid for,
+    even if the measurements are updated later. A whole ZIP that isn't
+    measured yet goes through the classic ZIP order (measured after purchase)."""
+    from . import selection as sel
+    spec = sel.normalize(spec_raw)
+    holder = (account_email or "").lower() or None
+    b = sel.build(spec, member, email=holder)
+    if b["mode"] == "zip_unmeasured":
+        v = spec.get("value") or (None, None)
+        return create_order(email, spec["area"]["zip"], spec["classes"], spec["types"], site, spec["product"], member,
+                            v[0], v[1], account_email=account_email, notify=notify)
+    if not b["count"]:
+        raise LookupError("No homes match this area and job size. Widen the size range or the area.")
+    if b["blocked"]:
+        raise PermissionError(b["blocked"])
+    oid = secrets.token_hex(4).upper()
+    tok = secrets.token_urlsafe(16)
+    cols = [k for k, _ in columns_for(spec["types"])]
+    zips = [c["zip"] for c in b["coverage"] if c.get("ready") and not c.get("excluded")]
+    snapshot_path(oid).write_text(json.dumps({"rows": b["rows"], "columns": cols, "zips": zips,
+                                              "spec": spec, "price": b["price"], "count": b["count"],
+                                              "flagged": b["flagged"], "created": time.time()}))
+    zip0 = spec["area"].get("zip") or (zips[0] if zips else "")
+    with _lock, _db() as con:
+        con.execute("INSERT INTO orders(id,email,zip,classes,count,amount_cents,status,token,created,types,site,product,"
+                    "spec,area_label,filter_label) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (oid, email.lower(), zip0, ",".join(spec["classes"]), b["count"], b["price"]["price_cents"],
+                     "awaiting_payment", tok, time.time(), ",".join(spec["types"]), site, spec["product"],
+                     json.dumps(spec), b["area_label"], b["filter_label"]))
+    o = get_order(oid)
+    if notify:
+        _email_new_order(o)
+    return o
+
+
 def order_bands(o: dict) -> tuple[int, int]:
     return band_range(o.get("value_lo"), o.get("value_hi"))
 
@@ -755,8 +817,11 @@ def order_types(o: dict) -> list[str]:
 
 def order_what(o: dict) -> str:
     prod = o.get("product") or "standard"
+    where = (f"{o.get('area_label')} · {o.get('filter_label') or 'every home'} · ") if o.get("spec") else ""
     if prod == "premier":
-        return "Premier list: full property report PDF for every home"
+        return where + "Premier list: full property report PDF for every home"
+    if o.get("spec"):
+        return where + ", ".join(type_labels(order_types(o)))
     what = ", ".join(type_labels(order_types(o)))
     if prod == "exclusive":
         months = int(pricing().get("exclusive_months", 12))
@@ -842,7 +907,15 @@ def mark_paid(oid: str, note: str = "") -> dict:
         def ready():
             _set(oid, status="ready")
             _email_ready(oid)
-        if (o.get("product") or "standard") == "premier":
+        if o.get("spec"):  # area + job size: the homes are already measured and saved with the order
+            if (o.get("product") or "standard") == "premier":
+                from . import premier
+                snap = read_snapshot(oid) or {"rows": []}
+                state = premier.ensure_order(oid, [r["pin"] for r in snap["rows"]], on_ready=ready)
+            else:
+                ready()
+                state = "ready"
+        elif (o.get("product") or "standard") == "premier":
             from . import premier
             state = premier.ensure(o["zip"], classes, on_ready=ready, bands=order_bands(o))
         else:
@@ -859,13 +932,27 @@ def order_view(o: dict) -> dict:
     v["email"] = o["email"]
     v["product"] = o.get("product") or "standard"
     v["value_label"] = range_label(*order_bands(o))
+    if o.get("spec"):
+        snap = read_snapshot(o["id"]) or {}
+        v["area_label"], v["filter_label"] = o.get("area_label"), o.get("filter_label")
+        v["flagged"] = snap.get("flagged")
+        v["columns"] = [{"key": k, "label": dict(COLUMNS).get(k, k)} for k in snap.get("columns", [])]
+        v["price"] = snap.get("price")
     v["types"] = order_types(o)
     v["type_labels"] = (["Full property report PDF for every home (roof, walls & elevations, lot & yard)"]
                         if v["product"] == "premier" else type_labels(v["types"]))
     if v["product"] == "exclusive":
         lk = locks(o["zip"])
         v["exclusive_until"] = max([l["until"] for t, l in lk.items() if l["email"] == o["email"].lower()] or [0]) or None
-    if o["status"] == "processing":
+    if o["status"] == "processing" and o.get("spec"):
+        if v["product"] == "premier":
+            from . import premier
+            if premier.order_ready(o["id"]):
+                _set(o["id"], status="ready")
+                v["status"] = "ready"
+            else:
+                v["progress"] = premier.order_progress(o["id"])
+    elif o["status"] == "processing":
         if v["product"] == "premier":
             from . import premier
             bands = order_bands(o)
@@ -896,7 +983,8 @@ def stripe_checkout(o: dict, base_url: str) -> str:
         "line_items[0][quantity]": "1",
         "line_items[0][price_data][currency]": "usd",
         "line_items[0][price_data][unit_amount]": str(o["amount_cents"]),
-        "line_items[0][price_data][product_data][name]": f"Property measurements: ZIP {o['zip']} ({o['count']:,} properties)",
+        "line_items[0][price_data][product_data][name]": (f"Property measurements: {o.get('area_label') or 'ZIP ' + o['zip']} "
+                                                          f"({o['count']:,} properties)"),
         "line_items[0][price_data][product_data][description]": f"{biz}: " + (
             order_what(o)),
         "success_url": f"{base_url}/data/order/{o['id']}?t={o['token']}&session_id={{CHECKOUT_SESSION_ID}}",
